@@ -29,6 +29,8 @@ interface TeacherViewProps {
 
 type SortOption = 'id' | 'newest' | 'oldest';
 
+const UTS_LOGO_URL = "https://upload.wikimedia.org/wikipedia/en/2/23/University_of_Technology_Sarawak_Logo.png";
+
 export const TeacherView: React.FC<TeacherViewProps> = ({ 
   attendanceList, 
   onTestAttendance, 
@@ -61,21 +63,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [manualStatus, setManualStatus] = useState<'P' | 'A'>('P');
   const [manualError, setManualError] = useState('');
   const [manualIsNew, setManualIsNew] = useState(false);
-  
-  // Logo State
-  const [logoImg, setLogoImg] = useState<HTMLImageElement | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   
   const isLocalFile = window.location.protocol === 'file:';
-
-  // Load UTS Logo once
-  useEffect(() => {
-    const img = new Image();
-    img.src = "https://upload.wikimedia.org/wikipedia/en/2/23/University_of_Technology_Sarawak_Logo.png";
-    img.crossOrigin = "Anonymous";
-    img.onload = () => setLogoImg(img);
-  }, []);
 
   useEffect(() => {
     const updateQR = () => {
@@ -101,30 +92,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         }, (error) => {
         if (error) {
             console.error(error);
-            return;
-        }
-
-        // Draw Logo Center if loaded
-        if (logoImg && canvasRef.current) {
-            const ctx = canvasRef.current.getContext('2d');
-            if (ctx) {
-                const size = 600;
-                const logoDim = 120; // Size of the logo (20% of QR)
-                const xy = (size - logoDim) / 2;
-                
-                // Draw white background circle for logo visibility
-                ctx.beginPath();
-                ctx.arc(size/2, size/2, (logoDim/2) + 5, 0, 2 * Math.PI);
-                ctx.fillStyle = '#ffffff';
-                ctx.fill();
-
-                // Draw UTS Logo
-                ctx.drawImage(logoImg, xy, xy, logoDim, logoDim);
-            }
         }
       });
     }
-  }, [qrData, logoImg]);
+  }, [qrData]);
 
   // Update current time periodically for filtering
   useEffect(() => {
@@ -550,7 +521,18 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
           <h2 className="text-2xl font-bold mb-4 text-brand-primary">Scan to Check-in</h2>
           <div className="bg-white p-4 rounded-lg shadow-inner border border-gray-200">
-            <canvas ref={canvasRef} className="rounded-md w-full max-w-[600px] h-auto" />
+            {/* QR Wrapper to position Logo */}
+            <div className="relative w-full max-w-[600px] mx-auto">
+              <canvas ref={canvasRef} className="rounded-md w-full h-auto block" />
+              {/* Logo Overlay - Centered Absolute */}
+              <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-[22%] h-[22%] bg-white rounded-full flex items-center justify-center shadow-sm border-2 border-white">
+                  <img 
+                    src={UTS_LOGO_URL} 
+                    alt="UTS Logo" 
+                    className="w-[85%] h-[85%] object-contain"
+                  />
+              </div>
+            </div>
           </div>
           <p className="text-gray-500 text-sm mt-4 text-center">Scan with any camera app. Refreshes every second.</p>
         </div>
