@@ -338,13 +338,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             {viewMode === 'teacher' && (
                 <div className="flex flex-col gap-3 mt-1">
                      {/* PRIMARY ACTIONS - Improved Visibility */}
-                     <div className="grid grid-cols-2 gap-3">
-                        <button onClick={() => setShowManualModal(true)} className="flex items-center justify-center gap-2 px-4 py-3 bg-brand-primary text-white text-sm font-bold rounded-lg shadow hover:bg-brand-secondary transition-all active:scale-95">
-                            <PencilSquareIcon className="w-5 h-5" />
+                     <div className="grid grid-cols-2 gap-4">
+                        <button onClick={() => setShowManualModal(true)} className="flex items-center justify-center gap-2 px-6 py-4 bg-brand-primary text-white text-base font-bold rounded-xl shadow-lg hover:bg-brand-secondary hover:shadow-xl transition-all active:scale-95">
+                            <PencilSquareIcon className="w-6 h-6" />
                             Add Student
                         </button>
-                        <button onClick={handleExportCSV} disabled={attendanceList.length === 0} className="flex items-center justify-center gap-2 px-4 py-3 bg-white text-gray-700 border-2 border-gray-200 text-sm font-bold rounded-lg shadow-sm hover:bg-gray-50 hover:border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95">
-                            <DownloadIcon className="w-5 h-5 text-brand-secondary" />
+                        <button onClick={handleExportCSV} disabled={attendanceList.length === 0} className="flex items-center justify-center gap-2 px-6 py-4 bg-white text-gray-800 border-2 border-gray-200 text-base font-bold rounded-xl shadow-sm hover:bg-gray-50 hover:border-gray-300 hover:text-brand-primary disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95">
+                            <DownloadIcon className="w-6 h-6" />
                             Export CSV
                         </button>
                     </div>
