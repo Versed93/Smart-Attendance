@@ -278,10 +278,18 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   };
 
   return (
-    <div className="w-full relative">
-       <div className="absolute -top-12 right-0">
-         <button onClick={() => setViewMode(viewMode === 'teacher' ? 'classroom' : 'teacher')} className="p-2 rounded-full bg-base-100 hover:bg-base-300 text-gray-600 transition-colors" title={viewMode === 'teacher' ? "Switch to Student-Facing Mode" : "Switch to Dashboard Mode"}>
-            {viewMode === 'teacher' ? <EyeIcon className="w-6 h-6" /> : <EyeSlashIcon className="w-6 h-6" />}
+    <div className="w-full">
+       {/* Top Navigation Bar with Toggle */}
+       <div className="flex justify-end mb-4 px-1">
+         <button 
+            onClick={() => setViewMode(viewMode === 'teacher' ? 'classroom' : 'teacher')} 
+            className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 text-gray-700 transition-all" 
+            title={viewMode === 'teacher' ? "Switch to Classroom Mode" : "Back to Dashboard"}
+         >
+            <span className="text-xs font-bold uppercase tracking-wider hidden sm:inline">
+                {viewMode === 'teacher' ? 'Classroom Mode' : 'Dashboard Mode'}
+            </span>
+            {viewMode === 'teacher' ? <EyeIcon className="w-5 h-5" /> : <EyeSlashIcon className="w-5 h-5" />}
          </button>
        </div>
 
@@ -289,7 +297,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         
         {/* LEFT COLUMN - HISTORY & CONTROLS (HIDDEN IN CLASSROOM MODE) */}
         {viewMode === 'teacher' && (
-        <div className="w-full lg:w-[40%] order-2 lg:order-1">
+        <div className="w-full lg:w-[30%] order-2 lg:order-1">
           <div className="flex flex-col gap-3 mb-4">
              <div className="flex justify-between items-center flex-wrap gap-2">
                 <div className="flex items-center gap-3">
