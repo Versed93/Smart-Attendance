@@ -10,7 +10,7 @@ type View = 'teacher' | 'student';
 
 const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
-const SCRIPT_URL_KEY = 'attendance-script-url-v21';
+const SCRIPT_URL_KEY = 'attendance-script-url-v22';
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
 
 interface SyncTask {
@@ -43,7 +43,7 @@ const App: React.FC = () => {
   
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
     const saved = localStorage.getItem(SCRIPT_URL_KEY);
-    return saved || 'https://script.google.com/macros/s/AKfycbxhMDImDgH34jMpCuCKTl_iL3xxnZf9OzjXORqnULDOg02C64p3JArfT8xH4oX7RsmS/exec';
+    return saved || 'https://script.google.com/macros/s/AKfycbxt9TtCBcKio8A5jiUN8Tgm_tUlKUE_0JjXos6IgXEpcGg5OI_BKG1T9oK14uzpOwM/exec';
   });
 
   const [syncQueue, setSyncQueue] = useState<SyncTask[]>(() => {
@@ -63,7 +63,7 @@ const App: React.FC = () => {
   // Network Listener
   useEffect(() => {
     // Debug log to confirm app version in production console
-    console.log("UTS QR Attendance App Mounted - v1.0.3");
+    console.log("UTS QR Attendance App Mounted - v1.0.4");
 
     const handleOnline = () => {
         setIsOnline(true);
