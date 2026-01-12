@@ -278,41 +278,60 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   };
 
   return (
-    <div className="w-full">
-       {/* Top Navigation Bar with Toggle */}
-       <div className="flex justify-end mb-4 px-1">
+    <div className="w-full max-w-[1600px] mx-auto p-4 sm:p-6 space-y-6">
+       {/* Professional Header */}
+       <div className="flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
+         <div className="flex items-center gap-4 w-full sm:w-auto justify-center sm:justify-start">
+             <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-xl shadow-lg shadow-brand-primary/20 shrink-0">
+                 <ShieldCheckIcon className="w-7 h-7" />
+             </div>
+             <div className="flex flex-col">
+                 <h1 className="text-2xl font-black text-gray-900 tracking-tight leading-none text-center sm:text-left">UTS ATTENDANCE</h1>
+                 <p className="text-xs text-gray-500 font-bold tracking-[0.2em] uppercase mt-1 text-center sm:text-left">Secure Check-in System</p>
+             </div>
+         </div>
+         
          <button 
             onClick={() => setViewMode(viewMode === 'teacher' ? 'classroom' : 'teacher')} 
-            className="flex items-center gap-2 px-4 py-2 bg-white border border-gray-300 rounded-lg shadow-sm hover:bg-gray-50 text-gray-700 transition-all" 
-            title={viewMode === 'teacher' ? "Switch to Classroom Mode" : "Back to Dashboard"}
+            className={`group flex items-center gap-3 px-5 py-3 rounded-xl font-bold transition-all duration-200 w-full sm:w-auto justify-center sm:justify-between ${
+                viewMode === 'teacher' 
+                ? 'bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200' 
+                : 'bg-gray-900 text-white hover:bg-gray-800 shadow-xl shadow-gray-900/10'
+            }`}
+            title={viewMode === 'teacher' ? "Switch to Classroom Mode for Projector" : "Return to Dashboard"}
          >
-            <span className="text-xs font-bold uppercase tracking-wider hidden sm:inline">
-                {viewMode === 'teacher' ? 'Classroom Mode' : 'Dashboard Mode'}
-            </span>
-            {viewMode === 'teacher' ? <EyeIcon className="w-5 h-5" /> : <EyeSlashIcon className="w-5 h-5" />}
+            <div className="flex flex-col items-end text-right mr-1">
+                <span className="text-[10px] uppercase opacity-60 font-medium leading-none mb-1">View Mode</span>
+                <span className="text-xs uppercase tracking-wider leading-none">
+                    {viewMode === 'teacher' ? 'Dashboard' : 'Classroom'}
+                </span>
+            </div>
+            {viewMode === 'teacher' ? <EyeIcon className="w-5 h-5" /> : <EyeSlashIcon className="w-5 h-5 text-gray-300" />}
          </button>
        </div>
 
-      <div className={`flex flex-col gap-8 items-start ${viewMode === 'teacher' ? 'lg:flex-row' : 'items-center justify-center'}`}>
+      {/* Main Content: Using CSS Grid for robust layout */}
+      <div className={`grid grid-cols-1 gap-6 ${viewMode === 'teacher' ? 'xl:grid-cols-12' : ''} items-start`}>
         
         {/* LEFT COLUMN - HISTORY & CONTROLS (HIDDEN IN CLASSROOM MODE) */}
+        {/* Takes up 4 columns (1/3 width) on XL screens */}
         {viewMode === 'teacher' && (
-        <div className="w-full lg:w-[30%] order-2 lg:order-1">
-          <div className="flex flex-col gap-3 mb-4">
+        <div className="w-full xl:col-span-4 order-2 xl:order-1 flex flex-col gap-4">
+          <div className="flex flex-col gap-3">
              <div className="flex justify-between items-center flex-wrap gap-2">
                 <div className="flex items-center gap-3">
-                    <h2 className="text-2xl font-bold text-brand-primary">Attendance History</h2>
+                    <h2 className="text-xl font-bold text-gray-800">History</h2>
                 </div>
                 <div className="flex items-center gap-2">
-                    <div className="flex items-center gap-1 bg-white border border-gray-300 rounded px-2 py-1 shadow-sm">
+                    <div className="flex items-center gap-1 bg-white border border-gray-300 rounded-lg px-2 py-1 shadow-sm">
                         <ClockIcon className="w-3 h-3 text-gray-500" />
-                        <select value={timeFilter} onChange={(e) => setTimeFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))} className="text-xs bg-transparent text-gray-700 border-none">
+                        <select value={timeFilter} onChange={(e) => setTimeFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))} className="text-xs bg-transparent text-gray-700 border-none focus:ring-0 cursor-pointer">
                             <option value="all">Show All</option>
                             <option value="5">Last 5 Mins</option>
                             <option value="30">Last 30 Mins</option>
                         </select>
                     </div>
-                    <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="text-xs border border-gray-300 rounded px-2 py-1 bg-white">
+                    <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="text-xs border border-gray-300 rounded-lg px-2 py-1 bg-white cursor-pointer shadow-sm">
                         <option value="newest">Newest</option>
                         <option value="id">ID</option>
                     </select>
@@ -322,7 +341,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             <div className="flex items-center flex-wrap gap-2 py-1">
                 <div className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-primary/10 text-brand-primary rounded-full text-xs font-bold border border-brand-primary/20 shadow-sm transition-all">
                     <UserIcon className="w-3.5 h-3.5" />
-                    <span>{attendanceList.length} Unique Scans</span>
+                    <span>{attendanceList.length} Scanned</span>
                 </div>
                 
                 {!isOnline ? (
@@ -346,14 +365,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </div>
             
             <div className="flex flex-col gap-3 mt-1">
-                     {/* PRIMARY ACTIONS - Improved Visibility */}
+                     {/* PRIMARY ACTIONS */}
                      <div className="grid grid-cols-2 gap-3">
-                        <button onClick={() => setShowManualModal(true)} className="flex items-center justify-center gap-2 px-4 py-3 bg-brand-primary text-white text-sm font-bold rounded-lg shadow hover:bg-brand-secondary transition-all active:scale-95">
-                            <PencilSquareIcon className="w-5 h-5" />
+                        <button onClick={() => setShowManualModal(true)} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-brand-primary text-white text-sm font-bold rounded-lg shadow-md hover:bg-brand-secondary transition-all active:scale-95">
+                            <PencilSquareIcon className="w-4 h-4" />
                             Add Student
                         </button>
-                        <button onClick={handleExportCSV} disabled={attendanceList.length === 0} className="flex items-center justify-center gap-2 px-4 py-3 bg-white text-gray-700 border-2 border-gray-200 text-sm font-bold rounded-lg shadow-sm hover:bg-gray-50 hover:border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95">
-                            <DownloadIcon className="w-5 h-5 text-brand-secondary" />
+                        <button onClick={handleExportCSV} disabled={attendanceList.length === 0} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white text-gray-700 border border-gray-200 text-sm font-bold rounded-lg shadow-sm hover:bg-gray-50 hover:border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95">
+                            <DownloadIcon className="w-4 h-4 text-gray-500" />
                             Export CSV
                         </button>
                     </div>
@@ -373,7 +392,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             </div>
                         ) : (
                             <div className="flex flex-1 gap-2">
-                                <button onClick={onOpenKiosk} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-50 text-blue-700 text-xs font-semibold rounded-lg border border-blue-100 hover:bg-blue-100 transition-colors">
+                                <button onClick={onOpenKiosk} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-gray-50 text-gray-700 text-xs font-semibold rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors">
                                     <ShieldCheckIcon className="w-4 h-4" />
                                     Admin Mode
                                 </button>
@@ -387,54 +406,68 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 </div>
           </div>
           
-          <div className="bg-base-100 rounded-lg p-2 max-h-[600px] overflow-y-auto shadow-sm border border-base-300">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex-1 flex flex-col overflow-hidden min-h-[400px]">
             {visibleList.length === 0 ? (
-              <p className="text-gray-500 text-center py-8">No records to display.</p>
+              <div className="flex flex-col items-center justify-center py-12 text-gray-400">
+                  <UserIcon className="w-12 h-12 mb-2 opacity-20" />
+                  <p className="text-sm">No records to display.</p>
+              </div>
             ) : (
-              <div className="relative overflow-x-auto">
-                <table className="w-full text-sm text-left text-gray-700">
-                  <thead className="text-xs text-gray-500 uppercase bg-base-200 sticky top-0 z-10">
-                    <tr>
-                      <th className="px-4 py-3 w-4"><input type="checkbox" checked={visibleList.length > 0 && visibleList.every(s => selectedIds.has(s.studentId))} onChange={() => { if(selectedIds.size === visibleList.length) setSelectedIds(new Set()); else setSelectedIds(new Set(visibleList.map(s => s.studentId))); }} /></th>
-                      <th className="px-4 py-3">Student ID</th>
-                      <th className="px-4 py-3">Status</th>
-                      <th className="px-4 py-3 text-right">Time</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {visibleList.map((student) => (
-                      <tr key={`${student.studentId}-${student.timestamp}`} className={`border-b border-base-200 hover:bg-base-300 ${selectedIds.has(student.studentId) ? 'bg-indigo-50' : ''}`}>
-                        <td className="px-4 py-3"><input type="checkbox" checked={selectedIds.has(student.studentId)} onChange={() => { const next = new Set(selectedIds); if(next.has(student.studentId)) next.delete(student.studentId); else next.add(student.studentId); setSelectedIds(next); }} /></td>
-                        <td className="px-4 py-3 font-mono font-bold">{student.studentId}</td>
-                        <td className="px-4 py-3">
-                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${student.status === 'P' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
-                                {student.status === 'P' ? 'Present' : 'Absent'}
-                            </span>
-                        </td>
-                        <td className="px-4 py-3 text-right text-gray-500">{new Date(student.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="flex-1 overflow-y-auto max-h-[600px]">
+                {/* Scroll wrapper for table to prevent overlap on small screens */}
+                <div className="min-w-full inline-block align-middle">
+                    <div className="overflow-x-auto">
+                        <table className="min-w-[400px] w-full text-sm text-left text-gray-700">
+                        <thead className="text-xs text-gray-500 uppercase bg-gray-50 sticky top-0 z-10 border-b border-gray-200">
+                            <tr>
+                            <th className="px-4 py-3 w-8"><input type="checkbox" className="rounded border-gray-300 text-brand-primary focus:ring-brand-primary" checked={visibleList.length > 0 && visibleList.every(s => selectedIds.has(s.studentId))} onChange={() => { if(selectedIds.size === visibleList.length) setSelectedIds(new Set()); else setSelectedIds(new Set(visibleList.map(s => s.studentId))); }} /></th>
+                            <th className="px-4 py-3 font-semibold whitespace-nowrap">Student ID</th>
+                            <th className="px-4 py-3 font-semibold">Status</th>
+                            <th className="px-4 py-3 text-right font-semibold">Time</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {visibleList.map((student) => (
+                            <tr key={`${student.studentId}-${student.timestamp}`} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(student.studentId) ? 'bg-indigo-50/60' : ''}`}>
+                                <td className="px-4 py-3"><input type="checkbox" className="rounded border-gray-300 text-brand-primary focus:ring-brand-primary" checked={selectedIds.has(student.studentId)} onChange={() => { const next = new Set(selectedIds); if(next.has(student.studentId)) next.delete(student.studentId); else next.add(student.studentId); setSelectedIds(next); }} /></td>
+                                <td className="px-4 py-3 font-mono font-medium text-gray-900 whitespace-nowrap">{student.studentId}</td>
+                                <td className="px-4 py-3">
+                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide whitespace-nowrap ${student.status === 'P' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                        {student.status === 'P' ? 'Present' : 'Absent'}
+                                    </span>
+                                </td>
+                                <td className="px-4 py-3 text-right text-gray-400 text-xs tabular-nums whitespace-nowrap">{new Date(student.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</td>
+                            </tr>
+                            ))}
+                        </tbody>
+                        </table>
+                    </div>
+                </div>
               </div>
             )}
           </div>
         </div>
         )}
 
-        <div className={`w-full flex flex-col items-center bg-base-100 p-6 rounded-lg shadow-md order-1 lg:order-2 ${viewMode === 'teacher' ? 'lg:flex-1' : 'max-w-4xl mx-auto'}`}>
+        {/* RIGHT COLUMN - QR CODE */}
+        {/* Takes 8 columns (2/3 width) on XL screens */}
+        <div className={`w-full flex flex-col items-center bg-white p-6 sm:p-8 rounded-2xl shadow-xl border border-gray-100 order-1 xl:order-2 ${viewMode === 'teacher' ? 'xl:col-span-8' : 'max-w-4xl mx-auto shadow-2xl border-brand-primary/10'}`}>
           {viewMode === 'teacher' && (
-              <div className="w-full space-y-4 mb-4">
-                  <button onClick={() => setShowEmailSetup(!showEmailSetup)} className="text-sm text-brand-primary underline hover:text-brand-secondary font-medium">
-                    {showEmailSetup ? 'Hide Cloud Configuration' : 'Configure Cloud Recording & Stress Test'}
-                  </button>
+              <div className="w-full space-y-4 mb-6">
+                  <div className="flex justify-between items-center">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Configuration</label>
+                    <button onClick={() => setShowEmailSetup(!showEmailSetup)} className="text-xs text-brand-primary hover:text-brand-secondary font-bold uppercase tracking-wide underline decoration-dotted underline-offset-4">
+                        {showEmailSetup ? 'Close Settings' : 'Google Sheets & Stress Test'}
+                    </button>
+                  </div>
                   
                   {showEmailSetup && (
-                    <div className="p-4 bg-gray-50 rounded-lg border border-gray-200 space-y-4">
+                    <div className="p-5 bg-gray-50 rounded-xl border border-gray-200 space-y-5 animate-in fade-in slide-in-from-top-2 duration-300">
                       <GoogleSheetIntegrationInfo />
                       <div>
-                          <label className="block text-sm font-medium text-gray-700 mb-1">Google Web App URL</label>
-                          <input type="text" value={scriptUrl} onChange={(e) => onScriptUrlChange(e.target.value)} className="block w-full bg-white border border-gray-300 rounded-md py-2 px-3 text-sm text-gray-600" />
+                          <label className="block text-sm font-bold text-gray-700 mb-2">Google Web App URL</label>
+                          <input type="text" value={scriptUrl} onChange={(e) => onScriptUrlChange(e.target.value)} className="block w-full bg-white border border-gray-300 rounded-lg py-2.5 px-4 text-sm text-gray-800 focus:ring-2 focus:ring-brand-primary focus:border-brand-primary transition-shadow" placeholder="https://script.google.com/..." />
+                          <p className="text-xs text-gray-400 mt-1">Paste the URL from your Google Apps Script deployment here.</p>
                       </div>
                       
                       {/* STRESS TEST BOX */}
@@ -442,15 +475,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         <div className="flex justify-between items-center mb-3">
                             <h4 className="text-sm font-bold text-orange-800">Concurrency Stress Test</h4>
                             {!testStats.isRunning ? (
-                                <button onClick={runStressTest} className="px-3 py-1 bg-orange-600 text-white text-xs font-bold rounded-full hover:bg-orange-700">Simulate 230 Scans</button>
+                                <button onClick={runStressTest} className="px-3 py-1 bg-orange-600 text-white text-xs font-bold rounded-full hover:bg-orange-700 shadow-sm transition-colors">Simulate 230 Scans</button>
                             ) : (
                                 <span className="text-xs font-bold text-orange-600 animate-pulse">Running Test...</span>
                             )}
                         </div>
                         {(testStats.isRunning || testStats.total > 0) && (
                             <div className="space-y-2">
-                                <div className="w-full bg-gray-200 rounded-full h-2">
-                                    <div className={`h-2 rounded-full transition-all duration-500 ${testStats.failed > 0 && !testStats.isRunning ? 'bg-orange-500' : 'bg-green-500'}`} style={{ width: `${((testStats.success + testStats.failed) / (testStats.total || 1)) * 100}%` }}></div>
+                                <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                                    <div className={`h-full transition-all duration-500 ease-out ${testStats.failed > 0 && !testStats.isRunning ? 'bg-orange-500' : 'bg-green-500'}`} style={{ width: `${((testStats.success + testStats.failed) / (testStats.total || 1)) * 100}%` }}></div>
                                 </div>
                                 <div className="flex justify-between text-[10px] font-bold uppercase">
                                     <span className="text-green-600">Success: {testStats.success}</span>
@@ -474,69 +507,107 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           )}
 
           {viewMode === 'classroom' && courseName && (
-             <h2 className="text-4xl font-extrabold mb-6 text-brand-primary tracking-wide text-center uppercase drop-shadow-sm">{courseName}</h2>
+             <h2 className="text-5xl font-black mb-8 text-gray-900 tracking-tight text-center uppercase drop-shadow-sm leading-none break-all">{courseName}</h2>
           )}
 
-          <h2 className="text-2xl font-bold mb-4 text-brand-primary">Scan to Check-in</h2>
+          <h2 className="text-2xl font-bold mb-6 text-brand-primary tracking-tight text-center">Scan to Check-in</h2>
           
           {viewMode === 'teacher' && (
-            <div className="w-full mb-4">
-                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Current Class / Session</label>
-                <div className="relative">
+            <div className="w-full mb-6">
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5 ml-1">Current Class / Session</label>
+                <div className="relative group">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <PencilSquareIcon className="h-4 w-4 text-gray-400" />
+                        <PencilSquareIcon className="h-5 w-5 text-gray-400 group-focus-within:text-brand-primary transition-colors" />
                     </div>
                     <input
                         type="text"
                         value={courseName}
                         onChange={(e) => setCourseName(e.target.value)}
-                        className="block w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/50 focus:border-brand-primary sm:text-sm transition-all shadow-sm"
+                        className="block w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-xl leading-5 bg-gray-50 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-0 focus:border-brand-primary sm:text-sm font-medium transition-all"
                         placeholder="e.g. DATA STRUCTURES W1"
                     />
                 </div>
             </div>
           )}
 
-          <div className="bg-white p-4 rounded-lg shadow-inner border border-gray-200 relative min-h-[300px] flex items-center justify-center">
+          <div className="bg-white p-6 rounded-2xl shadow-[inset_0_2px_8px_rgba(0,0,0,0.05)] border border-gray-100 relative w-full max-w-[400px] aspect-square flex items-center justify-center overflow-hidden">
              {isQrLoading && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-white z-10 rounded-lg">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary mb-2"></div>
-                    <p className="text-sm text-gray-500">Generating Secure QR...</p>
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/90 z-10 rounded-2xl backdrop-blur-sm">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary mb-3"></div>
+                    <p className="text-sm font-bold text-gray-500 animate-pulse">Generating Secure QR...</p>
                 </div>
              )}
-            <canvas ref={canvasRef} className="rounded-md w-full h-auto block" />
+            <canvas ref={canvasRef} className="w-full h-full object-contain block" style={{ maxWidth: '100%', maxHeight: '100%' }} />
+            
+            {/* Corner Markers for decorative purpose */}
+            <div className="absolute top-4 left-4 w-8 h-8 border-t-4 border-l-4 border-gray-900 rounded-tl-lg pointer-events-none"></div>
+            <div className="absolute top-4 right-4 w-8 h-8 border-t-4 border-r-4 border-gray-900 rounded-tr-lg pointer-events-none"></div>
+            <div className="absolute bottom-4 left-4 w-8 h-8 border-b-4 border-l-4 border-gray-900 rounded-bl-lg pointer-events-none"></div>
+            <div className="absolute bottom-4 right-4 w-8 h-8 border-b-4 border-r-4 border-gray-900 rounded-br-lg pointer-events-none"></div>
           </div>
-          <p className="text-gray-500 text-sm mt-4 text-center">Refreshes every second for high security.</p>
+          
+          <div className="mt-6 flex flex-col items-center">
+             <div className="flex items-center gap-2 text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100 mb-1">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                </span>
+                <span className="text-xs font-bold uppercase tracking-wide">Live Security Active</span>
+             </div>
+             <p className="text-gray-400 text-xs">QR Code refreshes automatically every second.</p>
+          </div>
         </div>
       </div>
 
       {showManualModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-sm overflow-hidden">
-                <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
-                    <h3 className="text-lg font-bold text-gray-900">Add Student</h3>
-                    <button onClick={() => setShowManualModal(false)} className="text-gray-400 hover:text-gray-500 font-bold text-xl">&times;</button>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-all">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all scale-100">
+                <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
+                    <h3 className="text-lg font-black text-gray-900 tracking-tight">Add Student Manually</h3>
+                    <button onClick={() => setShowManualModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
+                        <XCircleIcon className="w-6 h-6" />
+                    </button>
                 </div>
                 <form onSubmit={(e) => {
                     e.preventDefault();
                     const res = onManualAdd(manualName, manualId, `${manualId}@student.uts.edu.my`, manualStatus);
                     if(res.success) { setShowManualModal(false); setManualId(''); setManualName(''); }
                     else { setManualError(res.message); }
-                }} className="p-6 space-y-4">
-                    <input type="text" value={manualId} onChange={(e) => {
-                        const val = e.target.value.toUpperCase();
-                        setManualId(val);
-                        const matched = PRE_REGISTERED_STUDENTS.find(s => s.id === val);
-                        if(matched) { setManualName(matched.name); setManualIsNew(false); }
-                        else { setManualIsNew(true); }
-                    }} placeholder="Student ID (FIA...)" className="block w-full border border-gray-300 rounded-md p-2 uppercase" />
-                    <input type="text" value={manualName} onChange={(e) => setManualName(e.target.value.toUpperCase())} readOnly={!manualIsNew && manualName.length > 0} placeholder="Full Name" className={`block w-full border border-gray-300 rounded-md p-2 uppercase ${!manualIsNew && manualName.length > 0 ? 'bg-gray-100' : ''}`} />
-                    <div className="flex gap-4">
-                        <label className="flex items-center text-sm"><input type="radio" checked={manualStatus === 'P'} onChange={() => setManualStatus('P')} className="mr-2"/>Present</label>
-                        <label className="flex items-center text-sm"><input type="radio" checked={manualStatus === 'A'} onChange={() => setManualStatus('A')} className="mr-2"/>Absent</label>
+                }} className="p-6 space-y-5">
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Student ID</label>
+                        <input type="text" value={manualId} onChange={(e) => {
+                            const val = e.target.value.toUpperCase();
+                            setManualId(val);
+                            const matched = PRE_REGISTERED_STUDENTS.find(s => s.id === val);
+                            if(matched) { setManualName(matched.name); setManualIsNew(false); }
+                            else { setManualIsNew(true); }
+                        }} placeholder="FIA..." className="block w-full border-2 border-gray-200 focus:border-brand-primary rounded-lg p-3 uppercase font-mono text-sm outline-none transition-colors" />
                     </div>
-                    {manualError && <p className="text-xs text-red-600">{manualError}</p>}
-                    <button type="submit" className="w-full py-2 bg-brand-primary text-white rounded font-bold">Confirm Add</button>
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Student Name</label>
+                        <input type="text" value={manualName} onChange={(e) => setManualName(e.target.value.toUpperCase())} readOnly={!manualIsNew && manualName.length > 0} placeholder="Full Name" className={`block w-full border-2 border-gray-200 rounded-lg p-3 uppercase text-sm outline-none transition-colors ${!manualIsNew && manualName.length > 0 ? 'bg-gray-100 text-gray-500' : 'focus:border-brand-primary'}`} />
+                    </div>
+                    
+                    <div>
+                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Attendance Status</label>
+                        <div className="grid grid-cols-2 gap-3">
+                            <label className={`cursor-pointer border-2 rounded-lg p-3 flex items-center justify-center gap-2 transition-all ${manualStatus === 'P' ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-200 hover:border-green-200'}`}>
+                                <input type="radio" checked={manualStatus === 'P'} onChange={() => setManualStatus('P')} className="hidden"/>
+                                <CheckCircleIcon className="w-5 h-5" />
+                                <span className="font-bold text-sm">Present</span>
+                            </label>
+                            <label className={`cursor-pointer border-2 rounded-lg p-3 flex items-center justify-center gap-2 transition-all ${manualStatus === 'A' ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-200 hover:border-red-200'}`}>
+                                <input type="radio" checked={manualStatus === 'A'} onChange={() => setManualStatus('A')} className="hidden"/>
+                                <XCircleIcon className="w-5 h-5" />
+                                <span className="font-bold text-sm">Absent</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    {manualError && <p className="text-xs text-red-600 font-bold bg-red-50 p-2 rounded text-center">{manualError}</p>}
+                    
+                    <button type="submit" className="w-full py-3.5 bg-brand-primary text-white rounded-xl font-bold shadow-lg shadow-brand-primary/20 hover:bg-brand-secondary active:scale-[0.98] transition-all">Confirm Addition</button>
                 </form>
             </div>
         </div>
