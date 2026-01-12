@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import type { Student } from '../types';
+import type { Student, SyncTask } from '../types';
 import QRCode from 'qrcode';
 import { DownloadIcon } from './icons/DownloadIcon';
 import { EyeIcon } from './icons/EyeIcon';
@@ -28,6 +28,7 @@ interface TeacherViewProps {
   onOpenKiosk: () => void;
   onManualAdd: (name: string, id: string, email: string, status: 'P' | 'A') => {success: boolean, message: string};
   pendingSyncCount?: number;
+  syncQueue?: SyncTask[];
   syncError?: string | null;
   onRetrySync?: () => void;
   isOnline?: boolean;
@@ -55,6 +56,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onOpenKiosk, 
   onManualAdd,
   pendingSyncCount = 0,
+  syncQueue = [],
   syncError = null,
   onRetrySync,
   isOnline = true,
@@ -91,6 +93,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isMountedRef = useRef(true);
+
+  // Computed: Sync Status Map
+  const pendingIds = new Set(syncQueue.map(t => t.data.studentId));
 
   useEffect(() => {
     localStorage.setItem('attendance-course-name', courseName);
@@ -146,16 +151,44 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   const visibleList = sortList(timeFilter === 'all' ? attendanceList : attendanceList.filter(s => s.timestamp >= (currentTime - (timeFilter * 60 * 1000))));
 
+  // Live Stream items (Last 3)
+  const liveStreamItems = [...attendanceList].sort((a, b) => b.timestamp - a.timestamp).slice(0, 3);
+
   const handleExportCSV = () => {
     if (attendanceList.length === 0) return;
-    const headers = ['Timestamp', 'Student Name', 'Student ID', 'Email', 'Status'];
+    const headers = ['Timestamp', 'Student Name', 'Student ID', 'Email', 'Status', 'Sync Status'];
     const dataToExport = sortList(attendanceList);
-    const csvContent = [headers.join(','), ...dataToExport.map(student => [new Date(student.timestamp).toLocaleString(), `"${student.name}"`, `"${student.studentId}"`, `"${student.email}"`, student.status].join(','))].join('\n');
+    const csvContent = [headers.join(','), ...dataToExport.map(student => [
+        new Date(student.timestamp).toLocaleString(), 
+        `"${student.name}"`, 
+        `"${student.studentId}"`, 
+        `"${student.email}"`, 
+        student.status,
+        pendingIds.has(student.studentId) ? 'PENDING' : 'SAVED'
+    ].join(','))].join('\n');
     const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
     link.download = `attendance-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+  };
+
+  const handleBackupPending = () => {
+    if (syncQueue.length === 0) return;
+    const headers = ['Timestamp', 'Student Name', 'Student ID', 'Email', 'Status'];
+    const csvContent = [headers.join(','), ...syncQueue.map(task => [
+        new Date(task.timestamp).toLocaleString(), 
+        `"${task.data.name}"`, 
+        `"${task.data.studentId}"`, 
+        `"${task.data.email}"`, 
+        task.data.status
+    ].join(','))].join('\n');
+    const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `backup-failed-sync-${new Date().toISOString()}.csv`;
     link.click();
   };
 
@@ -330,6 +363,55 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         {/* Takes up 4 columns (1/3 width) on XL screens */}
         {viewMode === 'teacher' && (
         <div className="w-full xl:col-span-4 order-2 xl:order-1 flex flex-col gap-4">
+          
+          {/* LIVE CONCURRENCY MONITOR */}
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+             <div className="flex justify-between items-center mb-3">
+                <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wide flex items-center gap-2">
+                   <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                   Live Activity
+                </h3>
+                {syncError && syncQueue.length > 0 && (
+                    <button onClick={handleBackupPending} className="text-[10px] bg-red-100 text-red-700 px-2 py-1 rounded border border-red-200 hover:bg-red-200 font-bold transition-colors">
+                        ⚠ Backup Pending Data
+                    </button>
+                )}
+             </div>
+             
+             <div className="space-y-2">
+                 {liveStreamItems.length === 0 ? (
+                     <div className="text-center py-4 text-gray-400 text-xs italic">Waiting for scans...</div>
+                 ) : (
+                     liveStreamItems.map(student => {
+                         const isPending = pendingIds.has(student.studentId);
+                         return (
+                            <div key={`live-${student.studentId}`} className={`flex items-center justify-between p-3 rounded-lg border transition-all duration-300 ${isPending ? (syncError ? 'bg-red-50 border-red-100' : 'bg-blue-50 border-blue-100') : 'bg-green-50/50 border-green-100'}`}>
+                                <div className="flex items-center gap-3 overflow-hidden">
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${isPending ? (syncError ? 'bg-red-200 text-red-700' : 'bg-blue-200 text-blue-700 animate-pulse') : 'bg-green-200 text-green-700'}`}>
+                                        {student.name.charAt(0)}
+                                    </div>
+                                    <div className="min-w-0">
+                                        <p className="text-xs font-bold text-gray-900 truncate">{student.name}</p>
+                                        <p className="text-[10px] text-gray-500 font-mono truncate">{student.studentId}</p>
+                                    </div>
+                                </div>
+                                <div className="flex flex-col items-end shrink-0">
+                                    {isPending ? (
+                                        syncError ? 
+                                        <span className="text-[10px] font-bold text-red-600 bg-red-100 px-1.5 py-0.5 rounded">Failed</span> :
+                                        <span className="text-[10px] font-bold text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded animate-pulse">Syncing</span>
+                                    ) : (
+                                        <CheckCircleIcon className="w-4 h-4 text-green-500" />
+                                    )}
+                                    <span className="text-[9px] text-gray-400 mt-0.5">{new Date(student.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}</span>
+                                </div>
+                            </div>
+                         );
+                     })
+                 )}
+             </div>
+          </div>
+
           <div className="flex flex-col gap-3">
              <div className="flex justify-between items-center flex-wrap gap-2">
                 <div className="flex items-center gap-3">
@@ -440,18 +522,31 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                            {visibleList.map((student) => (
-                            <tr key={`${student.studentId}-${student.timestamp}`} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(student.studentId) ? 'bg-indigo-50/60' : ''}`}>
-                                <td className="px-4 py-3"><input type="checkbox" className="rounded border-gray-300 text-brand-primary focus:ring-brand-primary" checked={selectedIds.has(student.studentId)} onChange={() => { const next = new Set(selectedIds); if(next.has(student.studentId)) next.delete(student.studentId); else next.add(student.studentId); setSelectedIds(next); }} /></td>
-                                <td className="px-4 py-3 font-mono font-medium text-gray-900 whitespace-nowrap">{student.studentId}</td>
-                                <td className="px-4 py-3">
-                                    <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide whitespace-nowrap ${student.status === 'P' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                                        {student.status === 'P' ? 'Present' : 'Absent'}
-                                    </span>
-                                </td>
-                                <td className="px-4 py-3 text-right text-gray-400 text-xs tabular-nums whitespace-nowrap">{new Date(student.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</td>
-                            </tr>
-                            ))}
+                            {visibleList.map((student) => {
+                                const isPending = pendingIds.has(student.studentId);
+                                return (
+                                <tr key={`${student.studentId}-${student.timestamp}`} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(student.studentId) ? 'bg-indigo-50/60' : ''}`}>
+                                    <td className="px-4 py-3"><input type="checkbox" className="rounded border-gray-300 text-brand-primary focus:ring-brand-primary" checked={selectedIds.has(student.studentId)} onChange={() => { const next = new Set(selectedIds); if(next.has(student.studentId)) next.delete(student.studentId); else next.add(student.studentId); setSelectedIds(next); }} /></td>
+                                    <td className="px-4 py-3 font-mono font-medium text-gray-900 whitespace-nowrap flex items-center gap-2">
+                                        {student.studentId}
+                                        {/* TABLE STATUS ICON */}
+                                        {isPending ? (
+                                            syncError ? 
+                                            <div title="Sync Failed" className="w-2 h-2 rounded-full bg-red-500"></div> :
+                                            <div title="Syncing..." className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
+                                        ) : (
+                                            <div title="Saved to Cloud" className="w-2 h-2 rounded-full bg-green-500"></div>
+                                        )}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wide whitespace-nowrap ${student.status === 'P' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                                            {student.status === 'P' ? 'Present' : 'Absent'}
+                                        </span>
+                                    </td>
+                                    <td className="px-4 py-3 text-right text-gray-400 text-xs tabular-nums whitespace-nowrap">{new Date(student.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</td>
+                                </tr>
+                                );
+                            })}
                         </tbody>
                         </table>
                     </div>
@@ -483,6 +578,17 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                           <p className="text-xs text-gray-400 mt-1">Paste the URL from your Google Apps Script deployment here.</p>
                       </div>
                       
+                      {/* NEW TEST BUTTON SECTION */}
+                      <div className="flex items-center justify-between bg-indigo-50 p-4 rounded-lg border border-indigo-100">
+                          <div>
+                              <h4 className="text-sm font-bold text-indigo-900">Connectivity Check</h4>
+                              <p className="text-xs text-indigo-700 mt-0.5">Adds a dummy student record to verify cloud sync.</p>
+                          </div>
+                          <button onClick={onTestAttendance} className="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm active:scale-95">
+                              Add Test Student
+                          </button>
+                      </div>
+
                       {/* STRESS TEST BOX */}
                       <div className="p-4 bg-orange-50 border border-orange-200 rounded-lg">
                         <div className="flex justify-between items-center mb-3">

@@ -4,7 +4,7 @@ import { StudentView } from './components/StudentView';
 import { LoginView } from './components/LoginView';
 import { ExclamationTriangleIcon } from './components/icons/ExclamationTriangleIcon';
 import { GlobeIcon } from './components/icons/GlobeIcon';
-import type { Student } from './types';
+import type { Student, SyncTask } from './types';
 
 type View = 'teacher' | 'student';
 
@@ -14,12 +14,6 @@ const SCRIPT_URL_KEY = 'attendance-script-url-v22';
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const LECTURER_PASSWORD = 'adminscm'; // Updated secure password
-
-interface SyncTask {
-  id: string;
-  data: Record<string, string>;
-  timestamp: number;
-}
 
 const App: React.FC = () => {
   const urlParams = new URLSearchParams(window.location.search);
@@ -322,6 +316,7 @@ const App: React.FC = () => {
                      onOpenKiosk={onOpenKiosk}
                      onManualAdd={onManualAdd}
                      pendingSyncCount={syncQueue.length}
+                     syncQueue={syncQueue} // Pass full queue
                      syncError={syncError}
                      onRetrySync={handleRetryNow}
                      isOnline={isOnline}
