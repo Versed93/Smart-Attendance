@@ -13,6 +13,7 @@ import { CheckCircleIcon } from './icons/CheckCircleIcon';
 import { XCircleIcon } from './icons/XCircleIcon';
 import { GlobeIcon } from './icons/GlobeIcon';
 import { ExclamationTriangleIcon } from './icons/ExclamationTriangleIcon';
+import { LockClosedIcon } from './icons/LockClosedIcon';
 import { GoogleSheetIntegrationInfo } from './GoogleSheetIntegrationInfo';
 import { PRE_REGISTERED_STUDENTS } from '../studentList';
 
@@ -30,6 +31,7 @@ interface TeacherViewProps {
   syncError?: string | null;
   onRetrySync?: () => void;
   isOnline?: boolean;
+  onLogout: () => void;
 }
 
 type SortOption = 'id' | 'newest' | 'oldest';
@@ -55,7 +57,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   pendingSyncCount = 0,
   syncError = null,
   onRetrySync,
-  isOnline = true
+  isOnline = true,
+  onLogout
 }) => {
   const [baseUrl, setBaseUrl] = useState<string>(window.location.href.split('?')[0]);
   const [qrData, setQrData] = useState<string>('');
@@ -291,23 +294,33 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
              </div>
          </div>
          
-         <button 
-            onClick={() => setViewMode(viewMode === 'teacher' ? 'classroom' : 'teacher')} 
-            className={`group flex items-center gap-3 px-5 py-3 rounded-xl font-bold transition-all duration-200 w-full sm:w-auto justify-center sm:justify-between ${
-                viewMode === 'teacher' 
-                ? 'bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200' 
-                : 'bg-gray-900 text-white hover:bg-gray-800 shadow-xl shadow-gray-900/10'
-            }`}
-            title={viewMode === 'teacher' ? "Switch to Classroom Mode for Projector" : "Return to Dashboard"}
-         >
-            <div className="flex flex-col items-end text-right mr-1">
-                <span className="text-[10px] uppercase opacity-60 font-medium leading-none mb-1">View Mode</span>
-                <span className="text-xs uppercase tracking-wider leading-none">
-                    {viewMode === 'teacher' ? 'Dashboard' : 'Classroom'}
-                </span>
-            </div>
-            {viewMode === 'teacher' ? <EyeIcon className="w-5 h-5" /> : <EyeSlashIcon className="w-5 h-5 text-gray-300" />}
-         </button>
+         <div className="flex items-center gap-2 w-full sm:w-auto justify-center sm:justify-end">
+            <button 
+                onClick={() => setViewMode(viewMode === 'teacher' ? 'classroom' : 'teacher')} 
+                className={`group flex items-center gap-3 px-5 py-3 rounded-xl font-bold transition-all duration-200 justify-center sm:justify-between ${
+                    viewMode === 'teacher' 
+                    ? 'bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200' 
+                    : 'bg-gray-900 text-white hover:bg-gray-800 shadow-xl shadow-gray-900/10'
+                }`}
+                title={viewMode === 'teacher' ? "Switch to Classroom Mode for Projector" : "Return to Dashboard"}
+            >
+                <div className="flex flex-col items-end text-right mr-1">
+                    <span className="text-[10px] uppercase opacity-60 font-medium leading-none mb-1">View Mode</span>
+                    <span className="text-xs uppercase tracking-wider leading-none">
+                        {viewMode === 'teacher' ? 'Dashboard' : 'Classroom'}
+                    </span>
+                </div>
+                {viewMode === 'teacher' ? <EyeIcon className="w-5 h-5" /> : <EyeSlashIcon className="w-5 h-5 text-gray-300" />}
+            </button>
+            
+            <button
+                onClick={onLogout}
+                className="flex items-center justify-center w-12 h-12 bg-red-50 text-red-600 rounded-xl border border-red-100 hover:bg-red-100 hover:border-red-200 transition-colors shadow-sm"
+                title="Log Out"
+            >
+                <LockClosedIcon className="w-5 h-5" />
+            </button>
+         </div>
        </div>
 
       {/* Main Content: Using CSS Grid for robust layout */}

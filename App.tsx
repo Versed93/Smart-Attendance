@@ -1,7 +1,7 @@
-
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { TeacherView } from './components/TeacherView';
 import { StudentView } from './components/StudentView';
+import { LoginView } from './components/LoginView';
 import { ExclamationTriangleIcon } from './components/icons/ExclamationTriangleIcon';
 import { GlobeIcon } from './components/icons/GlobeIcon';
 import type { Student } from './types';
@@ -12,6 +12,8 @@ const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
 const SCRIPT_URL_KEY = 'attendance-script-url-v22';
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
+const AUTH_KEY = 'attendance-lecturer-auth-v1';
+const LECTURER_PASSWORD = 'adminscm'; // Updated secure password
 
 interface SyncTask {
   id: string;
@@ -27,6 +29,9 @@ const App: React.FC = () => {
 
   const [view, setView] = useState<View>(initialView);
   const [isKioskMode, setIsKioskMode] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    return localStorage.getItem(AUTH_KEY) === 'true';
+  });
   const [attendanceList, setAttendanceList] = useState<Student[]>([]);
   
   // Network Status
@@ -63,7 +68,7 @@ const App: React.FC = () => {
   // Network Listener
   useEffect(() => {
     // Debug log to confirm app version in production console
-    console.log("UTS QR Attendance App Mounted - v1.0.5");
+    console.log("UTS QR Attendance App Mounted - v1.0.6");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -210,6 +215,20 @@ const App: React.FC = () => {
       }
   }, []);
 
+  const handleLogin = (password: string) => {
+    if (password === LECTURER_PASSWORD) {
+        setIsAuthenticated(true);
+        localStorage.setItem(AUTH_KEY, 'true');
+        return true;
+    }
+    return false;
+  };
+
+  const handleLogout = () => {
+    setIsAuthenticated(false);
+    localStorage.removeItem(AUTH_KEY);
+  };
+
   const addStudent = (name: string, studentId: string, email: string, status: 'P' | 'A') => {
       const timestamp = Date.now();
       const newStudent: Student = { name, studentId, email, timestamp, status };
@@ -290,57 +309,62 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
        {view === 'teacher' ? (
-           <div className="flex-1 p-4 overflow-auto relative">
-               <TeacherView 
-                   attendanceList={attendanceList}
-                   onTestAttendance={onTestAttendance}
-                   onClearAttendance={onClearAttendance}
-                   onRemoveStudents={onRemoveStudents}
-                   onBulkStatusUpdate={onBulkStatusUpdate}
-                   scriptUrl={scriptUrl}
-                   onScriptUrlChange={setScriptUrl}
-                   onOpenKiosk={onOpenKiosk}
-                   onManualAdd={onManualAdd}
-                   pendingSyncCount={syncQueue.length}
-                   syncError={syncError}
-                   onRetrySync={handleRetryNow}
-                   isOnline={isOnline}
-               />
-               
-               {/* Prominent Error Notification */}
-               {syncError && isOnline && (
-                  <div className="fixed top-6 right-6 max-w-sm w-full bg-white border-l-4 border-red-500 shadow-2xl rounded-r-lg p-5 z-[100] flex flex-col gap-3 animate-pulse">
-                      <div className="flex items-start gap-4">
-                          <div className="text-red-500 bg-red-100 p-2 rounded-full">
-                            <ExclamationTriangleIcon className="w-6 h-6" />
-                          </div>
-                          <div className="flex-1">
-                              <h3 className="font-bold text-gray-900 text-lg">Cloud Sync Failed</h3>
-                              <p className="text-sm text-gray-600 mt-1 leading-tight break-words font-mono text-xs bg-gray-50 p-2 rounded border border-gray-200">{syncError}</p>
-                              <p className="text-xs text-gray-400 mt-2 font-medium">Automatic retry in progress...</p>
-                          </div>
-                      </div>
-                      <div className="flex justify-end gap-2 mt-1">
-                          <button 
-                            onClick={handleRetryNow} 
-                            className="px-4 py-2 bg-red-600 text-white text-sm font-bold rounded shadow hover:bg-red-700 transition-colors flex items-center gap-2"
-                          >
-                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
-                            Retry Now
-                          </button>
-                      </div>
-                  </div>
-               )}
-               {!isOnline && syncQueue.length > 0 && (
-                   <div className="fixed top-6 right-6 max-w-sm w-full bg-yellow-50 border-l-4 border-yellow-500 shadow-xl rounded-r-lg p-4 z-[100] flex items-center gap-3">
-                       <GlobeIcon className="w-6 h-6 text-yellow-600" />
-                       <div>
-                           <h3 className="font-bold text-yellow-800 text-sm">Offline Mode</h3>
-                           <p className="text-xs text-yellow-700">{syncQueue.length} records pending upload.</p>
-                       </div>
-                   </div>
-               )}
-           </div>
+           isAuthenticated ? (
+             <div className="flex-1 p-4 overflow-auto relative">
+                 <TeacherView 
+                     attendanceList={attendanceList}
+                     onTestAttendance={onTestAttendance}
+                     onClearAttendance={onClearAttendance}
+                     onRemoveStudents={onRemoveStudents}
+                     onBulkStatusUpdate={onBulkStatusUpdate}
+                     scriptUrl={scriptUrl}
+                     onScriptUrlChange={setScriptUrl}
+                     onOpenKiosk={onOpenKiosk}
+                     onManualAdd={onManualAdd}
+                     pendingSyncCount={syncQueue.length}
+                     syncError={syncError}
+                     onRetrySync={handleRetryNow}
+                     isOnline={isOnline}
+                     onLogout={handleLogout}
+                 />
+                 
+                 {/* Prominent Error Notification */}
+                 {syncError && isOnline && (
+                    <div className="fixed top-6 right-6 max-w-sm w-full bg-white border-l-4 border-red-500 shadow-2xl rounded-r-lg p-5 z-[100] flex flex-col gap-3 animate-pulse">
+                        <div className="flex items-start gap-4">
+                            <div className="text-red-500 bg-red-100 p-2 rounded-full">
+                              <ExclamationTriangleIcon className="w-6 h-6" />
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="font-bold text-gray-900 text-lg">Cloud Sync Failed</h3>
+                                <p className="text-sm text-gray-600 mt-1 leading-tight break-words font-mono text-xs bg-gray-50 p-2 rounded border border-gray-200">{syncError}</p>
+                                <p className="text-xs text-gray-400 mt-2 font-medium">Automatic retry in progress...</p>
+                            </div>
+                        </div>
+                        <div className="flex justify-end gap-2 mt-1">
+                            <button 
+                              onClick={handleRetryNow} 
+                              className="px-4 py-2 bg-red-600 text-white text-sm font-bold rounded shadow hover:bg-red-700 transition-colors flex items-center gap-2"
+                            >
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                              Retry Now
+                            </button>
+                        </div>
+                    </div>
+                 )}
+                 {!isOnline && syncQueue.length > 0 && (
+                     <div className="fixed top-6 right-6 max-w-sm w-full bg-yellow-50 border-l-4 border-yellow-500 shadow-xl rounded-r-lg p-4 z-[100] flex items-center gap-3">
+                         <GlobeIcon className="w-6 h-6 text-yellow-600" />
+                         <div>
+                             <h3 className="font-bold text-yellow-800 text-sm">Offline Mode</h3>
+                             <p className="text-xs text-yellow-700">{syncQueue.length} records pending upload.</p>
+                         </div>
+                     </div>
+                 )}
+             </div>
+           ) : (
+             <LoginView onLogin={handleLogin} />
+           )
        ) : (
            <div className="flex-1 flex flex-col items-center justify-center p-4 bg-gray-50">
                <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-6">
