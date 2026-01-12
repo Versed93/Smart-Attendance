@@ -13,6 +13,7 @@ import { ClockIcon } from './icons/ClockIcon';
 import { CheckCircleIcon } from './icons/CheckCircleIcon';
 import { XCircleIcon } from './icons/XCircleIcon';
 import { GlobeIcon } from './icons/GlobeIcon';
+import { ExclamationTriangleIcon } from './icons/ExclamationTriangleIcon';
 import { GoogleSheetIntegrationInfo } from './GoogleSheetIntegrationInfo';
 import { PRE_REGISTERED_STUDENTS } from '../studentList';
 
@@ -27,6 +28,8 @@ interface TeacherViewProps {
   onOpenKiosk: () => void;
   onManualAdd: (name: string, id: string, email: string, status: 'P' | 'A') => {success: boolean, message: string};
   pendingSyncCount?: number;
+  syncError?: string | null;
+  onRetrySync?: () => void;
 }
 
 type SortOption = 'id' | 'newest' | 'oldest';
@@ -49,7 +52,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onScriptUrlChange, 
   onOpenKiosk, 
   onManualAdd,
-  pendingSyncCount = 0
+  pendingSyncCount = 0,
+  syncError = null,
+  onRetrySync
 }) => {
   const [baseUrl, setBaseUrl] = useState<string>(window.location.href.split('?')[0]);
   const [qrData, setQrData] = useState<string>('');
@@ -301,11 +306,19 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     <UserIcon className="w-3.5 h-3.5" />
                     <span>{attendanceList.length} Unique Scans</span>
                 </div>
-                {pendingSyncCount > 0 && (
-                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-700 rounded-full text-xs font-bold border border-blue-200 shadow-sm animate-pulse transition-all">
-                        <GlobeIcon className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '3s' }} />
-                        <span>{pendingSyncCount} Syncing...</span>
-                    </div>
+                
+                {syncError ? (
+                   <button onClick={onRetrySync} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-100 text-red-700 rounded-full text-xs font-bold border border-red-200 shadow-sm animate-pulse hover:bg-red-200 transition-all cursor-pointer">
+                      <ExclamationTriangleIcon className="w-3.5 h-3.5" />
+                      <span>Sync Error (Retry)</span>
+                   </button>
+                ) : (
+                    pendingSyncCount > 0 && (
+                        <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-700 rounded-full text-xs font-bold border border-blue-200 shadow-sm animate-pulse transition-all">
+                            <GlobeIcon className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '3s' }} />
+                            <span>{pendingSyncCount} Syncing...</span>
+                        </div>
+                    )
                 )}
             </div>
             

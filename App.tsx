@@ -1,6 +1,8 @@
-import React, { useState, useCallback, useEffect } from 'react';
+
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { TeacherView } from './components/TeacherView';
 import { StudentView } from './components/StudentView';
+import { ExclamationTriangleIcon } from './components/icons/ExclamationTriangleIcon';
 import type { Student } from './types';
 
 type View = 'teacher' | 'student';
@@ -49,6 +51,9 @@ const App: React.FC = () => {
   });
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  
+  // Ref to hold the resolve function of the jitter delay promise, allowing manual retry
+  const retryResolveRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -141,9 +146,13 @@ const App: React.FC = () => {
             console.error("Cloud Sync Error:", err);
             if (active) setSyncError(err.message || "Failed to sync with cloud. Check internet connection.");
             
-            // Jittered retry
+            // Jittered retry with manual interrupt support
             const jitter = 5000 + Math.random() * 10000;
-            await new Promise(resolve => setTimeout(resolve, jitter));
+            await new Promise<void>(resolve => {
+                retryResolveRef.current = resolve;
+                setTimeout(resolve, jitter);
+            });
+            retryResolveRef.current = null;
         } finally {
             if (active) setIsSyncing(false);
         }
@@ -152,6 +161,12 @@ const App: React.FC = () => {
     processNext();
     return () => { active = false; };
   }, [syncQueue, isSyncing, scriptUrl]);
+
+  const handleRetryNow = useCallback(() => {
+      if (retryResolveRef.current) {
+          retryResolveRef.current(); // Resolve the delay promise immediately
+      }
+  }, []);
 
   const addStudent = (name: string, studentId: string, email: string, status: 'P' | 'A') => {
       const timestamp = Date.now();
@@ -233,7 +248,7 @@ const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
        {view === 'teacher' ? (
-           <div className="flex-1 p-4 overflow-auto">
+           <div className="flex-1 p-4 overflow-auto relative">
                <TeacherView 
                    attendanceList={attendanceList}
                    onTestAttendance={onTestAttendance}
@@ -245,7 +260,34 @@ const App: React.FC = () => {
                    onOpenKiosk={onOpenKiosk}
                    onManualAdd={onManualAdd}
                    pendingSyncCount={syncQueue.length}
+                   syncError={syncError}
+                   onRetrySync={handleRetryNow}
                />
+               
+               {/* Prominent Error Notification */}
+               {syncError && (
+                  <div className="fixed top-6 right-6 max-w-sm w-full bg-white border-l-4 border-red-500 shadow-2xl rounded-r-lg p-5 z-[100] flex flex-col gap-3 animate-pulse">
+                      <div className="flex items-start gap-4">
+                          <div className="text-red-500 bg-red-100 p-2 rounded-full">
+                            <ExclamationTriangleIcon className="w-6 h-6" />
+                          </div>
+                          <div className="flex-1">
+                              <h3 className="font-bold text-gray-900 text-lg">Cloud Sync Failed</h3>
+                              <p className="text-sm text-gray-600 mt-1 leading-tight">{syncError}</p>
+                              <p className="text-xs text-gray-400 mt-2 font-medium">Automatic retry in progress...</p>
+                          </div>
+                      </div>
+                      <div className="flex justify-end gap-2 mt-1">
+                          <button 
+                            onClick={handleRetryNow} 
+                            className="px-4 py-2 bg-red-600 text-white text-sm font-bold rounded shadow hover:bg-red-700 transition-colors flex items-center gap-2"
+                          >
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                            Retry Now
+                          </button>
+                      </div>
+                  </div>
+               )}
            </div>
        ) : (
            <div className="flex-1 flex flex-col items-center justify-center p-4 bg-gray-50">
@@ -259,11 +301,6 @@ const App: React.FC = () => {
                    />
                </div>
            </div>
-       )}
-       {syncError && (
-          <div className="fixed bottom-0 left-0 right-0 bg-red-600 text-white text-center p-2 text-sm font-bold animate-pulse z-50">
-              SYNC ERROR: {syncError} (Retrying...)
-          </div>
        )}
     </div>
   );
