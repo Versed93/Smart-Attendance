@@ -3,19 +3,23 @@ import { InfoIcon } from './icons/InfoIcon';
 
 const appScriptCode = `
 /**
- * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.1)
+ * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.3)
  * Optimized for 200-300 simultaneous requests.
+ * Supports offline sync with correct dates.
+ * Configuration: Headers in Row 10, Range K10:T10.
  */
 
-function getFormattedDate() {
-  return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy");
+function getFormattedDate(d) {
+  var date = d || new Date();
+  return Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yyyy");
 }
 
 function getSheetConfigs() {
+  // UPDATED v3.3: Look in Row 10, Columns K (11) to T (20)
   return [
-    { name: "W1-W5", dateRow: 12, startCol: 15, endCol: 20 },
-    { name: "W6-W10", dateRow: 12, startCol: 11, endCol: 20 },
-    { name: "W11-W14", dateRow: 12, startCol: 11, endCol: 20 }
+    { name: "W1-W5", dateRow: 10, startCol: 11, endCol: 20 },
+    { name: "W6-W10", dateRow: 10, startCol: 11, endCol: 20 },
+    { name: "W11-W14", dateRow: 10, startCol: 11, endCol: 20 }
   ];
 }
 
@@ -36,7 +40,10 @@ function doPost(e) {
     var studentId = String(data.studentId || "").toUpperCase().trim();
     var studentName = String(data.name || "").toUpperCase().trim();
     var status = data.status || 'P';
-    var dateStr = getFormattedDate();
+    
+    // v3.2 Update: Use provided date if available (for offline syncs), else use today
+    var providedDateStr = data.customDate || "";
+    var dateStr = providedDateStr ? providedDateStr : getFormattedDate();
 
     if (!studentId) throw "Missing Student ID";
 
@@ -51,7 +58,7 @@ function doPost(e) {
       
       var headerValues = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1).getDisplayValues()[0];
       
-      // Look for current date
+      // Look for current date in the header row
       for (var c = 0; c < headerValues.length; c++) {
         if (headerValues[c].trim() === dateStr) {
           targetSheet = sheet;
@@ -62,7 +69,7 @@ function doPost(e) {
       }
       if (targetSheet) break;
 
-      // Look for first available empty column
+      // Look for first available empty column within the range
       for (var c = 0; c < headerValues.length; c++) {
         if (headerValues[c].trim() === "") {
           targetSheet = sheet;
@@ -73,10 +80,11 @@ function doPost(e) {
       if (targetSheet) break;
     }
 
-    if (!targetSheet) throw "All attendance sheets (W1-W14) are full.";
+    if (!targetSheet) throw "All attendance sheets are full or date not found in range K10:T10.";
 
     if (isNewDate) {
-      targetSheet.getRange(12, targetCol).setValue(new Date()).setNumberFormat("dd/MM/yyyy");
+      // Write new date to Row 10
+      targetSheet.getRange(10, targetCol).setValue(dateStr).setNumberFormat("@");
     }
 
     // 2. Find or Add Student Row (Fast lookup)
@@ -169,19 +177,19 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
       <div className="flex items-start gap-3">
         <InfoIcon className="w-6 h-6 mt-1 text-blue-600" />
         <div>
-          <h3 className="text-lg font-bold text-blue-900">High-Traffic Fix (V3.1)</h3>
+          <h3 className="text-lg font-bold text-blue-900">Script Update Required (V3.3)</h3>
           <p className="mt-1 text-sm text-blue-800 leading-relaxed">
-            Google has a limit of ~30 simultaneous connections. For 230 students, you <strong>MUST</strong> use this script. 
-            It increases the "waiting time" so that students' requests line up instead of failing.
+            The configuration has been updated to scan <strong>Row 10</strong> (Columns K-T) for date headers.
+            Please copy this new code to your Google Apps Script project.
           </p>
           <div className="mt-4 bg-gray-900 p-4 rounded-xl border border-blue-200">
             <div className="flex justify-between items-center mb-3">
-              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">CONCURRENCY OPTIMIZED</span>
+              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">ROW 10 CONFIGURATION</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-4 py-1.5 rounded-full font-bold transition-all ${copied ? 'bg-green-600 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
               >
-                {copied ? '✓ COPIED' : 'COPY OPTIMIZED SCRIPT'}
+                {copied ? '✓ COPIED' : 'COPY SCRIPT v3.3'}
               </button>
             </div>
             <pre className="text-[9px] text-gray-400 max-h-48 overflow-y-auto whitespace-pre-wrap font-mono p-2 bg-black/30 rounded">
@@ -189,7 +197,7 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
             </pre>
           </div>
           <p className="mt-3 text-[11px] text-blue-600 italic">
-            * After copying, go to Apps Script, paste, Save, and click "Deploy &gt; New Deployment" (Version: Anyone).
+            * After copying, click "Deploy &gt; New Deployment" in Apps Script to apply changes.
           </p>
         </div>
       </div>

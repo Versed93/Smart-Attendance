@@ -10,7 +10,7 @@ type View = 'teacher' | 'student';
 
 const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
-const SCRIPT_URL_KEY = 'attendance-script-url-v22';
+const SCRIPT_URL_KEY = 'attendance-script-url-v23'; // Bumped version to v23
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const LECTURER_PASSWORD = 'adminscm'; // Updated secure password
@@ -42,7 +42,7 @@ const App: React.FC = () => {
   
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
     const saved = localStorage.getItem(SCRIPT_URL_KEY);
-    return saved || 'https://script.google.com/macros/s/AKfycbxt9TtCBcKio8A5jiUN8Tgm_tUlKUE_0JjXos6IgXEpcGg5OI_BKG1T9oK14uzpOwM/exec';
+    return saved || 'https://script.google.com/macros/s/AKfycbz38cGYEjua8ca30L3J_A1TsjdLIcKjEkSGrlPNU2UHM65EMEkidxYWfqEnk83fXaZ3/exec';
   });
 
   const [syncQueue, setSyncQueue] = useState<SyncTask[]>(() => {
@@ -62,7 +62,7 @@ const App: React.FC = () => {
   // Network Listener
   useEffect(() => {
     // Debug log to confirm app version in production console
-    console.log("UTS QR Attendance App Mounted - v1.0.6");
+    console.log("UTS QR Attendance App Mounted - v1.0.7");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -138,6 +138,14 @@ const App: React.FC = () => {
         try {
             const formData = new URLSearchParams();
             Object.entries(task.data).forEach(([k, v]) => formData.append(k, String(v)));
+
+            // V3.2 Feature: Send the ACTUAL date of the record so offline syncs don't use "today's" date
+            const recordTimestamp = parseInt(task.data.timestamp || Date.now().toString());
+            const recordDate = new Date(recordTimestamp);
+            const day = String(recordDate.getDate()).padStart(2, '0');
+            const month = String(recordDate.getMonth() + 1).padStart(2, '0');
+            const year = recordDate.getFullYear();
+            formData.append('customDate', `${day}/${month}/${year}`);
 
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 20000);

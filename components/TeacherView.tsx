@@ -125,10 +125,43 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       QRCode.toCanvas(canvasRef.current, qrData, { 
           width: 600, 
           color: { dark: '#000000', light: '#ffffff' },
-          margin: 2
+          margin: 2,
+          errorCorrectionLevel: 'H' // High error correction for logo
         }, (error) => {
-        setIsQrLoading(false);
-        if (error) console.error(error);
+        if (error) {
+            console.error(error);
+            setIsQrLoading(false);
+            return;
+        }
+
+        // Add Center Logo (UTS)
+        const canvas = canvasRef.current;
+        const ctx = canvas?.getContext('2d');
+        if (canvas && ctx) {
+            const img = new Image();
+            img.crossOrigin = "Anonymous";
+            // University of Technology Sarawak Logo
+            img.src = "https://upload.wikimedia.org/wikipedia/en/thumb/4/43/University_of_Technology_Sarawak_logo.svg/240px-University_of_Technology_Sarawak_logo.svg.png";
+            
+            img.onload = () => {
+                const size = 600 * 0.22; // Slightly larger for better visibility (22%)
+                const x = (600 - size) / 2;
+                const y = (600 - size) / 2;
+                
+                // Draw white background for logo to ensure contrast against QR modules
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(x - 5, y - 5, size + 10, size + 10);
+                
+                ctx.drawImage(img, x, y, size, size);
+                setIsQrLoading(false);
+            };
+            img.onerror = () => {
+                console.warn("Could not load UTS logo");
+                setIsQrLoading(false); // Fail gracefully, QR is still usable
+            };
+        } else {
+            setIsQrLoading(false);
+        }
       });
     }
   }, [qrData]);
@@ -323,7 +356,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
              </div>
              <div className="flex flex-col">
                  <h1 className="text-2xl font-black text-gray-900 tracking-tight leading-none text-center sm:text-left">UTS ATTENDANCE</h1>
-                 <p className="text-xs text-gray-500 font-bold tracking-[0.2em] uppercase mt-1 text-center sm:text-left">Secure Check-in System</p>
+                 <p className="text-xs text-gray-500 font-bold tracking-[0.2em] mt-1 text-center sm:text-left">Secure Check-In System</p>
              </div>
          </div>
          
@@ -470,6 +503,12 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             <DownloadIcon className="w-4 h-4 text-gray-500" />
                             Export CSV
                         </button>
+                        {syncQueue.length > 0 && (
+                            <button onClick={handleBackupPending} className="col-span-2 flex items-center justify-center gap-2 px-4 py-2 bg-yellow-100 text-yellow-800 border border-yellow-200 text-sm font-bold rounded-lg shadow-sm hover:bg-yellow-200 transition-all active:scale-95">
+                                <DownloadIcon className="w-4 h-4" />
+                                Export Pending ({syncQueue.length})
+                            </button>
+                        )}
                     </div>
 
                     <div className="flex flex-wrap gap-2">

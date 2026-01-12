@@ -26,7 +26,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
            <div className="flex items-center justify-center w-16 h-16 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl shadow-lg shadow-brand-primary/20 mb-4">
              <ShieldCheckIcon className="w-9 h-9" />
            </div>
-           <h1 className="text-2xl font-black text-gray-900 tracking-tight">Lecturer Access</h1>
+           <h1 className="text-2xl font-black text-gray-900 tracking-tight">Main Access</h1>
            <p className="text-sm text-gray-500 font-medium mt-1">UTS QR Attendance System</p>
         </div>
 
