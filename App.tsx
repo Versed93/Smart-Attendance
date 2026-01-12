@@ -61,6 +61,9 @@ const App: React.FC = () => {
 
   // Network Listener
   useEffect(() => {
+    // Debug log to confirm app version in production console
+    console.log("UTS QR Attendance App Mounted - v1.0.1 (ImportMap Removed)");
+
     const handleOnline = () => {
         setIsOnline(true);
         // Immediately trigger retry when back online
