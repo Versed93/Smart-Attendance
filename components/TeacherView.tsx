@@ -60,6 +60,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 }) => {
   const [baseUrl, setBaseUrl] = useState<string>(window.location.href.split('?')[0]);
   const [qrData, setQrData] = useState<string>('');
+  const [courseName, setCourseName] = useState(() => localStorage.getItem('attendance-course-name') || '');
   
   const [showEmailSetup, setShowEmailSetup] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'teacher' | 'classroom'>('teacher');
@@ -90,6 +91,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const isMountedRef = useRef(true);
 
   useEffect(() => {
+    localStorage.setItem('attendance-course-name', courseName);
+  }, [courseName]);
+
+  useEffect(() => {
     return () => { isMountedRef.current = false; };
   }, []);
 
@@ -98,14 +103,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         let cleanBaseUrl = baseUrl.trim();
         const timestamp = Date.now().toString();
         const separator = cleanBaseUrl.includes('?') ? '&' : '?';
-        const fullUrl = `${cleanBaseUrl}${separator}t=${timestamp}`;
+        const cParam = courseName ? `&c=${encodeURIComponent(courseName)}` : '';
+        const fullUrl = `${cleanBaseUrl}${separator}t=${timestamp}${cParam}`;
         setQrData(fullUrl);
     };
 
     updateQR();
     const interval = setInterval(updateQR, 1000);
     return () => clearInterval(interval);
-  }, [baseUrl]);
+  }, [baseUrl, courseName]);
 
   useEffect(() => {
     if (canvasRef.current && qrData) {
@@ -443,6 +449,25 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           )}
 
           <h2 className="text-2xl font-bold mb-4 text-brand-primary">Scan to Check-in</h2>
+          
+          {viewMode === 'teacher' && (
+            <div className="w-full mb-4">
+                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Current Class / Session</label>
+                <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                        <PencilSquareIcon className="h-4 w-4 text-gray-400" />
+                    </div>
+                    <input
+                        type="text"
+                        value={courseName}
+                        onChange={(e) => setCourseName(e.target.value)}
+                        className="block w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg leading-5 bg-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/50 focus:border-brand-primary sm:text-sm transition-all shadow-sm"
+                        placeholder="e.g. DATA STRUCTURES W1"
+                    />
+                </div>
+            </div>
+          )}
+
           <div className="bg-white p-4 rounded-lg shadow-inner border border-gray-200 relative min-h-[300px] flex items-center justify-center">
              {isQrLoading && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center bg-white z-10 rounded-lg">

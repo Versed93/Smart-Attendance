@@ -8,6 +8,7 @@ import { PRE_REGISTERED_STUDENTS } from '../studentList';
 interface StudentViewProps {
   markAttendance: (name: string, studentId: string, email: string) => { success: boolean, message: string };
   token: string;
+  courseName?: string;
   bypassRestrictions?: boolean;
   onExit?: () => void;
   isSyncing?: boolean;
@@ -20,7 +21,15 @@ const COOLDOWN_MINUTES = 30;
 const COOLDOWN_MS = COOLDOWN_MINUTES * 60 * 1000;
 const LAST_SCAN_KEY = 'attendance-last-scan-standard-v1';
 
-export const StudentView: React.FC<StudentViewProps> = ({ markAttendance, token, bypassRestrictions = false, onExit, isSyncing = false, isOnline = true }) => {
+export const StudentView: React.FC<StudentViewProps> = ({ 
+  markAttendance, 
+  token, 
+  courseName, 
+  bypassRestrictions = false, 
+  onExit, 
+  isSyncing = false, 
+  isOnline = true 
+}) => {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
   const [email, setEmail] = useState('');
@@ -96,8 +105,8 @@ export const StudentView: React.FC<StudentViewProps> = ({ markAttendance, token,
 
   if (status === 'validating') {
       return (
-        <div className="text-center py-12">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary mx-auto mb-4"></div>
+        <div className="text-center py-12 flex flex-col items-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary mb-4"></div>
             <p className="text-gray-600">Verifying secure link...</p>
         </div>
       );
@@ -121,25 +130,40 @@ export const StudentView: React.FC<StudentViewProps> = ({ markAttendance, token,
         )}
 
         {status === 'form' && (
-            <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="text-center mb-4">
+            <form onSubmit={handleSubmit} className="space-y-5">
+                <div className="text-center mb-6">
                     <h3 className="text-xl font-bold text-gray-800">Check-in Details</h3>
-                    <p className="text-sm text-green-600 font-medium mt-1">Verified Link</p>
+                    <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-xs font-bold border border-green-200 shadow-sm mt-2">
+                        <CheckCircleIcon className="w-3.5 h-3.5" />
+                        <span>Secure Link Verified</span>
+                    </div>
+                </div>
+
+                {courseName && (
+                    <div className="bg-brand-primary/5 border border-brand-primary/10 rounded-lg p-3 text-center mb-4">
+                        <p className="text-xs font-bold text-brand-primary uppercase tracking-wider mb-1">Current Session</p>
+                        <p className="text-gray-900 font-bold">{decodeURIComponent(courseName)}</p>
+                    </div>
+                )}
+
+                <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Student ID</label>
+                    <input type="text" value={studentId} placeholder="FIA..." onChange={handleStudentIdChange} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-3 px-4 text-gray-900 uppercase font-mono font-bold transition-all outline-none" />
                 </div>
                 <div>
-                    <label className="block text-sm font-medium text-gray-700">Student ID</label>
-                    <input type="text" value={studentId} placeholder="FIA24001006" onChange={handleStudentIdChange} className="mt-1 block w-full bg-base-100 border border-base-300 rounded-md py-2 px-3 text-gray-900 uppercase" />
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Full Name</label>
+                    <input type="text" value={name} placeholder="AS PER IC" onChange={(e) => setName(e.target.value.toUpperCase())} readOnly={!isNewStudent && name.length > 0} className={`block w-full border-2 rounded-lg py-3 px-4 text-gray-900 uppercase font-bold transition-all outline-none ${!isNewStudent && name.length > 0 ? 'bg-gray-100 border-transparent text-gray-600' : 'bg-base-100 border-base-200 focus:border-brand-primary'}`} />
                 </div>
                 <div>
-                    <label className="block text-sm font-medium text-gray-700">Full Name</label>
-                    <input type="text" value={name} placeholder="JAMES BOND" onChange={(e) => setName(e.target.value.toUpperCase())} readOnly={!isNewStudent && name.length > 0} className={`mt-1 block w-full border border-base-300 rounded-md py-2 px-3 text-gray-900 uppercase ${!isNewStudent && name.length > 0 ? 'bg-gray-100 text-gray-500' : 'bg-base-100'}`} />
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Email Address</label>
+                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value.toUpperCase())} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-3 px-4 text-gray-900 uppercase font-medium transition-all outline-none" />
                 </div>
-                <div>
-                    <label className="block text-sm font-medium text-gray-700">Email Address</label>
-                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value.toUpperCase())} className="mt-1 block w-full bg-base-100 border border-base-300 rounded-md py-2 px-3 text-gray-900 uppercase" />
-                </div>
-                {formError && <p className="text-sm text-red-500 font-medium">{formError}</p>}
-                <button type="submit" className="w-full flex justify-center items-center gap-2 py-3 px-4 rounded-md shadow-sm text-base font-bold text-white bg-brand-primary hover:bg-brand-secondary">Submit Attendance</button>
+                
+                {formError && <p className="text-sm text-red-500 font-bold text-center bg-red-50 py-2 rounded">{formError}</p>}
+                
+                <button type="submit" className="w-full flex justify-center items-center gap-2 py-4 px-4 rounded-xl shadow-lg shadow-brand-primary/30 text-base font-bold text-white bg-brand-primary hover:bg-brand-secondary active:scale-[0.98] transition-all mt-4">
+                    Submit Attendance
+                </button>
             </form>
         )}
 

@@ -22,6 +22,7 @@ interface SyncTask {
 const App: React.FC = () => {
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('t');
+  const courseName = urlParams.get('c');
   const initialView: View = token ? 'student' : 'teacher';
 
   const [view, setView] = useState<View>(initialView);
@@ -62,7 +63,7 @@ const App: React.FC = () => {
   // Network Listener
   useEffect(() => {
     // Debug log to confirm app version in production console
-    console.log("UTS QR Attendance App Mounted - v1.0.1 (ImportMap Removed)");
+    console.log("UTS QR Attendance App Mounted - v1.0.3");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -346,6 +347,7 @@ const App: React.FC = () => {
                    <StudentView 
                        markAttendance={markAttendance}
                        token={token || (isKioskMode ? Date.now().toString() : '')}
+                       courseName={courseName || undefined}
                        bypassRestrictions={isKioskMode}
                        onExit={() => { setIsKioskMode(false); setView('teacher'); }}
                        isSyncing={isSyncing || syncQueue.length > 0}
