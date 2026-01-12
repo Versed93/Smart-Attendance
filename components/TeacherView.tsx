@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import type { Student } from '../types';
 import QRCode from 'qrcode';
@@ -281,12 +280,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   return (
     <div className="w-full relative">
        <div className="absolute -top-12 right-0">
-         <button onClick={() => setViewMode(viewMode === 'teacher' ? 'classroom' : 'teacher')} className="p-2 rounded-full bg-base-100 hover:bg-base-300 text-gray-600 transition-colors">
+         <button onClick={() => setViewMode(viewMode === 'teacher' ? 'classroom' : 'teacher')} className="p-2 rounded-full bg-base-100 hover:bg-base-300 text-gray-600 transition-colors" title={viewMode === 'teacher' ? "Switch to Student-Facing Mode" : "Switch to Dashboard Mode"}>
             {viewMode === 'teacher' ? <EyeIcon className="w-6 h-6" /> : <EyeSlashIcon className="w-6 h-6" />}
          </button>
        </div>
 
-      <div className="flex flex-col lg:flex-row gap-8 items-start">
+      <div className={`flex flex-col gap-8 items-start ${viewMode === 'teacher' ? 'lg:flex-row' : 'items-center justify-center'}`}>
+        
+        {/* LEFT COLUMN - HISTORY & CONTROLS (HIDDEN IN CLASSROOM MODE) */}
+        {viewMode === 'teacher' && (
         <div className="w-full lg:w-[40%] order-2 lg:order-1">
           <div className="flex flex-col gap-3 mb-4">
              <div className="flex justify-between items-center flex-wrap gap-2">
@@ -335,8 +337,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 )}
             </div>
             
-            {viewMode === 'teacher' && (
-                <div className="flex flex-col gap-3 mt-1">
+            <div className="flex flex-col gap-3 mt-1">
                      {/* PRIMARY ACTIONS - Improved Visibility */}
                      <div className="grid grid-cols-2 gap-3">
                         <button onClick={() => setShowManualModal(true)} className="flex items-center justify-center gap-2 px-4 py-3 bg-brand-primary text-white text-sm font-bold rounded-lg shadow hover:bg-brand-secondary transition-all active:scale-95">
@@ -376,7 +377,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         )}
                     </div>
                 </div>
-            )}
           </div>
           
           <div className="bg-base-100 rounded-lg p-2 max-h-[600px] overflow-y-auto shadow-sm border border-base-300">
@@ -387,7 +387,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 <table className="w-full text-sm text-left text-gray-700">
                   <thead className="text-xs text-gray-500 uppercase bg-base-200 sticky top-0 z-10">
                     <tr>
-                      {viewMode === 'teacher' && <th className="px-4 py-3 w-4"><input type="checkbox" checked={visibleList.length > 0 && visibleList.every(s => selectedIds.has(s.studentId))} onChange={() => { if(selectedIds.size === visibleList.length) setSelectedIds(new Set()); else setSelectedIds(new Set(visibleList.map(s => s.studentId))); }} /></th>}
+                      <th className="px-4 py-3 w-4"><input type="checkbox" checked={visibleList.length > 0 && visibleList.every(s => selectedIds.has(s.studentId))} onChange={() => { if(selectedIds.size === visibleList.length) setSelectedIds(new Set()); else setSelectedIds(new Set(visibleList.map(s => s.studentId))); }} /></th>
                       <th className="px-4 py-3">Student ID</th>
                       <th className="px-4 py-3">Status</th>
                       <th className="px-4 py-3 text-right">Time</th>
@@ -396,7 +396,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   <tbody>
                     {visibleList.map((student) => (
                       <tr key={`${student.studentId}-${student.timestamp}`} className={`border-b border-base-200 hover:bg-base-300 ${selectedIds.has(student.studentId) ? 'bg-indigo-50' : ''}`}>
-                        {viewMode === 'teacher' && <td className="px-4 py-3"><input type="checkbox" checked={selectedIds.has(student.studentId)} onChange={() => { const next = new Set(selectedIds); if(next.has(student.studentId)) next.delete(student.studentId); else next.add(student.studentId); setSelectedIds(next); }} /></td>}
+                        <td className="px-4 py-3"><input type="checkbox" checked={selectedIds.has(student.studentId)} onChange={() => { const next = new Set(selectedIds); if(next.has(student.studentId)) next.delete(student.studentId); else next.add(student.studentId); setSelectedIds(next); }} /></td>
                         <td className="px-4 py-3 font-mono font-bold">{student.studentId}</td>
                         <td className="px-4 py-3">
                             <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${student.status === 'P' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`}>
@@ -412,8 +412,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             )}
           </div>
         </div>
+        )}
 
-        <div className="w-full lg:flex-1 flex flex-col items-center bg-base-100 p-6 rounded-lg shadow-md order-1 lg:order-2">
+        <div className={`w-full flex flex-col items-center bg-base-100 p-6 rounded-lg shadow-md order-1 lg:order-2 ${viewMode === 'teacher' ? 'lg:flex-1' : 'max-w-4xl mx-auto'}`}>
           {viewMode === 'teacher' && (
               <div className="w-full space-y-4 mb-4">
                   <button onClick={() => setShowEmailSetup(!showEmailSetup)} className="text-sm text-brand-primary underline hover:text-brand-secondary font-medium">
@@ -462,6 +463,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     </div>
                   )}
               </div>
+          )}
+
+          {viewMode === 'classroom' && courseName && (
+             <h2 className="text-4xl font-extrabold mb-6 text-brand-primary tracking-wide text-center uppercase drop-shadow-sm">{courseName}</h2>
           )}
 
           <h2 className="text-2xl font-bold mb-4 text-brand-primary">Scan to Check-in</h2>
