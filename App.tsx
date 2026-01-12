@@ -63,7 +63,7 @@ const App: React.FC = () => {
   // Network Listener
   useEffect(() => {
     // Debug log to confirm app version in production console
-    console.log("UTS QR Attendance App Mounted - v1.0.4");
+    console.log("UTS QR Attendance App Mounted - v1.0.5");
 
     const handleOnline = () => {
         setIsOnline(true);

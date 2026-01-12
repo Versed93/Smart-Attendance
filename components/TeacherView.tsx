@@ -336,11 +336,19 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </div>
             
             {viewMode === 'teacher' && (
-                <div className="flex flex-col gap-2">
-                     <div className="flex gap-2">
-                        <button onClick={() => setShowManualModal(true)} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-brand-primary text-white text-xs font-semibold rounded-lg shadow-sm hover:bg-brand-secondary transition-colors"><PencilSquareIcon className="w-4 h-4" />Add Student</button>
-                        <button onClick={onOpenKiosk} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-100 text-blue-700 text-xs font-semibold rounded-lg shadow-sm hover:bg-blue-200 transition-colors"><ShieldCheckIcon className="w-4 h-4" />Admin Mode</button>
+                <div className="flex flex-col gap-3 mt-1">
+                     {/* PRIMARY ACTIONS - Improved Visibility */}
+                     <div className="grid grid-cols-2 gap-3">
+                        <button onClick={() => setShowManualModal(true)} className="flex items-center justify-center gap-2 px-4 py-3 bg-brand-primary text-white text-sm font-bold rounded-lg shadow hover:bg-brand-secondary transition-all active:scale-95">
+                            <PencilSquareIcon className="w-5 h-5" />
+                            Add Student
+                        </button>
+                        <button onClick={handleExportCSV} disabled={attendanceList.length === 0} className="flex items-center justify-center gap-2 px-4 py-3 bg-white text-gray-700 border-2 border-gray-200 text-sm font-bold rounded-lg shadow-sm hover:bg-gray-50 hover:border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95">
+                            <DownloadIcon className="w-5 h-5 text-brand-secondary" />
+                            Export CSV
+                        </button>
                     </div>
+
                     <div className="flex flex-wrap gap-2">
                         {selectedIds.size > 0 ? (
                             <div className="flex-1 flex flex-wrap gap-2">
@@ -355,9 +363,17 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                 </button>
                             </div>
                         ) : (
-                            <button onClick={onClearAttendance} disabled={attendanceList.length === 0} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-red-100 text-red-700 text-xs font-semibold rounded-lg disabled:opacity-50 transition-colors"><TrashIcon className="w-4 h-4" />Clear View</button>
+                            <div className="flex flex-1 gap-2">
+                                <button onClick={onOpenKiosk} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-blue-50 text-blue-700 text-xs font-semibold rounded-lg border border-blue-100 hover:bg-blue-100 transition-colors">
+                                    <ShieldCheckIcon className="w-4 h-4" />
+                                    Admin Mode
+                                </button>
+                                <button onClick={onClearAttendance} disabled={attendanceList.length === 0} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-red-50 text-red-700 text-xs font-semibold rounded-lg border border-red-100 hover:bg-red-100 disabled:opacity-50 transition-colors">
+                                    <TrashIcon className="w-4 h-4" />
+                                    Clear List
+                                </button>
+                            </div>
                         )}
-                        <button onClick={handleExportCSV} disabled={attendanceList.length === 0} className={`flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-brand-secondary text-white text-xs font-semibold rounded-lg shadow-md transition-colors ${selectedIds.size > 0 ? 'hidden sm:flex' : ''}`}><DownloadIcon className="w-4 h-4" />Export CSV</button>
                     </div>
                 </div>
             )}
@@ -369,7 +385,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             ) : (
               <div className="relative overflow-x-auto">
                 <table className="w-full text-sm text-left text-gray-700">
-                  <thead className="text-xs text-gray-500 uppercase bg-base-200 sticky top-0">
+                  <thead className="text-xs text-gray-500 uppercase bg-base-200 sticky top-0 z-10">
                     <tr>
                       {viewMode === 'teacher' && <th className="px-4 py-3 w-4"><input type="checkbox" checked={visibleList.length > 0 && visibleList.every(s => selectedIds.has(s.studentId))} onChange={() => { if(selectedIds.size === visibleList.length) setSelectedIds(new Set()); else setSelectedIds(new Set(visibleList.map(s => s.studentId))); }} /></th>}
                       <th className="px-4 py-3">Student ID</th>
