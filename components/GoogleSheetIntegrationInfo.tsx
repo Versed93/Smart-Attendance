@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { InfoIcon } from './icons/InfoIcon';
 
@@ -190,7 +189,7 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
             </pre>
           </div>
           <p className="mt-3 text-[11px] text-blue-600 italic">
-            * After copying, go to Apps Script, paste, Save, and click "Deploy > New Deployment" (Version: Anyone).
+            * After copying, go to Apps Script, paste, Save, and click "Deploy &gt; New Deployment" (Version: Anyone).
           </p>
         </div>
       </div>
