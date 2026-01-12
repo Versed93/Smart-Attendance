@@ -30,6 +30,7 @@ interface TeacherViewProps {
   pendingSyncCount?: number;
   syncError?: string | null;
   onRetrySync?: () => void;
+  isOnline?: boolean;
 }
 
 type SortOption = 'id' | 'newest' | 'oldest';
@@ -54,7 +55,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onManualAdd,
   pendingSyncCount = 0,
   syncError = null,
-  onRetrySync
+  onRetrySync,
+  isOnline = true
 }) => {
   const [baseUrl, setBaseUrl] = useState<string>(window.location.href.split('?')[0]);
   const [qrData, setQrData] = useState<string>('');
@@ -307,7 +309,12 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     <span>{attendanceList.length} Unique Scans</span>
                 </div>
                 
-                {syncError ? (
+                {!isOnline ? (
+                   <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-500 text-white rounded-full text-xs font-bold border border-gray-600 shadow-sm transition-all">
+                       <GlobeIcon className="w-3.5 h-3.5" />
+                       <span>OFFLINE MODE</span>
+                   </div>
+                ) : syncError ? (
                    <button onClick={onRetrySync} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-100 text-red-700 rounded-full text-xs font-bold border border-red-200 shadow-sm animate-pulse hover:bg-red-200 transition-all cursor-pointer">
                       <ExclamationTriangleIcon className="w-3.5 h-3.5" />
                       <span>Sync Error (Retry)</span>

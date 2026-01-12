@@ -3,6 +3,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { TeacherView } from './components/TeacherView';
 import { StudentView } from './components/StudentView';
 import { ExclamationTriangleIcon } from './components/icons/ExclamationTriangleIcon';
+import { GlobeIcon } from './components/icons/GlobeIcon';
 import type { Student } from './types';
 
 type View = 'teacher' | 'student';
@@ -27,6 +28,9 @@ const App: React.FC = () => {
   const [isKioskMode, setIsKioskMode] = useState(false);
   const [attendanceList, setAttendanceList] = useState<Student[]>([]);
   
+  // Network Status
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
   const [locallyDeletedIds, setLocallyDeletedIds] = useState<Set<string>>(() => {
     const saved = localStorage.getItem(DELETED_IDS_KEY);
     try {
@@ -54,6 +58,24 @@ const App: React.FC = () => {
   
   // Ref to hold the resolve function of the jitter delay promise, allowing manual retry
   const retryResolveRef = useRef<(() => void) | null>(null);
+
+  // Network Listener
+  useEffect(() => {
+    const handleOnline = () => {
+        setIsOnline(true);
+        // Immediately trigger retry when back online
+        if (retryResolveRef.current) retryResolveRef.current();
+    };
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+        window.removeEventListener('online', handleOnline);
+        window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -98,6 +120,11 @@ const App: React.FC = () => {
   useEffect(() => {
     if (syncQueue.length === 0 || isSyncing) return;
     if (!scriptUrl || !scriptUrl.startsWith('http')) return;
+
+    // If offline, pause processing but don't clear queue.
+    if (!isOnline) {
+        return;
+    }
 
     let active = true;
 
@@ -151,12 +178,13 @@ const App: React.FC = () => {
             if (err.name === 'AbortError') {
               detailedError = "Connection Timeout: Server took too long to respond.";
             } else if (err.message === 'Failed to fetch') {
-              detailedError = "Network Error: Could not connect to Google Script. Check internet connection.";
+              // Usually indicates offline or DNS failure
+              detailedError = "Network Error: Could not connect to Google Script. Pausing.";
             }
             
             if (active) setSyncError(detailedError);
             
-            // Jittered retry with manual interrupt support
+            // Wait before retry, but allow immediate retry if 'online' event fires
             const jitter = 5000 + Math.random() * 10000;
             await new Promise<void>(resolve => {
                 retryResolveRef.current = resolve;
@@ -170,7 +198,7 @@ const App: React.FC = () => {
 
     processNext();
     return () => { active = false; };
-  }, [syncQueue, isSyncing, scriptUrl]);
+  }, [syncQueue, isSyncing, scriptUrl, isOnline]);
 
   const handleRetryNow = useCallback(() => {
       if (retryResolveRef.current) {
@@ -272,10 +300,11 @@ const App: React.FC = () => {
                    pendingSyncCount={syncQueue.length}
                    syncError={syncError}
                    onRetrySync={handleRetryNow}
+                   isOnline={isOnline}
                />
                
                {/* Prominent Error Notification */}
-               {syncError && (
+               {syncError && isOnline && (
                   <div className="fixed top-6 right-6 max-w-sm w-full bg-white border-l-4 border-red-500 shadow-2xl rounded-r-lg p-5 z-[100] flex flex-col gap-3 animate-pulse">
                       <div className="flex items-start gap-4">
                           <div className="text-red-500 bg-red-100 p-2 rounded-full">
@@ -298,6 +327,15 @@ const App: React.FC = () => {
                       </div>
                   </div>
                )}
+               {!isOnline && syncQueue.length > 0 && (
+                   <div className="fixed top-6 right-6 max-w-sm w-full bg-yellow-50 border-l-4 border-yellow-500 shadow-xl rounded-r-lg p-4 z-[100] flex items-center gap-3">
+                       <GlobeIcon className="w-6 h-6 text-yellow-600" />
+                       <div>
+                           <h3 className="font-bold text-yellow-800 text-sm">Offline Mode</h3>
+                           <p className="text-xs text-yellow-700">{syncQueue.length} records pending upload.</p>
+                       </div>
+                   </div>
+               )}
            </div>
        ) : (
            <div className="flex-1 flex flex-col items-center justify-center p-4 bg-gray-50">
@@ -308,6 +346,7 @@ const App: React.FC = () => {
                        bypassRestrictions={isKioskMode}
                        onExit={() => { setIsKioskMode(false); setView('teacher'); }}
                        isSyncing={isSyncing || syncQueue.length > 0}
+                       isOnline={isOnline}
                    />
                </div>
            </div>

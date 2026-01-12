@@ -11,6 +11,7 @@ interface StudentViewProps {
   bypassRestrictions?: boolean;
   onExit?: () => void;
   isSyncing?: boolean;
+  isOnline?: boolean;
 }
 
 type Status = 'validating' | 'form' | 'success' | 'error' | 'cooldown';
@@ -19,7 +20,7 @@ const COOLDOWN_MINUTES = 30;
 const COOLDOWN_MS = COOLDOWN_MINUTES * 60 * 1000;
 const LAST_SCAN_KEY = 'attendance-last-scan-standard-v1';
 
-export const StudentView: React.FC<StudentViewProps> = ({ markAttendance, token, bypassRestrictions = false, onExit, isSyncing = false }) => {
+export const StudentView: React.FC<StudentViewProps> = ({ markAttendance, token, bypassRestrictions = false, onExit, isSyncing = false, isOnline = true }) => {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
   const [email, setEmail] = useState('');
@@ -146,7 +147,7 @@ export const StudentView: React.FC<StudentViewProps> = ({ markAttendance, token,
             <div className="text-center py-8">
                 <div className={`mx-auto flex items-center justify-center h-28 w-28 rounded-full ${status === 'success' ? 'bg-green-100' : 'bg-red-100'} mb-6 shadow-sm`}>
                     {status === 'success' ? (
-                        isSyncing ? (
+                        isOnline && isSyncing ? (
                             <div className="relative">
                                 <ClockIcon className="h-16 w-16 text-brand-primary animate-pulse" />
                                 <div className="absolute -bottom-1 -right-1 bg-white rounded-full p-1 border border-brand-primary">
@@ -162,35 +163,46 @@ export const StudentView: React.FC<StudentViewProps> = ({ markAttendance, token,
                 </div>
 
                 <div className="mb-6">
-                    <h3 className={`text-3xl font-extrabold ${status === 'success' ? (isSyncing ? 'text-brand-primary' : 'text-green-800') : 'text-red-600'} mb-2`}>
-                        {status === 'success' ? (isSyncing ? 'Syncing...' : 'Verified!') : 'Failed'}
+                    <h3 className={`text-3xl font-extrabold ${status === 'success' ? (isOnline && isSyncing ? 'text-brand-primary' : 'text-green-800') : 'text-red-600'} mb-2`}>
+                        {status === 'success' ? (isOnline && isSyncing ? 'Syncing...' : 'Verified!') : 'Failed'}
                     </h3>
                     
-                    {status === 'success' && isSyncing && (
+                    {status === 'success' && isOnline && isSyncing && (
                         <div className="inline-flex items-center gap-2 px-3 py-1 bg-brand-light/20 text-brand-primary rounded-full text-xs font-bold uppercase tracking-wider mb-4 border border-brand-light/30">
                             <ClockIcon className="w-3.5 h-3.5" />
                             Sending to Google
                         </div>
                     )}
+                     
+                    {status === 'success' && !isOnline && (
+                         <div className="inline-flex items-center gap-2 px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-bold uppercase tracking-wider mb-4 border border-yellow-300">
+                             <GlobeIcon className="w-3.5 h-3.5" />
+                             Saved Offline
+                         </div>
+                    )}
 
                     <p className="text-gray-600 text-lg px-4 leading-relaxed">
                         {status === 'success' 
-                          ? (isSyncing 
-                              ? 'Saved to phone! Now uploading to the Google Sheet...' 
-                              : 'Attendance recorded and verified in the cloud.') 
+                          ? (!isOnline 
+                              ? 'Saved to your device. We will upload it automatically when the internet returns.'
+                              : (isSyncing 
+                                  ? 'Saved to phone! Now uploading to the Google Sheet...' 
+                                  : 'Attendance recorded and verified in the cloud.')) 
                           : message}
                     </p>
                 </div>
                 
                 {status === 'success' && (
-                    <div className={`max-w-sm mx-auto p-6 rounded-2xl border transition-all duration-500 ${isSyncing ? 'bg-orange-50 border-orange-200' : 'bg-green-50 border-green-200'}`}>
-                        <p className={`font-bold text-lg mb-2 ${isSyncing ? 'text-orange-800' : 'text-green-800'}`}>
-                            {isSyncing ? '⚠ DO NOT CLOSE THIS TAB' : 'Success!'}
+                    <div className={`max-w-sm mx-auto p-6 rounded-2xl border transition-all duration-500 ${!isOnline ? 'bg-yellow-50 border-yellow-200' : (isSyncing ? 'bg-orange-50 border-orange-200' : 'bg-green-50 border-green-200')}`}>
+                        <p className={`font-bold text-lg mb-2 ${!isOnline ? 'text-yellow-800' : (isSyncing ? 'text-orange-800' : 'text-green-800')}`}>
+                            {!isOnline ? 'YOU ARE OFFLINE' : (isSyncing ? '⚠ DO NOT CLOSE THIS TAB' : 'Success!')}
                         </p>
-                        <p className={`text-sm leading-relaxed ${isSyncing ? 'text-orange-700' : 'text-green-700'}`}>
-                            {isSyncing 
-                                ? 'Wait for the icon to turn GREEN. If the server is busy, we will automatically retry for you. Just wait.' 
-                                : 'Your attendance has been permanently recorded in the official Google Sheet. You can safely close this tab now.'}
+                        <p className={`text-sm leading-relaxed ${!isOnline ? 'text-yellow-700' : (isSyncing ? 'text-orange-700' : 'text-green-700')}`}>
+                            {!isOnline 
+                                ? 'Don\'t worry, your attendance is safe. You can close the tab or wait for connection.' 
+                                : (isSyncing 
+                                    ? 'Wait for the icon to turn GREEN. If the server is busy, we will automatically retry for you.' 
+                                    : 'Your attendance has been permanently recorded in the official Google Sheet. You can safely close this tab now.')}
                         </p>
                         
                         {bypassRestrictions && !isSyncing && (
