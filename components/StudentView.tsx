@@ -1,30 +1,50 @@
-
 import React, { useState, useEffect } from 'react';
 import { CheckCircleIcon } from './icons/CheckCircleIcon';
 import { ClockIcon } from './icons/ClockIcon';
 import { GlobeIcon } from './icons/GlobeIcon';
+import { MapPinIcon } from './icons/MapPinIcon';
 import { PRE_REGISTERED_STUDENTS } from '../studentList';
 
 interface StudentViewProps {
   markAttendance: (name: string, studentId: string, email: string) => { success: boolean, message: string };
   token: string;
   courseName?: string;
+  geoConstraints?: { lat: number; lng: number; radius: number };
   bypassRestrictions?: boolean;
   onExit?: () => void;
   isSyncing?: boolean;
   isOnline?: boolean;
 }
 
-type Status = 'validating' | 'form' | 'success' | 'error' | 'cooldown';
+type Status = 'validating' | 'validating-gps' | 'form' | 'success' | 'error' | 'cooldown';
 
 const COOLDOWN_MINUTES = 30;
 const COOLDOWN_MS = COOLDOWN_MINUTES * 60 * 1000;
 const LAST_SCAN_KEY = 'attendance-last-scan-standard-v1';
 
+// Haversine formula to calculate distance in meters
+const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+  const R = 6371; // Radius of the earth in km
+  const dLat = deg2rad(lat2 - lat1);
+  const dLon = deg2rad(lon2 - lon1);
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  const d = R * c; // Distance in km
+  return d * 1000; // Distance in meters
+};
+
+const deg2rad = (deg: number) => {
+  return deg * (Math.PI / 180);
+};
+
 export const StudentView: React.FC<StudentViewProps> = ({ 
   markAttendance, 
   token, 
   courseName, 
+  geoConstraints,
   bypassRestrictions = false, 
   onExit, 
   isSyncing = false, 
@@ -43,9 +63,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
   useEffect(() => {
     if (bypassRestrictions) { setStatus('form'); return; }
     if (!token) { setStatus('error'); setMessage('Invalid link. Please scan the QR code again.'); return; }
+    
     const qrTime = parseInt(token, 10);
     const now = Date.now();
     const isValid = !isNaN(qrTime) && (now - qrTime < 60000); 
+    
     if (isValid) {
         const lastScanStr = localStorage.getItem(LAST_SCAN_KEY);
         if (lastScanStr) {
@@ -57,12 +79,48 @@ export const StudentView: React.FC<StudentViewProps> = ({
                 return;
             }
         }
-        setStatus('form');
+        
+        // Check Geolocation if constraints exist
+        if (geoConstraints) {
+            setStatus('validating-gps');
+            if (!navigator.geolocation) {
+                setStatus('error');
+                setMessage('Your browser does not support geolocation, which is required for this class.');
+                return;
+            }
+            
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    const dist = getDistanceFromLatLonInM(
+                        geoConstraints.lat, 
+                        geoConstraints.lng, 
+                        position.coords.latitude, 
+                        position.coords.longitude
+                    );
+                    
+                    if (dist <= geoConstraints.radius) {
+                        setStatus('form');
+                    } else {
+                        setStatus('error');
+                        setMessage(`You are too far from the class. (Distance: ${Math.round(dist)}m). Move closer to the screen.`);
+                    }
+                },
+                (err) => {
+                    console.error(err);
+                    setStatus('error');
+                    setMessage('Location permission is required. Please enable GPS and allow access.');
+                },
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+            );
+        } else {
+            setStatus('form');
+        }
+        
     } else {
         setStatus('error');
         setMessage('This QR code has expired. Please scan the new code on the teacher\'s screen.');
     }
-  }, [token, bypassRestrictions]);
+  }, [token, bypassRestrictions, geoConstraints]);
 
   useEffect(() => {
     if (status !== 'cooldown' || !cooldownEndTime) return;
@@ -112,6 +170,18 @@ export const StudentView: React.FC<StudentViewProps> = ({
       );
   }
 
+  if (status === 'validating-gps') {
+      return (
+        <div className="text-center py-12 flex flex-col items-center">
+            <div className="animate-bounce rounded-full p-4 bg-blue-50 text-brand-primary mb-4">
+                <MapPinIcon className="w-8 h-8" />
+            </div>
+            <h3 className="text-lg font-bold text-gray-800 mb-2">Checking Location</h3>
+            <p className="text-gray-500 text-sm max-w-xs mx-auto">Please allow location access to verify you are in the classroom.</p>
+        </div>
+      );
+  }
+
   return (
     <div className="relative">
         {bypassRestrictions && onExit && (
@@ -133,9 +203,17 @@ export const StudentView: React.FC<StudentViewProps> = ({
             <form onSubmit={handleSubmit} className="space-y-5">
                 <div className="text-center mb-6">
                     <h3 className="text-xl font-bold text-gray-800">Check-in Details</h3>
-                    <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-xs font-bold border border-green-200 shadow-sm mt-2">
-                        <CheckCircleIcon className="w-3.5 h-3.5" />
-                        <span>Secure Link Verified</span>
+                    <div className="flex flex-col items-center gap-1 mt-2">
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-xs font-bold border border-green-200 shadow-sm">
+                            <CheckCircleIcon className="w-3.5 h-3.5" />
+                            <span>Secure Link Verified</span>
+                        </div>
+                        {geoConstraints && (
+                            <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-bold border border-blue-200 shadow-sm">
+                                <MapPinIcon className="w-3.5 h-3.5" />
+                                <span>Location Verified</span>
+                            </div>
+                        )}
                     </div>
                 </div>
 

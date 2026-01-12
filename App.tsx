@@ -19,6 +19,12 @@ const App: React.FC = () => {
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('t');
   const courseName = urlParams.get('c');
+  
+  // Geolocation params
+  const latParam = urlParams.get('lat');
+  const lngParam = urlParams.get('lng');
+  const radParam = urlParams.get('rad');
+  
   const initialView: View = token ? 'student' : 'teacher';
 
   const [view, setView] = useState<View>(initialView);
@@ -375,6 +381,7 @@ const App: React.FC = () => {
                        markAttendance={markAttendance}
                        token={token || (isKioskMode ? Date.now().toString() : '')}
                        courseName={courseName || undefined}
+                       geoConstraints={latParam && lngParam ? { lat: parseFloat(latParam), lng: parseFloat(lngParam), radius: radParam ? parseFloat(radParam) : 100 } : undefined}
                        bypassRestrictions={isKioskMode}
                        onExit={() => { setIsKioskMode(false); setView('teacher'); }}
                        isSyncing={isSyncing || syncQueue.length > 0}

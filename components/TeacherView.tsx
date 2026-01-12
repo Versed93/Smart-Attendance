@@ -12,6 +12,7 @@ import { ClockIcon } from './icons/ClockIcon';
 import { CheckCircleIcon } from './icons/CheckCircleIcon';
 import { XCircleIcon } from './icons/XCircleIcon';
 import { GlobeIcon } from './icons/GlobeIcon';
+import { MapPinIcon } from './icons/MapPinIcon';
 import { ExclamationTriangleIcon } from './icons/ExclamationTriangleIcon';
 import { LockClosedIcon } from './icons/LockClosedIcon';
 import { GoogleSheetIntegrationInfo } from './GoogleSheetIntegrationInfo';
@@ -70,6 +71,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [viewMode, setViewMode] = useState<'teacher' | 'classroom'>('teacher');
   const [sortBy, setSortBy] = useState<SortOption>('newest');
   
+  // Geofencing State
+  const [isGeoEnabled, setIsGeoEnabled] = useState(false);
+  const [teacherLocation, setTeacherLocation] = useState<{lat: number, lng: number} | null>(null);
+  const [geoError, setGeoError] = useState('');
+  
   // Filter State
   const [timeFilter, setTimeFilter] = useState<'all' | number>('all');
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -105,20 +111,55 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     return () => { isMountedRef.current = false; };
   }, []);
 
+  const toggleGeofence = () => {
+      if (isGeoEnabled) {
+          setIsGeoEnabled(false);
+          setTeacherLocation(null);
+          setGeoError('');
+      } else {
+          if (!navigator.geolocation) {
+              setGeoError('Geolocation is not supported by this browser.');
+              return;
+          }
+          setGeoError('');
+          navigator.geolocation.getCurrentPosition(
+              (pos) => {
+                  setTeacherLocation({
+                      lat: pos.coords.latitude,
+                      lng: pos.coords.longitude
+                  });
+                  setIsGeoEnabled(true);
+              },
+              (err) => {
+                  console.error(err);
+                  setGeoError('Location permission denied or unavailable.');
+                  setIsGeoEnabled(false);
+              },
+              { enableHighAccuracy: true }
+          );
+      }
+  };
+
   useEffect(() => {
     const updateQR = () => {
         let cleanBaseUrl = baseUrl.trim();
         const timestamp = Date.now().toString();
         const separator = cleanBaseUrl.includes('?') ? '&' : '?';
-        const cParam = courseName ? `&c=${encodeURIComponent(courseName)}` : '';
-        const fullUrl = `${cleanBaseUrl}${separator}t=${timestamp}${cParam}`;
+        let params = `t=${timestamp}`;
+        
+        if (courseName) params += `&c=${encodeURIComponent(courseName)}`;
+        if (isGeoEnabled && teacherLocation) {
+            params += `&lat=${teacherLocation.lat.toFixed(6)}&lng=${teacherLocation.lng.toFixed(6)}&rad=100`;
+        }
+
+        const fullUrl = `${cleanBaseUrl}${separator}${params}`;
         setQrData(fullUrl);
     };
 
     updateQR();
     const interval = setInterval(updateQR, 1000);
     return () => clearInterval(interval);
-  }, [baseUrl, courseName]);
+  }, [baseUrl, courseName, isGeoEnabled, teacherLocation]);
 
   useEffect(() => {
     if (canvasRef.current && qrData) {
@@ -126,42 +167,12 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           width: 600, 
           color: { dark: '#000000', light: '#ffffff' },
           margin: 2,
-          errorCorrectionLevel: 'H' // High error correction for logo
+          errorCorrectionLevel: 'M' // Medium error correction sufficient for standard QR
         }, (error) => {
         if (error) {
             console.error(error);
-            setIsQrLoading(false);
-            return;
         }
-
-        // Add Center Logo (UTS)
-        const canvas = canvasRef.current;
-        const ctx = canvas?.getContext('2d');
-        if (canvas && ctx) {
-            const img = new Image();
-            img.crossOrigin = "Anonymous";
-            // University of Technology Sarawak Logo
-            img.src = "https://upload.wikimedia.org/wikipedia/en/thumb/4/43/University_of_Technology_Sarawak_logo.svg/240px-University_of_Technology_Sarawak_logo.svg.png";
-            
-            img.onload = () => {
-                const size = 600 * 0.22; // Slightly larger for better visibility (22%)
-                const x = (600 - size) / 2;
-                const y = (600 - size) / 2;
-                
-                // Draw white background for logo to ensure contrast against QR modules
-                ctx.fillStyle = '#ffffff';
-                ctx.fillRect(x - 5, y - 5, size + 10, size + 10);
-                
-                ctx.drawImage(img, x, y, size, size);
-                setIsQrLoading(false);
-            };
-            img.onerror = () => {
-                console.warn("Could not load UTS logo");
-                setIsQrLoading(false); // Fail gracefully, QR is still usable
-            };
-        } else {
-            setIsQrLoading(false);
-        }
+        setIsQrLoading(false);
       });
     }
   }, [qrData]);
@@ -671,19 +682,41 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           <h2 className="text-2xl font-bold mb-6 text-brand-primary tracking-tight text-center">Scan to Check-in</h2>
           
           {viewMode === 'teacher' && (
-            <div className="w-full mb-6">
-                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5 ml-1">Current Class / Session</label>
-                <div className="relative group">
-                    <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                        <PencilSquareIcon className="h-5 w-5 text-gray-400 group-focus-within:text-brand-primary transition-colors" />
+            <div className="w-full mb-6 flex flex-col gap-4">
+                <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5 ml-1">Current Class / Session</label>
+                    <div className="relative group">
+                        <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                            <PencilSquareIcon className="h-5 w-5 text-gray-400 group-focus-within:text-brand-primary transition-colors" />
+                        </div>
+                        <input
+                            type="text"
+                            value={courseName}
+                            onChange={(e) => setCourseName(e.target.value)}
+                            className="block w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-xl leading-5 bg-gray-50 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-0 focus:border-brand-primary sm:text-sm font-medium transition-all"
+                            placeholder="e.g. DATA STRUCTURES W1"
+                        />
                     </div>
-                    <input
-                        type="text"
-                        value={courseName}
-                        onChange={(e) => setCourseName(e.target.value)}
-                        className="block w-full pl-10 pr-4 py-3 border-2 border-gray-200 rounded-xl leading-5 bg-gray-50 placeholder-gray-400 focus:outline-none focus:bg-white focus:ring-0 focus:border-brand-primary sm:text-sm font-medium transition-all"
-                        placeholder="e.g. DATA STRUCTURES W1"
-                    />
+                </div>
+
+                <div className="bg-gray-50 p-3 rounded-xl border border-gray-200">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                             <div className={`p-2 rounded-lg ${isGeoEnabled ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-500'}`}>
+                                 <MapPinIcon className="w-5 h-5" />
+                             </div>
+                             <div>
+                                 <p className="text-xs font-bold text-gray-700 uppercase">GPS Geofencing</p>
+                                 <p className="text-[10px] text-gray-500">Require students to be within 100m</p>
+                             </div>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                            <input type="checkbox" checked={isGeoEnabled} onChange={toggleGeofence} className="sr-only peer" />
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                        </label>
+                    </div>
+                    {geoError && <p className="text-[10px] text-red-500 font-bold mt-2 ml-1">{geoError}</p>}
+                    {isGeoEnabled && teacherLocation && <p className="text-[10px] text-blue-500 font-bold mt-2 ml-1 animate-pulse">✓ Location Locked: {teacherLocation.lat.toFixed(4)}, {teacherLocation.lng.toFixed(4)}</p>}
                 </div>
             </div>
           )}
