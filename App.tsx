@@ -122,7 +122,8 @@ const App: React.FC = () => {
             clearTimeout(timeoutId);
 
             if (!response.ok) {
-                throw new Error(`Cloud Server responded with ${response.status}. Retrying...`);
+                const errText = await response.text().catch(() => response.statusText);
+                throw new Error(`HTTP Error ${response.status}: ${errText.slice(0, 200) || 'Check Script URL permissions'}`);
             }
 
             const text = await response.text();
@@ -130,11 +131,12 @@ const App: React.FC = () => {
             try {
                 result = JSON.parse(text);
             } catch(e) {
-                throw new Error("Cloud script returned invalid response format. Check your Apps Script deployment.");
+                const snippet = text.length > 100 ? text.substring(0, 100) + '...' : text;
+                throw new Error(`Invalid Server Response: Expected JSON but got "${snippet}". Check Script URL.`);
             }
 
             if (result.result !== 'success') {
-                throw new Error(result.message || 'The attendance script rejected the data.');
+                throw new Error(`Script Error: ${result.message || 'Data rejected by script'}`);
             }
 
             if (active) {
@@ -144,7 +146,15 @@ const App: React.FC = () => {
 
         } catch (err: any) {
             console.error("Cloud Sync Error:", err);
-            if (active) setSyncError(err.message || "Failed to sync with cloud. Check internet connection.");
+            
+            let detailedError = err.message || "Failed to sync with cloud.";
+            if (err.name === 'AbortError') {
+              detailedError = "Connection Timeout: Server took too long to respond.";
+            } else if (err.message === 'Failed to fetch') {
+              detailedError = "Network Error: Could not connect to Google Script. Check internet connection.";
+            }
+            
+            if (active) setSyncError(detailedError);
             
             // Jittered retry with manual interrupt support
             const jitter = 5000 + Math.random() * 10000;
@@ -273,7 +283,7 @@ const App: React.FC = () => {
                           </div>
                           <div className="flex-1">
                               <h3 className="font-bold text-gray-900 text-lg">Cloud Sync Failed</h3>
-                              <p className="text-sm text-gray-600 mt-1 leading-tight">{syncError}</p>
+                              <p className="text-sm text-gray-600 mt-1 leading-tight break-words font-mono text-xs bg-gray-50 p-2 rounded border border-gray-200">{syncError}</p>
                               <p className="text-xs text-gray-400 mt-2 font-medium">Automatic retry in progress...</p>
                           </div>
                       </div>
