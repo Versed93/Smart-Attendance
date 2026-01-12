@@ -4,13 +4,14 @@ import { StudentView } from './components/StudentView';
 import { LoginView } from './components/LoginView';
 import { ExclamationTriangleIcon } from './components/icons/ExclamationTriangleIcon';
 import { GlobeIcon } from './components/icons/GlobeIcon';
+import { InstallPwaPrompt } from './components/InstallPwaPrompt';
 import type { Student, SyncTask } from './types';
 
 type View = 'teacher' | 'student';
 
 const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
-const SCRIPT_URL_KEY = 'attendance-script-url-v23'; // Bumped version to v23
+const SCRIPT_URL_KEY = 'attendance-script-url-v24'; // Bumped version to v24 for new URL
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const LECTURER_PASSWORD = 'adminscm'; // Updated secure password
@@ -48,7 +49,7 @@ const App: React.FC = () => {
   
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
     const saved = localStorage.getItem(SCRIPT_URL_KEY);
-    return saved || 'https://script.google.com/macros/s/AKfycbz38cGYEjua8ca30L3J_A1TsjdLIcKjEkSGrlPNU2UHM65EMEkidxYWfqEnk83fXaZ3/exec';
+    return saved || 'https://script.google.com/macros/s/AKfycbzX0rTU_V_MMuBcOzWlypL5J39rZfu-H68q4YU3ZFy5VlePf6uhD2qMP7_ns1Oq0a-O/exec';
   });
 
   const [syncQueue, setSyncQueue] = useState<SyncTask[]>(() => {
@@ -68,7 +69,7 @@ const App: React.FC = () => {
   // Network Listener
   useEffect(() => {
     // Debug log to confirm app version in production console
-    console.log("UTS QR Attendance App Mounted - v1.0.7");
+    console.log("UTS QR Attendance App Mounted - v1.0.8");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -237,8 +238,9 @@ const App: React.FC = () => {
     localStorage.removeItem(AUTH_KEY);
   };
 
-  const addStudent = (name: string, studentId: string, email: string, status: 'P' | 'A') => {
-      const timestamp = Date.now();
+  // Modified addStudent to accept an optional overrideTimestamp
+  const addStudent = (name: string, studentId: string, email: string, status: 'P' | 'A', overrideTimestamp?: number) => {
+      const timestamp = overrideTimestamp || Date.now();
       const newStudent: Student = { name, studentId, email, timestamp, status };
       
       setAttendanceList(prev => [newStudent, ...prev.filter(s => s.studentId !== studentId)]);
@@ -306,7 +308,17 @@ const App: React.FC = () => {
   };
   
   const onTestAttendance = () => {
-      addStudent("TEST USER", `TEST-${Date.now().toString().slice(-4)}`, "test@example.com", 'P');
+      // Use a future date (Jan 1, 2030) to force the script to create a NEW column.
+      // This bypasses the "Duplicate Check" in the script (which might find today's date in W1-W5).
+      // Since the script prioritizes W6-W10 for NEW dates, this verifies the W6-W10 routing is working.
+      const futureDate = new Date('2030-01-01T12:00:00');
+      addStudent(
+        "TEST W6-W10 (Future Date)", 
+        `TEST-${Date.now().toString().slice(-4)}`, 
+        "test@example.com", 
+        'P', 
+        futureDate.getTime()
+      );
   };
 
   const onOpenKiosk = () => {
@@ -390,6 +402,9 @@ const App: React.FC = () => {
                </div>
            </div>
        )}
+       
+       {/* Install App Prompt handles both Android (Native) and iOS (Instructions) */}
+       <InstallPwaPrompt />
     </div>
   );
 };

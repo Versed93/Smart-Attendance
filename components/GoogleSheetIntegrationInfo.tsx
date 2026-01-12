@@ -3,10 +3,11 @@ import { InfoIcon } from './icons/InfoIcon';
 
 const appScriptCode = `
 /**
- * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.3)
+ * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.4)
  * Optimized for 200-300 simultaneous requests.
  * Supports offline sync with correct dates.
- * Configuration: Headers in Row 10, Range K10:T10.
+ * Logic Update: 2-Pass Search to prevent duplicate dates.
+ * Configuration: Prioritizes W6-W10 for new classes.
  */
 
 function getFormattedDate(d) {
@@ -15,10 +16,10 @@ function getFormattedDate(d) {
 }
 
 function getSheetConfigs() {
-  // UPDATED v3.3: Look in Row 10, Columns K (11) to T (20)
+  // UPDATED v3.4: Order changed to prioritize filling W6-W10 first for new dates
   return [
-    { name: "W1-W5", dateRow: 10, startCol: 11, endCol: 20 },
     { name: "W6-W10", dateRow: 10, startCol: 11, endCol: 20 },
+    { name: "W1-W5", dateRow: 10, startCol: 11, endCol: 20 },
     { name: "W11-W14", dateRow: 10, startCol: 11, endCol: 20 }
   ];
 }
@@ -41,7 +42,7 @@ function doPost(e) {
     var studentName = String(data.name || "").toUpperCase().trim();
     var status = data.status || 'P';
     
-    // v3.2 Update: Use provided date if available (for offline syncs), else use today
+    // Use provided date if available (for offline syncs), else use today
     var providedDateStr = data.customDate || "";
     var dateStr = providedDateStr ? providedDateStr : getFormattedDate();
 
@@ -50,7 +51,7 @@ function doPost(e) {
     var configs = getSheetConfigs();
     var targetSheet, targetCol, isNewDate = true;
 
-    // 1. Find sheet and column (Cached approach)
+    // PASS 1: Check if this date ALREADY exists in any sheet (to prevent duplicates)
     for (var i = 0; i < configs.length; i++) {
       var conf = configs[i];
       var sheet = doc.getSheetByName(conf.name);
@@ -58,7 +59,6 @@ function doPost(e) {
       
       var headerValues = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1).getDisplayValues()[0];
       
-      // Look for current date in the header row
       for (var c = 0; c < headerValues.length; c++) {
         if (headerValues[c].trim() === dateStr) {
           targetSheet = sheet;
@@ -68,16 +68,26 @@ function doPost(e) {
         }
       }
       if (targetSheet) break;
+    }
 
-      // Look for first available empty column within the range
-      for (var c = 0; c < headerValues.length; c++) {
-        if (headerValues[c].trim() === "") {
-          targetSheet = sheet;
-          targetCol = conf.startCol + c;
-          break;
+    // PASS 2: If date not found, find the first sheet with an EMPTY column (respecting config order)
+    if (!targetSheet) {
+      for (var i = 0; i < configs.length; i++) {
+        var conf = configs[i];
+        var sheet = doc.getSheetByName(conf.name);
+        if (!sheet) continue;
+        
+        var headerValues = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1).getDisplayValues()[0];
+        
+        for (var c = 0; c < headerValues.length; c++) {
+          if (headerValues[c].trim() === "") {
+            targetSheet = sheet;
+            targetCol = conf.startCol + c;
+            break;
+          }
         }
+        if (targetSheet) break;
       }
-      if (targetSheet) break;
     }
 
     if (!targetSheet) throw "All attendance sheets are full or date not found in range K10:T10.";
@@ -87,7 +97,7 @@ function doPost(e) {
       targetSheet.getRange(10, targetCol).setValue(dateStr).setNumberFormat("@");
     }
 
-    // 2. Find or Add Student Row (Fast lookup)
+    // 3. Find or Add Student Row (Fast lookup)
     var startRow = 14;
     var lastRow = Math.max(targetSheet.getLastRow(), 250);
     var ids = targetSheet.getRange(startRow, 2, lastRow - startRow + 1, 1).getValues();
@@ -114,7 +124,7 @@ function doPost(e) {
        targetSheet.getRange(studentRowAbs, 4).setValue(studentName);
     }
 
-    // 3. Mark the Attendance Status
+    // 4. Mark the Attendance Status
     targetSheet.getRange(studentRowAbs, targetCol).setValue(status);
     
     // Explicitly flush to ensure data is written before lock release
@@ -177,19 +187,19 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
       <div className="flex items-start gap-3">
         <InfoIcon className="w-6 h-6 mt-1 text-blue-600" />
         <div>
-          <h3 className="text-lg font-bold text-blue-900">Script Update Required (V3.3)</h3>
+          <h3 className="text-lg font-bold text-blue-900">Script Update Required (V3.4)</h3>
           <p className="mt-1 text-sm text-blue-800 leading-relaxed">
-            The configuration has been updated to scan <strong>Row 10</strong> (Columns K-T) for date headers.
-            Please copy this new code to your Google Apps Script project.
+            The configuration has been updated to prioritize <strong>W6-W10</strong> for new attendance dates.
+            It also includes a 2-pass check to prevent duplicate date columns.
           </p>
           <div className="mt-4 bg-gray-900 p-4 rounded-xl border border-blue-200">
             <div className="flex justify-between items-center mb-3">
-              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">ROW 10 CONFIGURATION</span>
+              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">UPDATED LOGIC</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-4 py-1.5 rounded-full font-bold transition-all ${copied ? 'bg-green-600 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
               >
-                {copied ? '✓ COPIED' : 'COPY SCRIPT v3.3'}
+                {copied ? '✓ COPIED' : 'COPY SCRIPT v3.4'}
               </button>
             </div>
             <pre className="text-[9px] text-gray-400 max-h-48 overflow-y-auto whitespace-pre-wrap font-mono p-2 bg-black/30 rounded">
@@ -197,7 +207,7 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
             </pre>
           </div>
           <p className="mt-3 text-[11px] text-blue-600 italic">
-            * After copying, click "Deploy &gt; New Deployment" in Apps Script to apply changes.
+            * After copying, remember to click "Deploy &gt; New Deployment" in Google Apps Script.
           </p>
         </div>
       </div>
