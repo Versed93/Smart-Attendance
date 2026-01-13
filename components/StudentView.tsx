@@ -283,9 +283,13 @@ export const StudentView: React.FC<StudentViewProps> = ({
                     {status === 'success' ? (
                         isOnline && isSyncing ? (
                             <div className="relative">
-                                <ClockIcon className="h-16 w-16 text-brand-primary animate-pulse" />
-                                <div className="absolute -bottom-1 -right-1 bg-white rounded-full p-1 border border-brand-primary">
-                                    <GlobeIcon className="w-4 h-4 text-brand-primary animate-spin" />
+                                {/* Spinner for syncing */}
+                                <svg className="animate-spin h-14 w-14 text-brand-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                <div className="absolute -bottom-2 -right-2 bg-white rounded-full p-1.5 border-2 border-white shadow-sm">
+                                    <GlobeIcon className="w-5 h-5 text-brand-primary" />
                                 </div>
                             </div>
                         ) : (
@@ -296,54 +300,89 @@ export const StudentView: React.FC<StudentViewProps> = ({
                     )}
                 </div>
 
-                <div className="mb-6">
+                <div className="mb-6 px-4">
                     <h3 className={`text-3xl font-extrabold ${status === 'success' ? (isOnline && isSyncing ? 'text-brand-primary' : 'text-green-800') : 'text-red-600'} mb-2`}>
                         {status === 'success' ? (isOnline && isSyncing ? 'Syncing...' : 'Verified!') : 'Failed'}
                     </h3>
-                    
-                    {status === 'success' && isOnline && isSyncing && (
-                        <div className="inline-flex items-center gap-2 px-3 py-1 bg-brand-light/20 text-brand-primary rounded-full text-xs font-bold uppercase tracking-wider mb-4 border border-brand-light/30">
-                            <ClockIcon className="w-3.5 h-3.5" />
-                            Sending to Google
-                        </div>
-                    )}
-                     
-                    {status === 'success' && !isOnline && (
-                         <div className="inline-flex items-center gap-2 px-3 py-1 bg-yellow-100 text-yellow-800 rounded-full text-xs font-bold uppercase tracking-wider mb-4 border border-yellow-300">
-                             <GlobeIcon className="w-3.5 h-3.5" />
-                             Saved Offline
-                         </div>
-                    )}
-
-                    <p className="text-gray-600 text-lg px-4 leading-relaxed whitespace-pre-wrap">
-                        {status === 'success' 
-                          ? (!isOnline 
-                              ? 'Saved to your device. We will upload it automatically when the internet returns.'
-                              : (isSyncing 
-                                  ? 'Saved to phone! Now uploading to the Google Sheet...' 
-                                  : 'Attendance recorded and verified in the cloud.')) 
-                          : message}
-                    </p>
                 </div>
                 
                 {status === 'success' && (
-                    <div className={`max-w-sm mx-auto p-6 rounded-2xl border transition-all duration-500 ${!isOnline ? 'bg-yellow-50 border-yellow-200' : (isSyncing ? 'bg-orange-50 border-orange-200' : 'bg-green-50 border-green-200')}`}>
-                        <p className={`font-bold text-lg mb-2 ${!isOnline ? 'text-yellow-800' : (isSyncing ? 'text-orange-800' : 'text-green-800')}`}>
-                            {!isOnline ? 'YOU ARE OFFLINE' : (isSyncing ? '⚠ DO NOT CLOSE THIS TAB' : 'Success!')}
-                        </p>
-                        <p className={`text-sm leading-relaxed ${!isOnline ? 'text-yellow-700' : (isSyncing ? 'text-orange-700' : 'text-green-700')}`}>
-                            {!isOnline 
-                                ? 'Don\'t worry, your attendance is safe. You can close the tab or wait for connection.' 
-                                : (isSyncing 
-                                    ? 'Wait for the icon to turn GREEN. If the server is busy, we will automatically retry for you.' 
-                                    : 'Your attendance has been permanently recorded in the official Google Sheet. You can safely close this tab now.')}
-                        </p>
+                    <div className={`max-w-sm mx-auto rounded-2xl border overflow-hidden transition-all duration-500 shadow-sm ${!isOnline ? 'bg-yellow-50 border-yellow-200' : (isSyncing ? 'bg-indigo-50 border-indigo-200' : 'bg-green-50 border-green-200')}`}>
                         
-                        {bypassRestrictions && !isSyncing && (
-                             <button onClick={() => { setName(''); setStudentId(''); setEmail(''); setStatus('form'); }} className="mt-6 w-full py-3 bg-brand-primary text-white rounded-xl font-bold shadow-lg shadow-brand-primary/20 hover:scale-[1.02] active:scale-95 transition-all">
-                                Register Next Student
-                             </button>
-                        )}
+                        {/* HEADER OF BOX */}
+                        <div className={`px-6 py-4 border-b ${!isOnline ? 'border-yellow-200 bg-yellow-100/50' : (isSyncing ? 'border-indigo-200 bg-indigo-100/50' : 'border-green-200 bg-green-100/50')}`}>
+                            <p className={`font-bold text-lg ${!isOnline ? 'text-yellow-800' : (isSyncing ? 'text-indigo-800' : 'text-green-800')}`}>
+                                {!isOnline ? 'OFFLINE MODE' : (isSyncing ? 'DATA SYNC IN PROGRESS' : 'ATTENDANCE RECORDED')}
+                            </p>
+                        </div>
+
+                        {/* BODY OF BOX */}
+                        <div className="p-6">
+                            {isSyncing && isOnline ? (
+                                 <div className="text-left space-y-4">
+                                    <div className="flex items-center gap-3 opacity-50">
+                                        <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs font-bold">✓</div>
+                                        <span className="text-sm font-bold text-gray-500 line-through">Step 1: Save to Device</span>
+                                    </div>
+                                    <div className="flex items-center gap-3">
+                                        <div className="relative flex items-center justify-center w-6 h-6">
+                                            <div className="absolute w-full h-full rounded-full bg-indigo-400 opacity-25 animate-ping"></div>
+                                            <div className="w-2.5 h-2.5 bg-indigo-600 rounded-full"></div>
+                                        </div>
+                                        <div className="flex-1">
+                                            <span className="text-sm font-bold text-indigo-900 block">Step 2: Uploading to Cloud</span>
+                                            <span className="text-xs text-indigo-600">Connecting to Google Sheets...</span>
+                                        </div>
+                                    </div>
+                                    <div className="bg-white/60 rounded-lg p-3 text-xs text-indigo-800 leading-relaxed border border-indigo-100">
+                                        <strong>⚠️ Do not close this tab yet.</strong><br/>
+                                        We are ensuring your name appears on the lecturer's screen. This usually takes a few seconds.
+                                    </div>
+                                 </div>
+                            ) : !isOnline ? (
+                                 /* Offline details */
+                                 <div className="text-left space-y-4">
+                                     <div className="flex items-start gap-3">
+                                        <div className="mt-0.5 min-w-[20px]">
+                                            <GlobeIcon className="w-5 h-5 text-yellow-600" />
+                                        </div>
+                                        <div>
+                                            <p className="text-sm font-bold text-yellow-900">No Internet Connection</p>
+                                            <p className="text-xs text-yellow-700 mt-1">Don't worry! Your attendance is safely stored on this phone.</p>
+                                        </div>
+                                     </div>
+                                     <div className="bg-yellow-100/50 rounded-lg p-3 text-xs text-yellow-800 leading-relaxed border border-yellow-200">
+                                        <strong>What to do:</strong><br/>
+                                        You can close this tab. The app will automatically retry uploading when you have internet access again.
+                                     </div>
+                                 </div>
+                            ) : (
+                                 /* Success details */
+                                 <div className="text-center space-y-4">
+                                    <div className="flex justify-center">
+                                        <div className="bg-green-100 p-3 rounded-full">
+                                            <CheckCircleIcon className="w-8 h-8 text-green-600" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <p className="text-sm text-green-800 font-medium leading-relaxed">
+                                            Your name has been successfully added to the class list.
+                                        </p>
+                                    </div>
+                                    <div className="pt-2 border-t border-green-100">
+                                        <p className="text-xs text-green-600">
+                                            You can safely close this tab now.
+                                        </p>
+                                    </div>
+                                 </div>
+                            )}
+                            
+                            {bypassRestrictions && !isSyncing && (
+                                 <button onClick={() => { setName(''); setStudentId(''); setEmail(''); setStatus('form'); }} className="mt-6 w-full py-3 bg-brand-primary text-white rounded-xl font-bold shadow-lg shadow-brand-primary/20 hover:scale-[1.02] active:scale-95 transition-all">
+                                    Register Next Student
+                                 </button>
+                            )}
+                        </div>
                     </div>
                 )}
             </div>
