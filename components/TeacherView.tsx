@@ -407,7 +407,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
        {/* Professional Header */}
        <div className="flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
          <div className="flex items-center gap-4 w-full sm:w-auto justify-center sm:justify-start">
-             <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-xl shadow-lg shadow-brand-primary/20 shrink-0">
+             <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-xl shadow-lg shadow-brand-primary/20 shrink-0" aria-hidden="true">
                  <ShieldCheckIcon className="w-7 h-7" />
              </div>
              <div className="flex flex-col">
@@ -419,19 +419,22 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
          <div className="flex items-center gap-2 w-full sm:w-auto justify-center sm:justify-end">
             <button
                 onClick={() => setIsSoundEnabled(!isSoundEnabled)}
-                className={`flex items-center justify-center w-12 h-12 rounded-xl border transition-colors shadow-sm ${isSoundEnabled ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-100' : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'}`}
+                className={`flex items-center justify-center w-12 h-12 rounded-xl border transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-primary/50 ${isSoundEnabled ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-100' : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'}`}
                 title={isSoundEnabled ? "Mute Sound" : "Enable Sound"}
+                aria-label={isSoundEnabled ? "Mute sound notifications" : "Enable sound notifications"}
+                aria-pressed={isSoundEnabled}
             >
-                {isSoundEnabled ? <SpeakerWaveIcon className="w-5 h-5" /> : <SpeakerXMarkIcon className="w-5 h-5" />}
+                {isSoundEnabled ? <SpeakerWaveIcon className="w-5 h-5" aria-hidden="true" /> : <SpeakerXMarkIcon className="w-5 h-5" aria-hidden="true" />}
             </button>
             <button 
                 onClick={() => setViewMode(viewMode === 'teacher' ? 'classroom' : 'teacher')} 
-                className={`group flex items-center gap-3 px-5 py-3 rounded-xl font-bold transition-all duration-200 justify-center sm:justify-between ${
+                className={`group flex items-center gap-3 px-5 py-3 rounded-xl font-bold transition-all duration-200 justify-center sm:justify-between focus:outline-none focus:ring-2 focus:ring-brand-primary/50 ${
                     viewMode === 'teacher' 
                     ? 'bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200' 
                     : 'bg-gray-900 text-white hover:bg-gray-800 shadow-xl shadow-gray-900/10'
                 }`}
                 title={viewMode === 'teacher' ? "Switch to Classroom Mode for Projector" : "Return to Dashboard"}
+                aria-label={viewMode === 'teacher' ? "Switch to Classroom View" : "Return to Dashboard View"}
             >
                 <div className="flex flex-col items-end text-right mr-1">
                     <span className="text-[10px] uppercase opacity-60 font-medium leading-none mb-1">View Mode</span>
@@ -439,15 +442,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         {viewMode === 'teacher' ? 'Dashboard' : 'Classroom'}
                     </span>
                 </div>
-                {viewMode === 'teacher' ? <EyeIcon className="w-5 h-5" /> : <EyeSlashIcon className="w-5 h-5 text-gray-300" />}
+                {viewMode === 'teacher' ? <EyeIcon className="w-5 h-5" aria-hidden="true" /> : <EyeSlashIcon className="w-5 h-5 text-gray-300" aria-hidden="true" />}
             </button>
             
             <button
                 onClick={onLogout}
-                className="flex items-center justify-center w-12 h-12 bg-red-50 text-red-600 rounded-xl border border-red-100 hover:bg-red-100 hover:border-red-200 transition-colors shadow-sm"
+                className="flex items-center justify-center w-12 h-12 bg-red-50 text-red-600 rounded-xl border border-red-100 hover:bg-red-100 hover:border-red-200 transition-colors shadow-sm focus:outline-none focus:ring-2 focus:ring-red-500/50"
                 title="Log Out"
+                aria-label="Log Out"
             >
-                <LockClosedIcon className="w-5 h-5" />
+                <LockClosedIcon className="w-5 h-5" aria-hidden="true" />
             </button>
          </div>
        </div>
@@ -461,7 +465,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         <div className="w-full xl:col-span-4 order-2 xl:order-1 flex flex-col gap-4">
           
           {/* LIVE CONCURRENCY MONITOR */}
-          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
+          <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200" role="status" aria-label="Live Activity Monitor">
              <div className="flex justify-between items-center mb-3">
                 <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wide flex items-center gap-2">
                    <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
@@ -483,7 +487,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                          return (
                             <div key={`live-${student.studentId}`} className={`flex items-center justify-between p-3 rounded-lg border transition-all duration-300 ${isPending ? (syncError ? 'bg-red-50 border-red-100' : 'bg-blue-50 border-blue-100') : 'bg-green-50/50 border-green-100'}`}>
                                 <div className="flex items-center gap-3 overflow-hidden">
-                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${isPending ? (syncError ? 'bg-red-200 text-red-700' : 'bg-blue-200 text-blue-700 animate-pulse') : 'bg-green-200 text-green-700'}`}>
+                                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${isPending ? (syncError ? 'bg-red-200 text-red-700' : 'bg-blue-200 text-blue-700 animate-pulse') : 'bg-green-200 text-green-700'}`} aria-hidden="true">
                                         {student.name.charAt(0)}
                                     </div>
                                     <div className="min-w-0">
@@ -497,7 +501,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                         <span className="text-[10px] font-bold text-red-600 bg-red-100 px-1.5 py-0.5 rounded">Failed</span> :
                                         <span className="text-[10px] font-bold text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded animate-pulse">Syncing</span>
                                     ) : (
-                                        <CheckCircleIcon className="w-4 h-4 text-green-500" />
+                                        <CheckCircleIcon className="w-4 h-4 text-green-500" aria-hidden="true" />
                                     )}
                                     <span className="text-[9px] text-gray-400 mt-0.5">{new Date(student.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})}</span>
                                 </div>
@@ -515,40 +519,50 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 </div>
                 <div className="flex items-center gap-2">
                     <div className="flex items-center gap-1 bg-white border border-gray-300 rounded-lg px-2 py-1 shadow-sm">
-                        <ClockIcon className="w-3 h-3 text-gray-500" />
-                        <select value={timeFilter} onChange={(e) => setTimeFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))} className="text-xs bg-transparent text-gray-700 border-none focus:ring-0 cursor-pointer">
+                        <ClockIcon className="w-3 h-3 text-gray-500" aria-hidden="true" />
+                        <select 
+                            value={timeFilter} 
+                            onChange={(e) => setTimeFilter(e.target.value === 'all' ? 'all' : Number(e.target.value))} 
+                            className="text-xs bg-transparent text-gray-700 border-none focus:ring-0 cursor-pointer"
+                            aria-label="Filter history by time"
+                        >
                             <option value="all">Show All</option>
                             <option value="5">Last 5 Mins</option>
                             <option value="30">Last 30 Mins</option>
                         </select>
                     </div>
-                    <select value={sortBy} onChange={(e) => setSortBy(e.target.value as SortOption)} className="text-xs border border-gray-300 rounded-lg px-2 py-1 bg-white cursor-pointer shadow-sm">
+                    <select 
+                        value={sortBy} 
+                        onChange={(e) => setSortBy(e.target.value as SortOption)} 
+                        className="text-xs border border-gray-300 rounded-lg px-2 py-1 bg-white cursor-pointer shadow-sm focus:ring-2 focus:ring-brand-primary/50"
+                        aria-label="Sort student list"
+                    >
                         <option value="newest">Newest</option>
                         <option value="id">ID</option>
                     </select>
                 </div>
              </div>
 
-            <div className="flex items-center flex-wrap gap-2 py-1">
+            <div className="flex items-center flex-wrap gap-2 py-1" role="status">
                 <div className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-primary/10 text-brand-primary rounded-full text-xs font-bold border border-brand-primary/20 shadow-sm transition-all">
-                    <UserIcon className="w-3.5 h-3.5" />
-                    <span>{attendanceList.length} Scanned</span>
+                    <UserIcon className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span aria-label={`${attendanceList.length} students scanned`}>{attendanceList.length} Scanned</span>
                 </div>
                 
                 {!isOnline ? (
                    <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-500 text-white rounded-full text-xs font-bold border border-gray-600 shadow-sm transition-all">
-                       <GlobeIcon className="w-3.5 h-3.5" />
+                       <GlobeIcon className="w-3.5 h-3.5" aria-hidden="true" />
                        <span>OFFLINE MODE</span>
                    </div>
                 ) : syncError ? (
                    <button onClick={onRetrySync} className="flex items-center gap-1.5 px-3 py-1.5 bg-red-100 text-red-700 rounded-full text-xs font-bold border border-red-200 shadow-sm animate-pulse hover:bg-red-200 transition-all cursor-pointer">
-                      <ExclamationTriangleIcon className="w-3.5 h-3.5" />
+                      <ExclamationTriangleIcon className="w-3.5 h-3.5" aria-hidden="true" />
                       <span>Sync Error (Retry)</span>
                    </button>
                 ) : (
                     pendingSyncCount > 0 && (
                         <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-700 rounded-full text-xs font-bold border border-blue-200 shadow-sm animate-pulse transition-all">
-                            <GlobeIcon className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '3s' }} />
+                            <GlobeIcon className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '3s' }} aria-hidden="true" />
                             <span>{pendingSyncCount} Syncing...</span>
                         </div>
                     )
@@ -558,17 +572,17 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             <div className="flex flex-col gap-3 mt-1">
                      {/* PRIMARY ACTIONS */}
                      <div className="grid grid-cols-2 gap-3">
-                        <button onClick={() => setShowManualModal(true)} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-brand-primary text-white text-sm font-bold rounded-lg shadow-md hover:bg-brand-secondary transition-all active:scale-95">
-                            <PencilSquareIcon className="w-4 h-4" />
+                        <button onClick={() => setShowManualModal(true)} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-brand-primary text-white text-sm font-bold rounded-lg shadow-md hover:bg-brand-secondary transition-all active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-brand-primary">
+                            <PencilSquareIcon className="w-4 h-4" aria-hidden="true" />
                             Add Student
                         </button>
-                        <button onClick={handleExportCSV} disabled={attendanceList.length === 0} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white text-gray-700 border border-gray-200 text-sm font-bold rounded-lg shadow-sm hover:bg-gray-50 hover:border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95">
-                            <DownloadIcon className="w-4 h-4 text-gray-500" />
+                        <button onClick={handleExportCSV} disabled={attendanceList.length === 0} className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white text-gray-700 border border-gray-200 text-sm font-bold rounded-lg shadow-sm hover:bg-gray-50 hover:border-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-400">
+                            <DownloadIcon className="w-4 h-4 text-gray-500" aria-hidden="true" />
                             Export CSV
                         </button>
                         {syncQueue.length > 0 && (
                             <button onClick={handleBackupPending} className="col-span-2 flex items-center justify-center gap-2 px-4 py-2 bg-yellow-100 text-yellow-800 border border-yellow-200 text-sm font-bold rounded-lg shadow-sm hover:bg-yellow-200 transition-all active:scale-95">
-                                <DownloadIcon className="w-4 h-4" />
+                                <DownloadIcon className="w-4 h-4" aria-hidden="true" />
                                 Export Pending ({syncQueue.length})
                             </button>
                         )}
@@ -578,23 +592,23 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         {selectedIds.size > 0 ? (
                             <div className="flex-1 flex flex-wrap gap-2">
                                 <button onClick={() => handleBulkStatusChange('P')} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-green-600 text-white text-xs font-semibold rounded-lg shadow-sm hover:bg-green-700 transition-colors">
-                                    <CheckCircleIcon className="w-4 h-4" />Present
+                                    <CheckCircleIcon className="w-4 h-4" aria-hidden="true" />Present
                                 </button>
                                 <button onClick={() => handleBulkStatusChange('A')} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-orange-500 text-white text-xs font-semibold rounded-lg shadow-sm hover:bg-orange-600 transition-colors">
-                                    <XCircleIcon className="w-4 h-4" />Absent
+                                    <XCircleIcon className="w-4 h-4" aria-hidden="true" />Absent
                                 </button>
                                 <button onClick={handleBulkRemove} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-red-600 text-white text-xs font-semibold rounded-lg shadow-sm hover:bg-red-700 transition-colors">
-                                    <TrashIcon className="w-4 h-4" />Remove
+                                    <TrashIcon className="w-4 h-4" aria-hidden="true" />Remove
                                 </button>
                             </div>
                         ) : (
                             <div className="flex flex-1 gap-2">
                                 <button onClick={onOpenKiosk} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-gray-50 text-gray-700 text-xs font-semibold rounded-lg border border-gray-200 hover:bg-gray-100 transition-colors">
-                                    <ShieldCheckIcon className="w-4 h-4" />
+                                    <ShieldCheckIcon className="w-4 h-4" aria-hidden="true" />
                                     Admin Mode
                                 </button>
                                 <button onClick={onClearAttendance} disabled={attendanceList.length === 0} className="flex-1 flex items-center justify-center gap-2 px-3 py-2 bg-red-50 text-red-700 text-xs font-semibold rounded-lg border border-red-100 hover:bg-red-100 disabled:opacity-50 transition-colors">
-                                    <TrashIcon className="w-4 h-4" />
+                                    <TrashIcon className="w-4 h-4" aria-hidden="true" />
                                     Clear List
                                 </button>
                             </div>
@@ -606,7 +620,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex-1 flex flex-col overflow-hidden min-h-[400px]">
             {visibleList.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-12 text-gray-400">
-                  <UserIcon className="w-12 h-12 mb-2 opacity-20" />
+                  <UserIcon className="w-12 h-12 mb-2 opacity-20" aria-hidden="true" />
                   <p className="text-sm">No records to display.</p>
               </div>
             ) : (
@@ -617,7 +631,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         <table className="min-w-[400px] w-full text-sm text-left text-gray-700">
                         <thead className="text-xs text-gray-500 uppercase bg-gray-50 sticky top-0 z-10 border-b border-gray-200">
                             <tr>
-                            <th className="px-4 py-3 w-8"><input type="checkbox" className="rounded border-gray-300 text-brand-primary focus:ring-brand-primary" checked={visibleList.length > 0 && visibleList.every(s => selectedIds.has(s.studentId))} onChange={() => { if(selectedIds.size === visibleList.length) setSelectedIds(new Set()); else setSelectedIds(new Set(visibleList.map(s => s.studentId))); }} /></th>
+                            <th className="px-4 py-3 w-8"><input type="checkbox" className="rounded border-gray-300 text-brand-primary focus:ring-brand-primary" aria-label="Select all students" checked={visibleList.length > 0 && visibleList.every(s => selectedIds.has(s.studentId))} onChange={() => { if(selectedIds.size === visibleList.length) setSelectedIds(new Set()); else setSelectedIds(new Set(visibleList.map(s => s.studentId))); }} /></th>
                             <th className="px-4 py-3 font-semibold whitespace-nowrap">Student ID</th>
                             <th className="px-4 py-3 font-semibold">Status</th>
                             <th className="px-4 py-3 text-right font-semibold">Time</th>
@@ -628,16 +642,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                 const isPending = pendingIds.has(student.studentId);
                                 return (
                                 <tr key={`${student.studentId}-${student.timestamp}`} className={`hover:bg-gray-50 transition-colors ${selectedIds.has(student.studentId) ? 'bg-indigo-50/60' : ''}`}>
-                                    <td className="px-4 py-3"><input type="checkbox" className="rounded border-gray-300 text-brand-primary focus:ring-brand-primary" checked={selectedIds.has(student.studentId)} onChange={() => { const next = new Set(selectedIds); if(next.has(student.studentId)) next.delete(student.studentId); else next.add(student.studentId); setSelectedIds(next); }} /></td>
+                                    <td className="px-4 py-3"><input type="checkbox" className="rounded border-gray-300 text-brand-primary focus:ring-brand-primary" aria-label={`Select ${student.name}`} checked={selectedIds.has(student.studentId)} onChange={() => { const next = new Set(selectedIds); if(next.has(student.studentId)) next.delete(student.studentId); else next.add(student.studentId); setSelectedIds(next); }} /></td>
                                     <td className="px-4 py-3 font-mono font-medium text-gray-900 whitespace-nowrap flex items-center gap-2">
                                         {student.studentId}
                                         {/* TABLE STATUS ICON */}
                                         {isPending ? (
                                             syncError ? 
-                                            <div title="Sync Failed" className="w-2 h-2 rounded-full bg-red-500"></div> :
-                                            <div title="Syncing..." className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
+                                            <div title="Sync Failed" className="w-2 h-2 rounded-full bg-red-500" role="status" aria-label="Sync failed"></div> :
+                                            <div title="Syncing..." className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" role="status" aria-label="Syncing"></div>
                                         ) : (
-                                            <div title="Saved to Cloud" className="w-2 h-2 rounded-full bg-green-500"></div>
+                                            <div title="Saved to Cloud" className="w-2 h-2 rounded-full bg-green-500" role="status" aria-label="Saved to cloud"></div>
                                         )}
                                     </td>
                                     <td className="px-4 py-3">
@@ -666,17 +680,29 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               <div className="w-full space-y-4 mb-6">
                   <div className="flex justify-between items-center">
                     <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Configuration</label>
-                    <button onClick={() => setShowEmailSetup(!showEmailSetup)} className="text-xs text-brand-primary hover:text-brand-secondary font-bold uppercase tracking-wide underline decoration-dotted underline-offset-4">
+                    <button 
+                        onClick={() => setShowEmailSetup(!showEmailSetup)} 
+                        className="text-xs text-brand-primary hover:text-brand-secondary font-bold uppercase tracking-wide underline decoration-dotted underline-offset-4 focus:outline-none focus:ring-2 focus:ring-brand-primary rounded"
+                        aria-expanded={showEmailSetup}
+                        aria-controls="configuration-panel"
+                    >
                         {showEmailSetup ? 'Close Settings' : 'Google Sheets & Stress Test'}
                     </button>
                   </div>
                   
                   {showEmailSetup && (
-                    <div className="p-5 bg-gray-50 rounded-xl border border-gray-200 space-y-5 animate-in fade-in slide-in-from-top-2 duration-300">
+                    <div id="configuration-panel" className="p-5 bg-gray-50 rounded-xl border border-gray-200 space-y-5 animate-in fade-in slide-in-from-top-2 duration-300">
                       <GoogleSheetIntegrationInfo />
                       <div>
-                          <label className="block text-sm font-bold text-gray-700 mb-2">Google Web App URL</label>
-                          <input type="text" value={scriptUrl} onChange={(e) => onScriptUrlChange(e.target.value)} className="block w-full bg-white border border-gray-300 rounded-lg py-2.5 px-4 text-sm text-gray-800 focus:ring-2 focus:ring-brand-primary focus:border-brand-primary transition-shadow" placeholder="https://script.google.com/..." />
+                          <label className="block text-sm font-bold text-gray-700 mb-2" htmlFor="script-url-input">Google Web App URL</label>
+                          <input 
+                            id="script-url-input"
+                            type="text" 
+                            value={scriptUrl} 
+                            onChange={(e) => onScriptUrlChange(e.target.value)} 
+                            className="block w-full bg-white border border-gray-300 rounded-lg py-2.5 px-4 text-sm text-gray-800 focus:ring-2 focus:ring-brand-primary focus:border-brand-primary transition-shadow" 
+                            placeholder="https://script.google.com/..." 
+                          />
                           <p className="text-xs text-gray-400 mt-1">Paste the URL from your Google Apps Script deployment here.</p>
                       </div>
                       
@@ -686,7 +712,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                               <h4 className="text-sm font-bold text-indigo-900">Connectivity Check</h4>
                               <p className="text-xs text-indigo-700 mt-0.5">Adds a dummy student record to verify cloud sync.</p>
                           </div>
-                          <button onClick={onTestAttendance} className="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm active:scale-95">
+                          <button onClick={onTestAttendance} className="px-4 py-2 bg-indigo-600 text-white text-xs font-bold rounded-lg hover:bg-indigo-700 transition-colors shadow-sm active:scale-95 focus:outline-none focus:ring-2 focus:ring-indigo-500">
                               Add Test Student
                           </button>
                       </div>
@@ -696,14 +722,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         <div className="flex justify-between items-center mb-3">
                             <h4 className="text-sm font-bold text-orange-800">Concurrency Stress Test</h4>
                             {!testStats.isRunning ? (
-                                <button onClick={runStressTest} className="px-3 py-1 bg-orange-600 text-white text-xs font-bold rounded-full hover:bg-orange-700 shadow-sm transition-colors">Simulate 230 Scans</button>
+                                <button onClick={runStressTest} className="px-3 py-1 bg-orange-600 text-white text-xs font-bold rounded-full hover:bg-orange-700 shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-orange-500">Simulate 230 Scans</button>
                             ) : (
                                 <span className="text-xs font-bold text-orange-600 animate-pulse">Running Test...</span>
                             )}
                         </div>
                         {(testStats.isRunning || testStats.total > 0) && (
                             <div className="space-y-2">
-                                <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                                <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden" role="progressbar" aria-valuenow={((testStats.success + testStats.failed) / (testStats.total || 1)) * 100} aria-valuemin={0} aria-valuemax={100}>
                                     <div className={`h-full transition-all duration-500 ease-out ${testStats.failed > 0 && !testStats.isRunning ? 'bg-orange-500' : 'bg-green-500'}`} style={{ width: `${((testStats.success + testStats.failed) / (testStats.total || 1)) * 100}%` }}></div>
                                 </div>
                                 <div className="flex justify-between text-[10px] font-bold uppercase">
@@ -713,7 +739,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                     <span className="text-gray-500">Left: {Math.max(0, testStats.total - testStats.success - testStats.failed)}</span>
                                 </div>
                                 {!testStats.isRunning && testStats.total > 0 && (
-                                  <p className="text-[10px] font-bold text-center mt-1">
+                                  <p className="text-[10px] font-bold text-center mt-1" role="alert">
                                     {testStats.success === testStats.total 
                                       ? <span className="text-green-700">✓ ALL 230 SCANS SAVED SUCCESSFULLY!</span> 
                                       : <span className="text-orange-700">⚠ TEST COMPLETED WITH {testStats.failed} FAILURES</span>}
@@ -736,12 +762,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           {viewMode === 'teacher' && (
             <div className="w-full mb-6 flex flex-col gap-4">
                 <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5 ml-1">Current Class / Session</label>
+                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5 ml-1" htmlFor="course-name-input">Current Class / Session</label>
                     <div className="relative group">
                         <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                            <PencilSquareIcon className="h-5 w-5 text-gray-400 group-focus-within:text-brand-primary transition-colors" />
+                            <PencilSquareIcon className="h-5 w-5 text-gray-400 group-focus-within:text-brand-primary transition-colors" aria-hidden="true" />
                         </div>
                         <input
+                            id="course-name-input"
                             type="text"
                             value={courseName}
                             onChange={(e) => setCourseName(e.target.value)}
@@ -754,7 +781,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 <div className="bg-gray-50 p-3 rounded-xl border border-gray-200">
                     <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
-                             <div className={`p-2 rounded-lg ${isGeoEnabled ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-500'}`}>
+                             <div className={`p-2 rounded-lg ${isGeoEnabled ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-500'}`} aria-hidden="true">
                                  <MapPinIcon className="w-5 h-5" />
                              </div>
                              <div>
@@ -763,34 +790,45 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                              </div>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer">
-                            <input type="checkbox" checked={isGeoEnabled} onChange={toggleGeofence} className="sr-only peer" />
-                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                            <input 
+                                type="checkbox" 
+                                checked={isGeoEnabled} 
+                                onChange={toggleGeofence} 
+                                className="sr-only peer" 
+                                aria-label="Toggle GPS Geofencing requirements"
+                            />
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600" aria-hidden="true"></div>
                         </label>
                     </div>
-                    {geoError && <p className="text-[10px] text-red-500 font-bold mt-2 ml-1">{geoError}</p>}
-                    {isGeoEnabled && teacherLocation && <p className="text-[10px] text-blue-500 font-bold mt-2 ml-1 animate-pulse">✓ Location Locked: {teacherLocation.lat.toFixed(4)}, {teacherLocation.lng.toFixed(4)}</p>}
+                    {geoError && <p className="text-[10px] text-red-500 font-bold mt-2 ml-1" role="alert">{geoError}</p>}
+                    {isGeoEnabled && teacherLocation && <p className="text-[10px] text-blue-500 font-bold mt-2 ml-1 animate-pulse" role="status">✓ Location Locked: {teacherLocation.lat.toFixed(4)}, {teacherLocation.lng.toFixed(4)}</p>}
                 </div>
             </div>
           )}
 
-          <div className="bg-white p-6 rounded-2xl shadow-[inset_0_2px_8px_rgba(0,0,0,0.05)] border border-gray-100 relative w-full max-w-[400px] aspect-square flex items-center justify-center overflow-hidden">
+          <div 
+            className="bg-white p-6 rounded-2xl shadow-[inset_0_2px_8px_rgba(0,0,0,0.05)] border border-gray-100 relative w-full max-w-[400px] aspect-square flex items-center justify-center overflow-hidden focus:ring-4 focus:ring-brand-primary/50 focus:outline-none"
+            role="img"
+            aria-label={`Dynamic QR Code for ${courseName ? courseName + ' ' : ''}attendance check-in. Scan this code with a mobile device. The code refreshes automatically every second.`}
+            tabIndex={0}
+          >
              {isQrLoading && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/90 z-10 rounded-2xl backdrop-blur-sm">
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/90 z-10 rounded-2xl backdrop-blur-sm" role="status" aria-label="Generating QR Code">
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary mb-3"></div>
                     <p className="text-sm font-bold text-gray-500 animate-pulse">Generating Secure QR...</p>
                 </div>
              )}
-            <canvas ref={canvasRef} className="w-full h-full object-contain block" style={{ maxWidth: '100%', maxHeight: '100%' }} />
+            <canvas ref={canvasRef} className="w-full h-full object-contain block" style={{ maxWidth: '100%', maxHeight: '100%' }} aria-hidden="true" />
             
             {/* Corner Markers for decorative purpose */}
-            <div className="absolute top-4 left-4 w-8 h-8 border-t-4 border-l-4 border-gray-900 rounded-tl-lg pointer-events-none"></div>
-            <div className="absolute top-4 right-4 w-8 h-8 border-t-4 border-r-4 border-gray-900 rounded-tr-lg pointer-events-none"></div>
-            <div className="absolute bottom-4 left-4 w-8 h-8 border-b-4 border-l-4 border-gray-900 rounded-bl-lg pointer-events-none"></div>
-            <div className="absolute bottom-4 right-4 w-8 h-8 border-b-4 border-r-4 border-gray-900 rounded-br-lg pointer-events-none"></div>
+            <div className="absolute top-4 left-4 w-8 h-8 border-t-4 border-l-4 border-gray-900 rounded-tl-lg pointer-events-none" aria-hidden="true"></div>
+            <div className="absolute top-4 right-4 w-8 h-8 border-t-4 border-r-4 border-gray-900 rounded-tr-lg pointer-events-none" aria-hidden="true"></div>
+            <div className="absolute bottom-4 left-4 w-8 h-8 border-b-4 border-l-4 border-gray-900 rounded-bl-lg pointer-events-none" aria-hidden="true"></div>
+            <div className="absolute bottom-4 right-4 w-8 h-8 border-b-4 border-r-4 border-gray-900 rounded-br-lg pointer-events-none" aria-hidden="true"></div>
           </div>
           
           <div className="mt-6 flex flex-col items-center">
-             <div className="flex items-center gap-2 text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100 mb-1">
+             <div className="flex items-center gap-2 text-green-600 bg-green-50 px-3 py-1 rounded-full border border-green-100 mb-1" role="status">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
@@ -803,12 +841,12 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       </div>
 
       {showManualModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-all">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 transition-all" role="dialog" aria-modal="true" aria-labelledby="manual-add-title">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden transform transition-all scale-100">
                 <div className="px-6 py-4 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                    <h3 className="text-lg font-black text-gray-900 tracking-tight">Add Student Manually</h3>
-                    <button onClick={() => setShowManualModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors">
-                        <XCircleIcon className="w-6 h-6" />
+                    <h3 id="manual-add-title" className="text-lg font-black text-gray-900 tracking-tight">Add Student Manually</h3>
+                    <button onClick={() => setShowManualModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors" aria-label="Close modal">
+                        <XCircleIcon className="w-6 h-6" aria-hidden="true" />
                     </button>
                 </div>
                 <form onSubmit={(e) => {
@@ -818,8 +856,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     else { setManualError(res.message); }
                 }} className="p-6 space-y-5">
                     <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Student ID</label>
-                        <input type="text" value={manualId} onChange={(e) => {
+                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1" htmlFor="manual-student-id">Student ID</label>
+                        <input id="manual-student-id" type="text" value={manualId} onChange={(e) => {
                             const val = e.target.value.toUpperCase();
                             setManualId(val);
                             const matched = PRE_REGISTERED_STUDENTS.find(s => s.id === val);
@@ -828,29 +866,29 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         }} placeholder="FIA..." className="block w-full border-2 border-gray-200 focus:border-brand-primary rounded-lg p-3 uppercase font-mono text-sm outline-none transition-colors" />
                     </div>
                     <div>
-                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Student Name</label>
-                        <input type="text" value={manualName} onChange={(e) => setManualName(e.target.value.toUpperCase())} readOnly={!manualIsNew && manualName.length > 0} placeholder="Full Name" className={`block w-full border-2 border-gray-200 rounded-lg p-3 uppercase text-sm outline-none transition-colors ${!manualIsNew && manualName.length > 0 ? 'bg-gray-100 text-gray-500' : 'focus:border-brand-primary'}`} />
+                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1" htmlFor="manual-student-name">Student Name</label>
+                        <input id="manual-student-name" type="text" value={manualName} onChange={(e) => setManualName(e.target.value.toUpperCase())} readOnly={!manualIsNew && manualName.length > 0} placeholder="Full Name" className={`block w-full border-2 border-gray-200 rounded-lg p-3 uppercase text-sm outline-none transition-colors ${!manualIsNew && manualName.length > 0 ? 'bg-gray-100 text-gray-500' : 'focus:border-brand-primary'}`} />
                     </div>
                     
                     <div>
                         <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Attendance Status</label>
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-2 gap-3" role="radiogroup" aria-label="Attendance Status">
                             <label className={`cursor-pointer border-2 rounded-lg p-3 flex items-center justify-center gap-2 transition-all ${manualStatus === 'P' ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-200 hover:border-green-200'}`}>
-                                <input type="radio" checked={manualStatus === 'P'} onChange={() => setManualStatus('P')} className="hidden"/>
-                                <CheckCircleIcon className="w-5 h-5" />
+                                <input type="radio" checked={manualStatus === 'P'} onChange={() => setManualStatus('P')} className="hidden" name="status" value="P" />
+                                <CheckCircleIcon className="w-5 h-5" aria-hidden="true" />
                                 <span className="font-bold text-sm">Present</span>
                             </label>
                             <label className={`cursor-pointer border-2 rounded-lg p-3 flex items-center justify-center gap-2 transition-all ${manualStatus === 'A' ? 'border-red-500 bg-red-50 text-red-700' : 'border-gray-200 hover:border-red-200'}`}>
-                                <input type="radio" checked={manualStatus === 'A'} onChange={() => setManualStatus('A')} className="hidden"/>
-                                <XCircleIcon className="w-5 h-5" />
+                                <input type="radio" checked={manualStatus === 'A'} onChange={() => setManualStatus('A')} className="hidden" name="status" value="A" />
+                                <XCircleIcon className="w-5 h-5" aria-hidden="true" />
                                 <span className="font-bold text-sm">Absent</span>
                             </label>
                         </div>
                     </div>
 
-                    {manualError && <p className="text-xs text-red-600 font-bold bg-red-50 p-2 rounded text-center">{manualError}</p>}
+                    {manualError && <p className="text-xs text-red-600 font-bold bg-red-50 p-2 rounded text-center" role="alert">{manualError}</p>}
                     
-                    <button type="submit" className="w-full py-3.5 bg-brand-primary text-white rounded-xl font-bold shadow-lg shadow-brand-primary/20 hover:bg-brand-secondary active:scale-[0.98] transition-all">Confirm Addition</button>
+                    <button type="submit" className="w-full py-3.5 bg-brand-primary text-white rounded-xl font-bold shadow-lg shadow-brand-primary/20 hover:bg-brand-secondary active:scale-[0.98] transition-all focus:outline-none focus:ring-2 focus:ring-brand-primary">Confirm Addition</button>
                 </form>
             </div>
         </div>
