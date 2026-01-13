@@ -393,7 +393,7 @@ const App: React.FC = () => {
                        markAttendance={markAttendance}
                        token={token || (isKioskMode ? Date.now().toString() : '')}
                        courseName={courseName || undefined}
-                       geoConstraints={latParam && lngParam ? { lat: parseFloat(latParam), lng: parseFloat(lngParam), radius: radParam ? parseFloat(radParam) : 100 } : undefined}
+                       geoConstraints={latParam && lngParam ? { lat: parseFloat(latParam), lng: parseFloat(lngParam), radius: radParam ? parseFloat(radParam) : 150 } : undefined}
                        bypassRestrictions={isKioskMode}
                        onExit={() => { setIsKioskMode(false); setView('teacher'); }}
                        isSyncing={isSyncing || syncQueue.length > 0}

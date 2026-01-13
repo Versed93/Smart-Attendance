@@ -98,19 +98,30 @@ export const StudentView: React.FC<StudentViewProps> = ({
                         position.coords.longitude
                     );
                     
-                    if (dist <= geoConstraints.radius) {
+                    // GPS ACCURACY FIX:
+                    // GPS signals fluctuate indoors. The 'accuracy' property tells us the margin of error (e.g. +/- 30m).
+                    // We accept the student if: Calculated Distance MINUS Accuracy is within range.
+                    // This creates an "innocent until proven guilty" overlap check.
+                    const accuracy = position.coords.accuracy || 0;
+                    const effectiveDistance = Math.max(0, dist - accuracy);
+                    
+                    if (effectiveDistance <= geoConstraints.radius) {
                         setStatus('form');
                     } else {
                         setStatus('error');
-                        setMessage(`You are too far from the class. (Distance: ${Math.round(dist)}m). Move closer to the screen.`);
+                        setMessage(`GPS Location Mismatch.\n\nDistance: ${Math.round(dist)}m\nAccuracy: ±${Math.round(accuracy)}m\nAllowed Radius: ${geoConstraints.radius}m\n\nTry moving closer to the screen or near a window/door for better signal.`);
                     }
                 },
                 (err) => {
                     console.error(err);
                     setStatus('error');
-                    setMessage('Location permission is required. Please enable GPS and allow access.');
+                    let errMsg = 'Location permission is required.';
+                    if (err.code === 1) errMsg = 'Please allow Location Access in your browser settings.';
+                    else if (err.code === 2) errMsg = 'GPS signal unavailable. Please ensure GPS is ON.';
+                    else if (err.code === 3) errMsg = 'GPS request timed out. Please refresh.';
+                    setMessage(errMsg);
                 },
-                { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
             );
         } else {
             setStatus('form');
@@ -172,12 +183,15 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   if (status === 'validating-gps') {
       return (
-        <div className="text-center py-12 flex flex-col items-center">
+        <div className="text-center py-12 flex flex-col items-center px-6">
             <div className="animate-bounce rounded-full p-4 bg-blue-50 text-brand-primary mb-4">
                 <MapPinIcon className="w-8 h-8" />
             </div>
-            <h3 className="text-lg font-bold text-gray-800 mb-2">Checking Location</h3>
-            <p className="text-gray-500 text-sm max-w-xs mx-auto">Please allow location access to verify you are in the classroom.</p>
+            <h3 className="text-lg font-bold text-gray-800 mb-2">Verifying Location</h3>
+            <p className="text-gray-500 text-sm max-w-xs mx-auto mb-4">Please allow location access. This may take a moment to get a precise GPS fix.</p>
+            <div className="w-full max-w-[200px] h-1 bg-gray-100 rounded-full overflow-hidden">
+                <div className="h-full bg-brand-primary animate-progress"></div>
+            </div>
         </div>
       );
   }
@@ -283,7 +297,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
                          </div>
                     )}
 
-                    <p className="text-gray-600 text-lg px-4 leading-relaxed">
+                    <p className="text-gray-600 text-lg px-4 leading-relaxed whitespace-pre-wrap">
                         {status === 'success' 
                           ? (!isOnline 
                               ? 'Saved to your device. We will upload it automatically when the internet returns.'

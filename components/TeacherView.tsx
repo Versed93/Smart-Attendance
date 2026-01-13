@@ -122,6 +122,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               return;
           }
           setGeoError('');
+          // Force fresh location (maximumAge: 0) to avoid using old cached coordinates
           navigator.geolocation.getCurrentPosition(
               (pos) => {
                   setTeacherLocation({
@@ -135,7 +136,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   setGeoError('Location permission denied or unavailable.');
                   setIsGeoEnabled(false);
               },
-              { enableHighAccuracy: true }
+              { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
           );
       }
   };
@@ -149,7 +150,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         
         if (courseName) params += `&c=${encodeURIComponent(courseName)}`;
         if (isGeoEnabled && teacherLocation) {
-            params += `&lat=${teacherLocation.lat.toFixed(6)}&lng=${teacherLocation.lng.toFixed(6)}&rad=100`;
+            // Updated radius to 150m to be more permissive for indoor GPS drift
+            params += `&lat=${teacherLocation.lat.toFixed(6)}&lng=${teacherLocation.lng.toFixed(6)}&rad=150`;
         }
 
         const fullUrl = `${cleanBaseUrl}${separator}${params}`;
@@ -707,7 +709,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                              </div>
                              <div>
                                  <p className="text-xs font-bold text-gray-700 uppercase">GPS Geofencing</p>
-                                 <p className="text-[10px] text-gray-500">Require students to be within 100m</p>
+                                 <p className="text-[10px] text-gray-500">Require students to be within 150m</p>
                              </div>
                         </div>
                         <label className="relative inline-flex items-center cursor-pointer">
