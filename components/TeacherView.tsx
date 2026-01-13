@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import type { Student, SyncTask } from '../types';
 import QRCode from 'qrcode';
 import { DownloadIcon } from './icons/DownloadIcon';
-import { ExternalLinkIcon } from './icons/ExternalLinkIcon';
+import { EyeIcon } from './icons/EyeIcon';
 import { EyeSlashIcon } from './icons/EyeSlashIcon';
 import { UserIcon } from './icons/UserIcon';
 import { TrashIcon } from './icons/TrashIcon';
@@ -66,31 +66,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [baseUrl, setBaseUrl] = useState<string>(window.location.href.split('?')[0]);
   const [qrData, setQrData] = useState<string>('');
   
-  // Initialize State from URL Params (for New Tab functionality)
-  const urlParams = new URLSearchParams(window.location.search);
-  
-  const [courseName, setCourseName] = useState(() => {
-    const paramC = urlParams.get('c');
-    return paramC ? decodeURIComponent(paramC) : (localStorage.getItem('attendance-course-name') || '');
-  });
+  const [courseName, setCourseName] = useState(() => localStorage.getItem('attendance-course-name') || '');
   
   const [showEmailSetup, setShowEmailSetup] = useState<boolean>(false);
-  const [viewMode, setViewMode] = useState<'teacher' | 'classroom'>(() => {
-    return urlParams.get('view') === 'classroom' ? 'classroom' : 'teacher';
-  });
+  const [viewMode, setViewMode] = useState<'teacher' | 'classroom'>('teacher');
   
   const [sortBy, setSortBy] = useState<SortOption>('newest');
   
-  // Geofencing State - Initialize from URL if present (for Classroom View tab)
-  const [isGeoEnabled, setIsGeoEnabled] = useState(() => urlParams.get('ggeo') === 'true');
-  const [teacherLocation, setTeacherLocation] = useState<{lat: number, lng: number} | null>(() => {
-      const glat = urlParams.get('glat');
-      const glng = urlParams.get('glng');
-      if (glat && glng) {
-          return { lat: parseFloat(glat), lng: parseFloat(glng) };
-      }
-      return null;
-  });
+  // Geofencing State
+  const [isGeoEnabled, setIsGeoEnabled] = useState(false);
+  const [teacherLocation, setTeacherLocation] = useState<{lat: number, lng: number} | null>(null);
   const [geoError, setGeoError] = useState('');
   
   // Filter State
@@ -272,27 +257,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     }
   };
 
-  // --- VIEW MODE HANDLER ---
-  const handleViewModeToggle = () => {
-      if (viewMode === 'teacher') {
-          // Open Classroom View in a NEW TAB with current settings
-          const params = new URLSearchParams();
-          params.set('view', 'classroom');
-          if (courseName) params.set('c', encodeURIComponent(courseName));
-          if (isGeoEnabled && teacherLocation) {
-              params.set('ggeo', 'true');
-              params.set('glat', teacherLocation.lat.toString());
-              params.set('glng', teacherLocation.lng.toString());
-          }
-          // The base path + params
-          const targetUrl = `${window.location.pathname}?${params.toString()}`;
-          window.open(targetUrl, '_blank');
-      } else {
-          // If we are already in classroom mode (e.g. inside the new tab), switch back to dashboard in this tab
-          setViewMode('teacher');
-      }
-  };
-
   // --- STRESS TEST LOGIC ---
   const runStressTest = async () => {
     if (!scriptUrl || !scriptUrl.startsWith('http')) { alert("Set a valid Script URL first."); return; }
@@ -413,21 +377,21 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
          
          <div className="flex items-center gap-2 w-full sm:w-auto justify-center sm:justify-end">
             <button 
-                onClick={handleViewModeToggle} 
+                onClick={() => setViewMode(viewMode === 'teacher' ? 'classroom' : 'teacher')} 
                 className={`group flex items-center gap-3 px-5 py-3 rounded-xl font-bold transition-all duration-200 justify-center sm:justify-between ${
                     viewMode === 'teacher' 
                     ? 'bg-gray-50 text-gray-700 hover:bg-gray-100 border border-gray-200' 
                     : 'bg-gray-900 text-white hover:bg-gray-800 shadow-xl shadow-gray-900/10'
                 }`}
-                title={viewMode === 'teacher' ? "Open Classroom View in New Tab" : "Return to Dashboard"}
+                title={viewMode === 'teacher' ? "Switch to Classroom Mode for Projector" : "Return to Dashboard"}
             >
                 <div className="flex flex-col items-end text-right mr-1">
                     <span className="text-[10px] uppercase opacity-60 font-medium leading-none mb-1">View Mode</span>
                     <span className="text-xs uppercase tracking-wider leading-none">
-                        {viewMode === 'teacher' ? 'Open Projector' : 'Classroom'}
+                        {viewMode === 'teacher' ? 'Dashboard' : 'Classroom'}
                     </span>
                 </div>
-                {viewMode === 'teacher' ? <ExternalLinkIcon className="w-5 h-5" /> : <EyeSlashIcon className="w-5 h-5 text-gray-300" />}
+                {viewMode === 'teacher' ? <EyeIcon className="w-5 h-5" /> : <EyeSlashIcon className="w-5 h-5 text-gray-300" />}
             </button>
             
             <button
