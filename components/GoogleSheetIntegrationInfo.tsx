@@ -3,10 +3,10 @@ import { InfoIcon } from './icons/InfoIcon';
 
 const appScriptCode = `
 /**
- * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.4)
+ * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.5)
  * Optimized for 200-300 simultaneous requests.
  * Supports offline sync with correct dates.
- * Logic Update: 2-Pass Search to prevent duplicate dates.
+ * Logic Update: Date Row moved to 12 (K12:T12).
  * Configuration: Prioritizes W6-W10 for new classes.
  */
 
@@ -16,11 +16,11 @@ function getFormattedDate(d) {
 }
 
 function getSheetConfigs() {
-  // UPDATED v3.4: Order changed to prioritize filling W6-W10 first for new dates
+  // UPDATED v3.5: Date row moved to 12. Order prioritizes W6-W10.
   return [
-    { name: "W6-W10", dateRow: 10, startCol: 11, endCol: 20 },
-    { name: "W1-W5", dateRow: 10, startCol: 11, endCol: 20 },
-    { name: "W11-W14", dateRow: 10, startCol: 11, endCol: 20 }
+    { name: "W6-W10", dateRow: 12, startCol: 11, endCol: 20 },
+    { name: "W1-W5", dateRow: 12, startCol: 11, endCol: 20 },
+    { name: "W11-W14", dateRow: 12, startCol: 11, endCol: 20 }
   ];
 }
 
@@ -90,11 +90,11 @@ function doPost(e) {
       }
     }
 
-    if (!targetSheet) throw "All attendance sheets are full or date not found in range K10:T10.";
+    if (!targetSheet) throw "All attendance sheets are full or date not found in range K12:T12.";
 
     if (isNewDate) {
-      // Write new date to Row 10
-      targetSheet.getRange(10, targetCol).setValue(dateStr).setNumberFormat("@");
+      // Write new date to Row 12 (K12:T12)
+      targetSheet.getRange(12, targetCol).setValue(dateStr).setNumberFormat("@");
     }
 
     // 3. Find or Add Student Row (Fast lookup)
@@ -187,19 +187,19 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
       <div className="flex items-start gap-3">
         <InfoIcon className="w-6 h-6 mt-1 text-blue-600" />
         <div>
-          <h3 className="text-lg font-bold text-blue-900">Script Update Required (V3.4)</h3>
+          <h3 className="text-lg font-bold text-blue-900">Script Update Required (V3.5)</h3>
           <p className="mt-1 text-sm text-blue-800 leading-relaxed">
-            The configuration has been updated to prioritize <strong>W6-W10</strong> for new attendance dates.
-            It also includes a 2-pass check to prevent duplicate date columns.
+            The configuration has been updated to use <strong>Row 12</strong> (Range K12:T12) for date headers.
+            Please update your Google Apps Script to ensure attendance is recorded in the correct row.
           </p>
           <div className="mt-4 bg-gray-900 p-4 rounded-xl border border-blue-200">
             <div className="flex justify-between items-center mb-3">
-              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">UPDATED LOGIC</span>
+              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">UPDATED LOGIC V3.5</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-4 py-1.5 rounded-full font-bold transition-all ${copied ? 'bg-green-600 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
               >
-                {copied ? '✓ COPIED' : 'COPY SCRIPT v3.4'}
+                {copied ? '✓ COPIED' : 'COPY SCRIPT v3.5'}
               </button>
             </div>
             <pre className="text-[9px] text-gray-400 max-h-48 overflow-y-auto whitespace-pre-wrap font-mono p-2 bg-black/30 rounded">
@@ -207,7 +207,7 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
             </pre>
           </div>
           <p className="mt-3 text-[11px] text-blue-600 italic">
-            * After copying, remember to click "Deploy &gt; New Deployment" in Google Apps Script.
+            * After copying, remember to click "Deploy &gt; New Deployment" in Google Apps Script and update the URL below.
           </p>
         </div>
       </div>
