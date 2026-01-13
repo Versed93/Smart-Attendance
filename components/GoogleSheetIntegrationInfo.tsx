@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { InfoIcon } from './icons/InfoIcon';
+import { DownloadIcon } from './icons/DownloadIcon';
+import { PRE_REGISTERED_STUDENTS } from '../studentList';
 
 const appScriptCode = `
 /**
@@ -182,24 +184,99 @@ function doGet(e) {
 
 export const GoogleSheetIntegrationInfo: React.FC = () => {
   const [copied, setCopied] = useState(false);
+
+  const handleDownloadTemplate = () => {
+    // Generate CSV to mimic the spreadsheet structure
+    // Row 1-11: Empty (padding for script to detect Row 12 date header)
+    const csvRows = [];
+    for (let i = 0; i < 11; i++) {
+        csvRows.push(new Array(12).fill("").join(","));
+    }
+
+    // Row 12: Date Header placeholder at Column K (Index 10)
+    // Cols A-J (0-9) empty
+    const row12 = new Array(11).fill(""); 
+    row12.push("DATE_PLACEHOLDER"); // K12
+    csvRows.push(row12.join(","));
+
+    // Row 13: Student Headers
+    // Col B (1): Student ID
+    // Col D (3): Student Name
+    const row13 = new Array(12).fill("");
+    row13[1] = "STUDENT ID";
+    row13[3] = "STUDENT NAME";
+    csvRows.push(row13.join(","));
+
+    // Row 14+: Student Data
+    PRE_REGISTERED_STUDENTS.forEach(student => {
+        const row = new Array(12).fill("");
+        // Simple escape for CSV
+        row[1] = `"${student.id}"`;
+        row[3] = `"${student.name.replace(/"/g, '""')}"`;
+        csvRows.push(row.join(","));
+    });
+
+    const csvContent = csvRows.join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", "UTS_Attendance_Sheet_Template.csv");
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   return (
     <div className="w-full p-4 rounded-lg bg-blue-50 border border-blue-200 text-blue-800 mb-4 shadow-sm">
       <div className="flex items-start gap-3">
         <InfoIcon className="w-6 h-6 mt-1 text-blue-600" />
-        <div>
-          <h3 className="text-lg font-bold text-blue-900">Script Update Required (V3.5)</h3>
+        <div className="flex-1">
+          <h3 className="text-lg font-bold text-blue-900">Google Sheets Integration Setup</h3>
+          
+          {/* TEMPLATE SECTION */}
+          <div className="mt-4 mb-6 bg-white p-4 rounded-xl border border-blue-100 shadow-sm">
+             <div className="flex items-center gap-2 mb-2">
+                 <div className="bg-green-100 text-green-700 p-1 rounded-lg">
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+                 </div>
+                 <h4 className="text-sm font-bold text-gray-800">Step 1: Get the Spreadsheet</h4>
+             </div>
+             <p className="text-xs text-gray-600 mb-3 leading-relaxed">
+                We have generated a template for you containing the <strong>Full Student List ({PRE_REGISTERED_STUDENTS.length} students)</strong> formatted correctly for the script (IDs in Column B, Names in Column D).
+             </p>
+             <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                <button 
+                    onClick={handleDownloadTemplate}
+                    className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white text-xs font-bold rounded-lg hover:bg-green-700 transition-colors shadow-sm active:scale-95"
+                >
+                    <DownloadIcon className="w-4 h-4" />
+                    Download Template (.csv)
+                </button>
+                <span className="text-[10px] text-gray-400">
+                    Import this file into Google Sheets and rename the sheet tab to <strong>W1-W5</strong>.
+                </span>
+             </div>
+          </div>
+
+          <div className="flex items-center gap-2 mb-2">
+             <div className="bg-indigo-100 text-indigo-700 p-1 rounded-lg">
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
+             </div>
+             <h4 className="text-sm font-bold text-gray-800">Step 2: Add Apps Script</h4>
+          </div>
           <p className="mt-1 text-sm text-blue-800 leading-relaxed">
-            The configuration has been updated to use <strong>Row 12</strong> (Range K12:T12) for date headers.
-            Please update your Google Apps Script to ensure attendance is recorded in the correct row.
+            The script is configured to look for student data starting at <strong>Row 14</strong> and date headers at <strong>Row 12</strong>.
+            Paste the code below into <em>Extensions &gt; Apps Script</em>.
           </p>
           <div className="mt-4 bg-gray-900 p-4 rounded-xl border border-blue-200">
             <div className="flex justify-between items-center mb-3">
-              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">UPDATED LOGIC V3.5</span>
+              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">APPS SCRIPT V3.5</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-4 py-1.5 rounded-full font-bold transition-all ${copied ? 'bg-green-600 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
               >
-                {copied ? '✓ COPIED' : 'COPY SCRIPT v3.5'}
+                {copied ? '✓ COPIED' : 'COPY CODE'}
               </button>
             </div>
             <pre className="text-[9px] text-gray-400 max-h-48 overflow-y-auto whitespace-pre-wrap font-mono p-2 bg-black/30 rounded">
@@ -207,7 +284,7 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
             </pre>
           </div>
           <p className="mt-3 text-[11px] text-blue-600 italic">
-            * After copying, remember to click "Deploy &gt; New Deployment" in Google Apps Script and update the URL below.
+            * After copying, remember to click "Deploy &gt; New Deployment" (Web App, Anyone) and update the URL above.
           </p>
         </div>
       </div>
