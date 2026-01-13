@@ -15,6 +15,8 @@ import { GlobeIcon } from './icons/GlobeIcon';
 import { MapPinIcon } from './icons/MapPinIcon';
 import { ExclamationTriangleIcon } from './icons/ExclamationTriangleIcon';
 import { LockClosedIcon } from './icons/LockClosedIcon';
+import { SpeakerWaveIcon } from './icons/SpeakerWaveIcon';
+import { SpeakerXMarkIcon } from './icons/SpeakerXMarkIcon';
 import { GoogleSheetIntegrationInfo } from './GoogleSheetIntegrationInfo';
 import { PRE_REGISTERED_STUDENTS } from '../studentList';
 
@@ -70,6 +72,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   
   const [showEmailSetup, setShowEmailSetup] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'teacher' | 'classroom'>('teacher');
+  const [isSoundEnabled, setIsSoundEnabled] = useState(true);
   
   const [sortBy, setSortBy] = useState<SortOption>('newest');
   
@@ -101,9 +104,47 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isMountedRef = useRef(true);
+  const prevCountRef = useRef(attendanceList.length);
 
   // Computed: Sync Status Map
   const pendingIds = new Set(syncQueue.map(t => t.data.studentId));
+
+  // Sound Effect Logic using Web Audio API (Zero Assets)
+  const playSuccessSound = () => {
+    try {
+        const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AudioContext) return;
+        
+        const ctx = new AudioContext();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        
+        // Pleasant "Ding" sound (Sine wave with decay)
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(800, ctx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(400, ctx.currentTime + 0.3);
+        
+        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+        
+        osc.start();
+        osc.stop(ctx.currentTime + 0.3);
+    } catch (e) {
+        console.error("Audio playback failed", e);
+    }
+  };
+
+  useEffect(() => {
+    if (attendanceList.length > prevCountRef.current) {
+        if (isSoundEnabled) {
+            playSuccessSound();
+        }
+    }
+    prevCountRef.current = attendanceList.length;
+  }, [attendanceList.length, isSoundEnabled]);
 
   useEffect(() => {
     localStorage.setItem('attendance-course-name', courseName);
@@ -376,6 +417,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
          </div>
          
          <div className="flex items-center gap-2 w-full sm:w-auto justify-center sm:justify-end">
+            <button
+                onClick={() => setIsSoundEnabled(!isSoundEnabled)}
+                className={`flex items-center justify-center w-12 h-12 rounded-xl border transition-colors shadow-sm ${isSoundEnabled ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-100' : 'bg-gray-50 text-gray-400 border-gray-200 hover:bg-gray-100'}`}
+                title={isSoundEnabled ? "Mute Sound" : "Enable Sound"}
+            >
+                {isSoundEnabled ? <SpeakerWaveIcon className="w-5 h-5" /> : <SpeakerXMarkIcon className="w-5 h-5" />}
+            </button>
             <button 
                 onClick={() => setViewMode(viewMode === 'teacher' ? 'classroom' : 'teacher')} 
                 className={`group flex items-center gap-3 px-5 py-3 rounded-xl font-bold transition-all duration-200 justify-center sm:justify-between ${

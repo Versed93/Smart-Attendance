@@ -21,6 +21,7 @@ type Status = 'validating' | 'validating-gps' | 'form' | 'success' | 'error' | '
 const COOLDOWN_MINUTES = 30;
 const COOLDOWN_MS = COOLDOWN_MINUTES * 60 * 1000;
 const LAST_SCAN_KEY = 'attendance-last-scan-standard-v1';
+const STUDENT_PROFILE_KEY = 'attendance-student-profile-v1';
 
 // Haversine formula to calculate distance in meters
 const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -60,6 +61,21 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [cooldownEndTime, setCooldownEndTime] = useState<number | null>(null);
   const [remainingTime, setRemainingTime] = useState<string>('');
   
+  // Load saved profile on mount
+  useEffect(() => {
+      const savedProfile = localStorage.getItem(STUDENT_PROFILE_KEY);
+      if (savedProfile) {
+          try {
+              const { name: sName, studentId: sId, email: sEmail } = JSON.parse(savedProfile);
+              if (sName) setName(sName);
+              if (sId) setStudentId(sId);
+              if (sEmail) setEmail(sEmail);
+          } catch (e) {
+              console.error("Failed to load profile", e);
+          }
+      }
+  }, []);
+
   useEffect(() => {
     if (bypassRestrictions) { setStatus('form'); return; }
     if (!token) { setStatus('error'); setMessage('Invalid link. Please scan the QR code again.'); return; }
@@ -99,9 +115,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
                     );
                     
                     // GPS ACCURACY FIX:
-                    // GPS signals fluctuate indoors. The 'accuracy' property tells us the margin of error (e.g. +/- 30m).
-                    // We accept the student if: Calculated Distance MINUS Accuracy is within range.
-                    // This creates an "innocent until proven guilty" overlap check.
                     const accuracy = position.coords.accuracy || 0;
                     const effectiveDistance = Math.max(0, dist - accuracy);
                     
@@ -153,6 +166,9 @@ export const StudentView: React.FC<StudentViewProps> = ({
     const studentIdRegex = /^[A-Z]{3}\d{8}$/;
     if (!studentIdRegex.test(studentId)) { setFormError('Invalid ID (e.g. FIA24001006).'); return; }
     
+    // Save profile for "Remember Me"
+    localStorage.setItem(STUDENT_PROFILE_KEY, JSON.stringify({ name, studentId, email }));
+
     const result = markAttendance(name, studentId, email);
     if (result.success) {
       if (!bypassRestrictions) localStorage.setItem(LAST_SCAN_KEY, Date.now().toString());
@@ -256,6 +272,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
                 <button type="submit" className="w-full flex justify-center items-center gap-2 py-4 px-4 rounded-xl shadow-lg shadow-brand-primary/30 text-base font-bold text-white bg-brand-primary hover:bg-brand-secondary active:scale-[0.98] transition-all mt-4">
                     Submit Attendance
                 </button>
+                
+                <p className="text-[10px] text-center text-gray-400">Details will be saved for next time.</p>
             </form>
         )}
 
