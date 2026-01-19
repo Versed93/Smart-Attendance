@@ -18,9 +18,6 @@ interface StudentViewProps {
 
 type Status = 'validating' | 'validating-gps' | 'form' | 'success' | 'error' | 'cooldown';
 
-const COOLDOWN_MINUTES = 30;
-const COOLDOWN_MS = COOLDOWN_MINUTES * 60 * 1000;
-const LAST_SCAN_KEY = 'attendance-last-scan-standard-v1';
 const STUDENT_PROFILE_KEY = 'attendance-student-profile-v1';
 
 // Haversine formula to calculate distance in meters
@@ -58,8 +55,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [status, setStatus] = useState<Status>('validating');
   const [message, setMessage] = useState('');
   const [formError, setFormError] = useState('');
-  const [cooldownEndTime, setCooldownEndTime] = useState<number | null>(null);
-  const [remainingTime, setRemainingTime] = useState<string>('');
   
   // Load saved profile on mount
   useEffect(() => {
@@ -85,16 +80,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
     const isValid = !isNaN(qrTime) && (now - qrTime < 60000); 
     
     if (isValid) {
-        const lastScanStr = localStorage.getItem(LAST_SCAN_KEY);
-        if (lastScanStr) {
-            const lastScanTime = parseInt(lastScanStr, 10);
-            const timeDiff = now - lastScanTime;
-            if (timeDiff < COOLDOWN_MS) {
-                setCooldownEndTime(lastScanTime + COOLDOWN_MS);
-                setStatus('cooldown');
-                return;
-            }
-        }
+        // Cooldown check removed to allow multiple scans
         
         // Check Geolocation if constraints exist
         if (geoConstraints) {
@@ -145,20 +131,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
         setMessage('This QR code has expired. Please scan the new code on the teacher\'s screen.');
     }
   }, [token, bypassRestrictions, geoConstraints]);
-
-  useEffect(() => {
-    if (status !== 'cooldown' || !cooldownEndTime) return;
-    const interval = setInterval(() => {
-        const diff = cooldownEndTime - Date.now();
-        if (diff <= 0) { setStatus('form'); setCooldownEndTime(null); clearInterval(interval); }
-        else {
-            const minutes = Math.floor((diff / 60000));
-            const seconds = Math.floor((diff % 60000) / 1000);
-            setRemainingTime(`${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`);
-        }
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [status, cooldownEndTime]);
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -171,7 +143,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
     const result = markAttendance(name, studentId, email);
     if (result.success) {
-      if (!bypassRestrictions) localStorage.setItem(LAST_SCAN_KEY, Date.now().toString());
       setStatus('success');
     } else {
       setStatus('error');
@@ -216,17 +187,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
     <div className="relative">
         {bypassRestrictions && onExit && (
             <button onClick={onExit} className="absolute -top-2 -right-2 text-xs text-gray-400 hover:text-gray-600 p-2">✕ Exit Admin</button>
-        )}
-
-        {status === 'cooldown' && (
-            <div className="text-center px-4">
-                <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-yellow-100 text-yellow-600 mb-4 animate-pulse"><ClockIcon className="w-8 h-8" /></div>
-                <h3 className="text-2xl font-bold text-yellow-700 mb-2">Device Limit</h3>
-                <p className="text-gray-600 mb-6 max-w-sm mx-auto">This device is locked to prevent multiple entries. Next scan in:</p>
-                <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-6 max-w-xs mx-auto">
-                    <div className="text-5xl font-mono font-bold text-yellow-800 tracking-wider">{remainingTime}</div>
-                </div>
-            </div>
         )}
 
         {status === 'form' && (
@@ -377,11 +337,15 @@ export const StudentView: React.FC<StudentViewProps> = ({
                                  </div>
                             )}
                             
-                            {bypassRestrictions && !isSyncing && (
-                                 <button onClick={() => { setName(''); setStudentId(''); setEmail(''); setStatus('form'); }} className="mt-6 w-full py-3 bg-brand-primary text-white rounded-xl font-bold shadow-lg shadow-brand-primary/20 hover:scale-[1.02] active:scale-95 transition-all">
-                                    Register Next Student
-                                 </button>
-                            )}
+                            {/* "Register Next Student" button is now available even without bypassRestrictions if needed, 
+                                but we'll show it based on completion state. 
+                                Since we removed cooldown, they can just refresh or we can add a button. 
+                                For now, I'll allow the "Register Next Student" button if they are in success mode 
+                                and want to add another. */}
+                            
+                            <button onClick={() => { setName(''); setStudentId(''); setEmail(''); setStatus('form'); }} className="mt-6 w-full py-3 bg-brand-primary text-white rounded-xl font-bold shadow-lg shadow-brand-primary/20 hover:scale-[1.02] active:scale-95 transition-all">
+                                Register Next Student
+                            </button>
                         </div>
                     </div>
                 )}
