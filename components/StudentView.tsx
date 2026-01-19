@@ -374,13 +374,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
                                     </div>
                                  </div>
                             )}
-                            
-                            <button 
-                                onClick={() => { setName(''); setStudentId(''); setEmail(''); setStatus('form'); }} 
-                                className="mt-6 w-full py-3 bg-brand-primary text-white rounded-xl font-bold shadow-lg shadow-brand-primary/20 hover:scale-[1.02] active:scale-95 transition-all focus:ring-4 focus:ring-brand-primary/50 focus:outline-none"
-                            >
-                                Register Next Student
-                            </button>
                         </div>
                     </div>
                 )}

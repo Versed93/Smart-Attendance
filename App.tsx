@@ -11,10 +11,10 @@ type View = 'teacher' | 'student';
 
 const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
-const SCRIPT_URL_KEY = 'attendance-script-url-v25'; // Bumped version to v25 for new URL
+const SCRIPT_URL_KEY = 'attendance-script-url-v25'; 
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
-const LECTURER_PASSWORD = 'adminscm'; // Updated secure password
+const LECTURER_PASSWORD = 'adminscm'; 
 
 const App: React.FC = () => {
   const urlParams = new URLSearchParams(window.location.search);
@@ -64,18 +64,18 @@ const App: React.FC = () => {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncStatus, setSyncStatus] = useState<string>('Initializing...');
   
-  // Ref to hold the resolve function of the jitter delay promise, allowing manual retry
-  const retryResolveRef = useRef<(() => void) | null>(null);
+  // Retry Trigger Mechanism
+  const [retryTrigger, setRetryTrigger] = useState(0);
+  const isSyncingRef = useRef(false); // Prevents dependency loops
 
   // Network Listener
   useEffect(() => {
-    // Debug log to confirm app version in production console
-    console.log("UTS QR Attendance App Mounted - v1.2.0 (Detailed Status)");
+    console.log("UTS QR Attendance App Mounted - v1.3.0 (Sync Loop Fix)");
 
     const handleOnline = () => {
         setIsOnline(true);
-        // Immediately trigger retry when back online
-        if (retryResolveRef.current) retryResolveRef.current();
+        // Trigger immediate retry when back online
+        setRetryTrigger(c => c + 1);
     };
     const handleOffline = () => setIsOnline(false);
 
@@ -128,27 +128,29 @@ const App: React.FC = () => {
     localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(syncQueue));
   }, [syncQueue]);
 
+  // --- CORE SYNC ENGINE (FIXED) ---
   useEffect(() => {
-    if (syncQueue.length === 0 || isSyncing) return;
+    // Conditions to SKIP processing
+    if (syncQueue.length === 0) return;
+    if (isSyncingRef.current) return; // Prevent concurrent runs
     if (!scriptUrl || !scriptUrl.startsWith('http')) return;
+    if (!isOnline) return;
 
-    // If offline, pause processing but don't clear queue.
-    if (!isOnline) {
-        return;
-    }
-
-    let active = true;
+    // Start Lock
+    isSyncingRef.current = true;
+    setIsSyncing(true);
+    let isMounted = true;
 
     const processNext = async () => {
-        setIsSyncing(true);
         const task = syncQueue[0];
-
+        
         try {
-            setSyncStatus('Preparing data package...');
+            if (isMounted) setSyncStatus('Preparing data package...');
+            
             const formData = new URLSearchParams();
             Object.entries(task.data).forEach(([k, v]) => formData.append(k, String(v)));
 
-            // V3.2 Feature: Send the ACTUAL date of the record so offline syncs don't use "today's" date
+            // Feature: Send ACTUAL date
             const recordTimestamp = parseInt(task.data.timestamp || Date.now().toString());
             const recordDate = new Date(recordTimestamp);
             const day = String(recordDate.getDate()).padStart(2, '0');
@@ -157,13 +159,12 @@ const App: React.FC = () => {
             formData.append('customDate', `${day}/${month}/${year}`);
 
             const controller = new AbortController();
-            // Increased timeout to 60 seconds (60000ms) to handle high concurrency server waits (LockService takes up to 30s)
             const timeoutId = setTimeout(() => {
-                if (active) setSyncStatus('Server is busy (High Traffic)...');
+                if (isMounted) setSyncStatus('Server is busy (High Traffic)...');
                 controller.abort();
-            }, 60000);
+            }, 60000); // 60s timeout
 
-            if (active) setSyncStatus('Connecting to Google Server...');
+            if (isMounted) setSyncStatus('Connecting to Google Server...');
 
             const response = await fetch(scriptUrl.trim(), {
                 method: 'POST',
@@ -174,11 +175,11 @@ const App: React.FC = () => {
 
             clearTimeout(timeoutId);
 
-            if (active) setSyncStatus('Verifying server response...');
+            if (isMounted) setSyncStatus('Verifying server response...');
 
             if (!response.ok) {
                 const errText = await response.text().catch(() => response.statusText);
-                throw new Error(`HTTP Error ${response.status}: ${errText.slice(0, 200) || 'Check Script URL permissions'}`);
+                throw new Error(`HTTP Error ${response.status}: ${errText.slice(0, 200)}`);
             }
 
             const text = await response.text();
@@ -187,57 +188,56 @@ const App: React.FC = () => {
                 result = JSON.parse(text);
             } catch(e) {
                 const snippet = text.length > 100 ? text.substring(0, 100) + '...' : text;
-                throw new Error(`Invalid Server Response: Expected JSON but got "${snippet}". Check Script URL.`);
+                throw new Error(`Invalid JSON: "${snippet}"`);
             }
 
             if (result.result !== 'success') {
-                throw new Error(`Script Error: ${result.message || 'Data rejected by script'}`);
+                throw new Error(`Script Error: ${result.message || 'Rejected'}`);
             }
 
-            if (active) {
+            // SUCCESS
+            if (isMounted) {
               setSyncStatus('Sync successful!');
-              setSyncQueue(prev => prev.filter(t => t.id !== task.id));
+              setSyncQueue(prev => prev.filter(t => t.id !== task.id)); // This triggers the effect again for next item
               setSyncError(null);
             }
 
         } catch (err: any) {
             console.error("Cloud Sync Error:", err);
             
-            let detailedError = err.message || "Failed to sync with cloud.";
+            let detailedError = err.message || "Failed to sync.";
             if (err.name === 'AbortError') {
-              detailedError = "Connection Timeout: Server busy (High Traffic). Retrying...";
-              if (active) setSyncStatus('Request timed out. Retrying...');
+              detailedError = "Connection Timeout: Server busy. Retrying...";
+              if (isMounted) setSyncStatus('Request timed out. Retrying...');
             } else if (err.message === 'Failed to fetch') {
-              // Usually indicates offline or DNS failure
-              detailedError = "Network Error: Could not connect to Google Script. Pausing.";
-              if (active) setSyncStatus('Network error. Pausing sync...');
+              detailedError = "Network Error: Pausing.";
+              if (isMounted) setSyncStatus('Network error. Pausing...');
             } else {
-              if (active) setSyncStatus(`Error: ${detailedError.substring(0, 30)}...`);
+              if (isMounted) setSyncStatus(`Error: ${detailedError.substring(0, 30)}...`);
             }
             
-            if (active) setSyncError(detailedError);
-            
-            // Wait before retry, but allow immediate retry if 'online' event fires
-            // Adjusted jitter: 2s to 22s to better spread out the 'thundering herd' of 230 students
-            const jitter = 2000 + Math.random() * 20000;
-            await new Promise<void>(resolve => {
-                retryResolveRef.current = resolve;
-                setTimeout(resolve, jitter);
-            });
-            retryResolveRef.current = null;
+            if (isMounted) {
+                setSyncError(detailedError);
+                // Schedule Retry
+                const jitter = 2000 + Math.random() * 5000;
+                setTimeout(() => {
+                   if (isMounted) setRetryTrigger(c => c + 1);
+                }, jitter);
+            }
         } finally {
-            if (active) setIsSyncing(false);
+            if (isMounted) {
+                isSyncingRef.current = false;
+                setIsSyncing(false);
+            }
         }
     };
 
     processNext();
-    return () => { active = false; };
-  }, [syncQueue, isSyncing, scriptUrl, isOnline]);
+    return () => { isMounted = false; };
+  }, [syncQueue, scriptUrl, isOnline, retryTrigger]); // NOTE: isSyncing is NOT a dependency to avoid loops
 
   const handleRetryNow = useCallback(() => {
-      if (retryResolveRef.current) {
-          retryResolveRef.current(); // Resolve the delay promise immediately
-      }
+      setRetryTrigger(c => c + 1);
   }, []);
 
   const handleLogin = (password: string) => {
@@ -324,9 +324,6 @@ const App: React.FC = () => {
   };
   
   const onTestAttendance = () => {
-      // Use a future date (Jan 1, 2030) to force the script to create a NEW column.
-      // This bypasses the "Duplicate Check" in the script (which might find today's date in W1-W5).
-      // Since the script prioritizes W6-W10 for NEW dates, this verifies the W6-W10 routing is working.
       const futureDate = new Date('2030-01-01T12:00:00');
       addStudent(
         "TEST W6-W10 (Future Date)", 
@@ -358,14 +355,13 @@ const App: React.FC = () => {
                      onOpenKiosk={onOpenKiosk}
                      onManualAdd={onManualAdd}
                      pendingSyncCount={syncQueue.length}
-                     syncQueue={syncQueue} // Pass full queue
+                     syncQueue={syncQueue} 
                      syncError={syncError}
                      onRetrySync={handleRetryNow}
                      isOnline={isOnline}
                      onLogout={handleLogout}
                  />
                  
-                 {/* Prominent Error Notification */}
                  {syncError && isOnline && (
                     <div className="fixed top-6 right-6 max-w-sm w-full bg-white border-l-4 border-red-500 shadow-2xl rounded-r-lg p-5 z-[100] flex flex-col gap-3 animate-pulse" role="alert" aria-live="assertive">
                         <div className="flex items-start gap-4">
@@ -420,7 +416,6 @@ const App: React.FC = () => {
            </div>
        )}
        
-       {/* Install App Prompt handles both Android (Native) and iOS (Instructions) */}
        <InstallPwaPrompt />
     </div>
   );
