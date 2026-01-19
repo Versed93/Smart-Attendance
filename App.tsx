@@ -11,7 +11,7 @@ type View = 'teacher' | 'student';
 
 const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
-const SCRIPT_URL_KEY = 'attendance-script-url-v25'; 
+const SCRIPT_URL_KEY = 'attendance-script-url-v26'; 
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
@@ -50,7 +50,7 @@ const App: React.FC = () => {
   
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
     const saved = localStorage.getItem(SCRIPT_URL_KEY);
-    return saved || 'https://script.google.com/macros/s/AKfycbyB5m9zC99c-xlR-hPgdSbEIqzJF7fgLlexTQonylrlxbPQTJ4JB9dJZ6zzfdEhXsjYPw/exec';
+    return saved || 'https://script.google.com/macros/s/AKfycbyiqXBYucrOqYSzfmK2q2jsuzBuSv34-8JrqVEmZ05myEN4ibUoGZ6zzmxlRDGvhLHa/exec';
   });
 
   const [syncQueue, setSyncQueue] = useState<SyncTask[]>(() => {
