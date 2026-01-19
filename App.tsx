@@ -10,8 +10,8 @@ type View = 'teacher' | 'student';
 
 const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
-const SCRIPT_URL_KEY = 'attendance-script-url-v35'; 
-const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
+const SCRIPT_URL_KEY = 'attendance-script-url-v36'; 
+const SYNC_QUEUE_KEY = 'attendance-sync-queue-v3';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
 
@@ -70,7 +70,7 @@ const App: React.FC = () => {
 
   // Network Listener
   useEffect(() => {
-    console.log("UTS QR Attendance App Mounted - v1.7.6 (Script Update)");
+    console.log("UTS QR Attendance App Mounted - v1.7.7 (Timeout Fix)");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -208,15 +208,17 @@ const App: React.FC = () => {
             };
 
             const controller = new AbortController();
+            
+            // INCREASED TIMEOUT: Google Apps Script LockService waits 30s max. 
+            // We set client timeout to 45s to allow for lock wait + execution.
             const timeoutId = setTimeout(() => {
-                if (isMounted) setSyncStatus('Server is busy (High Traffic)...');
+                if (isMounted) setSyncStatus('Server is busy (Lock wait)...');
                 controller.abort();
-            }, 20000); // Increased timeout to 20s for script locks
+            }, 45000); 
 
             if (isMounted) setSyncStatus('Connecting to Google Server...');
 
             // VITAL FIX: Use text/plain to avoid CORS Preflight (OPTIONS request)
-            // The Google Apps Script must parse the JSON from the post body string.
             const response = await fetch(scriptUrl.trim(), {
                 method: 'POST',
                 body: JSON.stringify(payload),
@@ -272,8 +274,8 @@ const App: React.FC = () => {
             
             let detailedError = err.message || "Failed to sync.";
             if (err.name === 'AbortError') {
-              detailedError = "Connection Timeout: Server busy. Retrying...";
-              if (isMounted) setSyncStatus('Saved. Uploading in background...');
+              detailedError = "Connection Timeout: Server busy (High Load). Retrying...";
+              if (isMounted) setSyncStatus('Waiting for server...');
             } else if (err.message === 'Failed to fetch') {
               detailedError = "Network Error: Could not connect. Check internet. Retrying...";
               if (isMounted) setSyncStatus('Saved. Uploading in background...');
