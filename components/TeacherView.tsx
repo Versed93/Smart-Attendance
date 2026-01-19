@@ -683,9 +683,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             <div 
               className={`bg-white p-2 rounded-3xl shadow-[inset_0_2px_8px_rgba(0,0,0,0.05)] border relative w-full transition-all duration-500 ease-in-out ${
                   viewMode === 'teacher' 
-                  ? 'max-w-[260px] lg:max-w-[320px]' 
+                  ? 'max-w-[200px] lg:max-w-[240px]' 
                   : 'max-w-[85vmin] max-h-[85vmin]'
-              } aspect-square flex items-center justify-center z-10`}
+              } aspect-square flex items-center justify-center z-10 mx-auto`}
               role="img"
               aria-label="Dynamic QR Code for attendance. Updates every second."
             >
@@ -694,7 +694,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                       <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary"></div>
                   </div>
                )}
-              <canvas ref={canvasRef} className="w-full h-full max-w-full max-h-full" />
+              <canvas ref={canvasRef} className="w-full h-full object-contain" />
             </div>
             
             <div className="mt-6 flex flex-col items-center">

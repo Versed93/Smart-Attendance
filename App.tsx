@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { TeacherView } from './components/TeacherView';
 import { StudentView } from './components/StudentView';
@@ -12,7 +11,7 @@ type View = 'teacher' | 'student';
 
 const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
-const SCRIPT_URL_KEY = 'attendance-script-url-v36'; 
+const SCRIPT_URL_KEY = 'attendance-script-url-v37'; 
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v3';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const KNOWN_STUDENTS_KEY = 'attendance-known-students-v1';
@@ -75,7 +74,7 @@ const App: React.FC = () => {
   
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
     const saved = localStorage.getItem(SCRIPT_URL_KEY);
-    return saved || 'https://script.google.com/macros/s/AKfycbzQwbdutf5iIiJSTwxxLbD5ETsXoqqwkYr-PbWp7Yy-HjAjJUn7bys7-fkHqG7aeL1f/exec';
+    return saved || 'https://script.google.com/macros/s/AKfycbzDUCgVLQefbF7pqCnFHAWZaxi9KnJYBzfqrST9nibnGASeDqqlRuFLWm6O4gu0d-kc/exec';
   });
 
   const [syncQueue, setSyncQueue] = useState<SyncTask[]>(() => {

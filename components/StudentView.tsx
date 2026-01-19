@@ -212,7 +212,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
             <h3 className="text-2xl font-black text-gray-800 mb-2">Your Attendance Code</h3>
             <p className="text-sm text-gray-500 mb-6 max-w-xs">Please present this QR code to the lecturer for scanning.</p>
             <div className="bg-white p-4 rounded-xl shadow-lg border w-full max-w-[250px] aspect-square" role="img" aria-label={`QR Code for ${name}`}>
-                <canvas ref={canvasRef} className="w-full h-full" />
+                <canvas ref={canvasRef} className="w-full h-full object-contain" />
             </div>
             <div className="mt-6 text-center bg-gray-50 p-3 rounded-lg border w-full max-w-[250px]">
                 <p className="text-sm font-bold text-gray-900">{name}</p>
