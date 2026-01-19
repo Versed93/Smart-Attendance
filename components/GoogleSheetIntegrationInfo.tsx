@@ -5,12 +5,15 @@ import { PRE_REGISTERED_STUDENTS } from '../studentList';
 
 const appScriptCode = `
 /**
- * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.7 - Layout W6-W10)
- * Optimized for layout:
- * - Sheet: "W6-W10"
- * - Date Header: Row 12 (Cols M-T)
- * - Student IDs: Col B (Row 14+)
- * - Data Area: Cols M-T (Row 14+)
+ * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.8 - W6-W10 Robust)
+ * 
+ * SETUP INSTRUCTIONS:
+ * 1. Paste this code into Extensions > Apps Script
+ * 2. Save
+ * 3. Deploy > New Deployment > Select "Web App"
+ * 4. Execute as: "Me"
+ * 5. Who has access: "Anyone"
+ * 6. Copy the new URL and paste it into the App Settings.
  */
 
 function getFormattedDate(d) {
@@ -34,7 +37,6 @@ function doPost(e) {
     var doc = SpreadsheetApp.getActiveSpreadsheet();
     var data = {};
     
-    // Robust parsing for text/plain payloads
     try {
       if (e.postData && e.postData.contents) {
         data = JSON.parse(e.postData.contents);
@@ -42,72 +44,61 @@ function doPost(e) {
         data = e.parameter;
       }
     } catch(parseErr) {
-      console.error("JSON Parse Error: " + parseErr);
-      return ContentService.createTextOutput(JSON.stringify({result: "error", message: "Invalid JSON format"})).setMimeType(ContentService.MimeType.JSON);
+      return ContentService.createTextOutput(JSON.stringify({result: "error", message: "Invalid JSON"})).setMimeType(ContentService.MimeType.JSON);
     }
     
     var studentId = String(data.studentId || "").toUpperCase().trim();
     var studentName = String(data.name || "").toUpperCase().trim();
     var status = data.status || 'P';
-    
-    var providedDateStr = data.customDate || "";
-    var dateStr = providedDateStr ? providedDateStr : getFormattedDate();
+    var dateStr = data.customDate || getFormattedDate();
 
     if (!studentId) throw "Missing Student ID";
 
     var configs = getSheetConfigs();
-    var targetSheet, targetCol, isNewDate = true;
+    var targetSheet, targetCol;
 
-    // PASS 1: Check if date exists in M12:T12
+    // 1. Locate the correct sheet and column (M12:T12)
     for (var i = 0; i < configs.length; i++) {
       var conf = configs[i];
       var sheet = doc.getSheetByName(conf.name);
       if (!sheet) continue;
       
-      var headerValues = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1).getDisplayValues()[0];
+      // Get headers in Row 12, Cols M(13) to T(20)
+      var range = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1);
+      var headerValues = range.getDisplayValues()[0];
       
+      // Try to find existing date
       for (var c = 0; c < headerValues.length; c++) {
         if (headerValues[c].trim() === dateStr) {
           targetSheet = sheet;
           targetCol = conf.startCol + c;
-          isNewDate = false;
           break;
+        }
+      }
+      
+      // If not found, find first empty slot
+      if (!targetCol) {
+        for (var c = 0; c < headerValues.length; c++) {
+          if (headerValues[c].trim() === "") {
+            targetSheet = sheet;
+            targetCol = conf.startCol + c;
+            // Write the date immediately to reserve it
+            sheet.getRange(conf.dateRow, targetCol).setNumberFormat("@").setValue(dateStr);
+            break;
+          }
         }
       }
       if (targetSheet) break;
     }
 
-    // PASS 2: Find first empty column in M12:T12
-    if (!targetSheet) {
-      for (var i = 0; i < configs.length; i++) {
-        var conf = configs[i];
-        var sheet = doc.getSheetByName(conf.name);
-        if (!sheet) continue;
-        
-        var headerValues = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1).getDisplayValues()[0];
-        
-        for (var c = 0; c < headerValues.length; c++) {
-          if (headerValues[c].trim() === "") {
-            targetSheet = sheet;
-            targetCol = conf.startCol + c;
-            break;
-          }
-        }
-        if (targetSheet) break;
-      }
-    }
+    if (!targetSheet) throw "Sheet 'W6-W10' not found or week range (M-T) is full.";
 
-    if (!targetSheet) throw "Sheet 'W6-W10' not found or range M12:T12 is full.";
-
-    if (isNewDate) {
-      // Write new date to Row 12
-      targetSheet.getRange(12, targetCol).setValue(dateStr).setNumberFormat("@");
-    }
-
-    // 3. Find Student Row in Column B (Index 2), starting Row 14
+    // 2. Find Student Row in Column B (Index 2), rows 14 to 224+
     var startRow = 14;
-    var lastRow = Math.max(targetSheet.getLastRow(), 224); // Ensure we cover the range up to 224
-    var ids = targetSheet.getRange(startRow, 2, lastRow - startRow + 1, 1).getValues();
+    var lastRow = Math.max(targetSheet.getLastRow(), 224);
+    // Read Student IDs from Column B
+    var idRange = targetSheet.getRange(startRow, 2, lastRow - startRow + 1, 1);
+    var ids = idRange.getDisplayValues(); // Use DisplayValues for better text matching
     
     var studentRowAbs = -1;
     for (var r = 0; r < ids.length; r++) {
@@ -116,28 +107,24 @@ function doPost(e) {
         studentRowAbs = startRow + r;
         break;
       }
-      // Optional: Add student if empty slot found
-      if (studentRowAbs === -1 && idInCell === "") {
-        studentRowAbs = startRow + r;
-        targetSheet.getRange(studentRowAbs, 2, 1, 3).setValues([[studentId, "", studentName]]); // B=ID, D=Name
-        break;
-      }
     }
 
+    // 3. If student not found, append to the end of the list? 
+    // Or strictly rely on pre-filled list. 
+    // If not found, we will append to avoid data loss, but typically should match.
     if (studentRowAbs === -1) {
        studentRowAbs = lastRow + 1;
-       targetSheet.getRange(studentRowAbs, 2).setValue(studentId);
-       targetSheet.getRange(studentRowAbs, 4).setValue(studentName);
+       targetSheet.getRange(studentRowAbs, 2).setValue(studentId); // Col B
+       targetSheet.getRange(studentRowAbs, 4).setValue(studentName); // Col D
     }
 
-    // 4. Mark Status in the target column
+    // 4. Write Status
     targetSheet.getRange(studentRowAbs, targetCol).setValue(status);
     
     SpreadsheetApp.flush();
     return ContentService.createTextOutput(JSON.stringify({result: "success"})).setMimeType(ContentService.MimeType.JSON);
     
   } catch (err) {
-    console.error("Attendance Error: " + err);
     return ContentService.createTextOutput(JSON.stringify({result: "error", message: err.toString()})).setMimeType(ContentService.MimeType.JSON);
   } finally {
     lock.releaseLock();
@@ -145,42 +132,51 @@ function doPost(e) {
 }
 
 function doGet(e) {
-  // Read-only endpoint for refreshing client list
+  // Returns ALL attendance data for the current sheet to ensure frontend stays in sync
   try {
     var doc = SpreadsheetApp.getActiveSpreadsheet();
-    var dateStr = getFormattedDate();
     var configs = getSheetConfigs();
+    var results = [];
     
     for (var i = 0; i < configs.length; i++) {
       var conf = configs[i];
       var sheet = doc.getSheetByName(conf.name);
       if (!sheet) continue;
       
-      var headerValues = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1).getDisplayValues()[0];
-      var colIdx = -1;
-      for (var c = 0; c < headerValues.length; c++) {
-        if (headerValues[c].trim() === dateStr) { colIdx = conf.startCol + c; break; }
-      }
+      var lastRow = Math.max(sheet.getLastRow(), 224);
       
-      if (colIdx !== -1) {
-        var lastRow = Math.max(sheet.getLastRow(), 224);
-        var data = sheet.getRange(14, 2, lastRow - 14 + 1, 3).getValues(); // Cols B(2) to D(4)
-        var statuses = sheet.getRange(14, colIdx, lastRow - 14 + 1, 1).getValues();
-        
-        var results = [];
-        for (var j = 0; j < data.length; j++) {
-          var id = String(data[j][0]).trim();
-          var stat = statuses[j][0];
-          if (id && (stat === 'P' || stat === 'A')) {
-            results.push({ studentId: id, name: data[j][2], status: stat });
+      // Get Student Data (B14:D)
+      var studentData = sheet.getRange(14, 2, lastRow - 14 + 1, 3).getValues(); // B, C, D
+      
+      // Get Attendance Data (M14:T)
+      var attRange = sheet.getRange(14, conf.startCol, lastRow - 14 + 1, conf.endCol - conf.startCol + 1);
+      var attValues = attRange.getValues();
+      var headers = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1).getDisplayValues()[0];
+
+      // Flatten data
+      for (var r = 0; r < studentData.length; r++) {
+        var sId = String(studentData[r][0]).trim();
+        var sName = studentData[r][2];
+        if (!sId) continue;
+
+        // Check each date column
+        for (var c = 0; c < headers.length; c++) {
+          var date = headers[c];
+          var status = attValues[r][c];
+          if (date && (status === 'P' || status === 'A')) {
+             results.push({ 
+               studentId: sId, 
+               name: sName, 
+               status: status,
+               date: date 
+             });
           }
         }
-        return ContentService.createTextOutput(JSON.stringify(results)).setMimeType(ContentService.MimeType.JSON);
       }
     }
-    return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify(results)).setMimeType(ContentService.MimeType.JSON);
   } catch(e) {
-    return ContentService.createTextOutput("[]").setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
   }
 }
 `;
@@ -260,11 +256,11 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
              <div className="bg-indigo-100 text-indigo-700 p-1 rounded-lg">
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" /></svg>
              </div>
-             <h4 className="text-sm font-bold text-gray-800">Step 2: Update Apps Script</h4>
+             <h4 className="text-sm font-bold text-gray-800">Step 2: Update Apps Script (Important!)</h4>
           </div>
           <div className="mt-4 bg-gray-900 p-4 rounded-xl border border-blue-200">
             <div className="flex justify-between items-center mb-3">
-              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">APPS SCRIPT V3.7 (W6-W10)</span>
+              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">APPS SCRIPT V3.8 (W6-W10)</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-4 py-1.5 rounded-full font-bold transition-all ${copied ? 'bg-green-600 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
