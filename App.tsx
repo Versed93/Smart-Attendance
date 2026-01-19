@@ -10,7 +10,7 @@ type View = 'teacher' | 'student';
 
 const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
-const SCRIPT_URL_KEY = 'attendance-script-url-v32'; 
+const SCRIPT_URL_KEY = 'attendance-script-url-v33'; 
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
@@ -70,7 +70,7 @@ const App: React.FC = () => {
 
   // Network Listener
   useEffect(() => {
-    console.log("UTS QR Attendance App Mounted - v1.7.3 (Script Update)");
+    console.log("UTS QR Attendance App Mounted - v1.7.4 (Script URL Update)");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -211,7 +211,7 @@ const App: React.FC = () => {
             const timeoutId = setTimeout(() => {
                 if (isMounted) setSyncStatus('Server is busy (High Traffic)...');
                 controller.abort();
-            }, 15000); 
+            }, 20000); // Increased timeout to 20s for script locks
 
             if (isMounted) setSyncStatus('Connecting to Google Server...');
 
@@ -236,13 +236,22 @@ const App: React.FC = () => {
             }
 
             const text = await response.text();
+            
+            // Handle HTML responses (usually Google Login page = Permission Error)
+            if (text.trim().startsWith('<')) {
+                throw new Error("Access Denied: Script permissions incorrect. Set to 'Anyone'.");
+            }
+
             let result;
             try {
                 result = JSON.parse(text);
             } catch(e) {
-                // If script returns text but not JSON, it might still be success in some GAS configs, 
-                // but we expect JSON {result: "success"}
-                throw new Error(`Invalid Server Response`);
+                // If script returns text but not JSON, check if it says "success" vaguely
+                if (text.toLowerCase().includes('success')) {
+                    result = { result: 'success' };
+                } else {
+                    throw new Error(`Invalid Server Response: ${text.substring(0, 50)}`);
+                }
             }
 
             if (result.result !== 'success') {
@@ -268,6 +277,9 @@ const App: React.FC = () => {
             } else if (err.message === 'Failed to fetch') {
               detailedError = "Network Error: Could not connect. Check internet. Retrying...";
               if (isMounted) setSyncStatus('Saved. Uploading in background...');
+            } else if (detailedError.includes("Access Denied")) {
+               // Persistent error, don't just retry immediately
+               if (isMounted) setSyncStatus('Permission Error.');
             } else {
               if (isMounted) setSyncStatus(`Error: ${detailedError.substring(0, 30)}...`);
             }
