@@ -10,7 +10,7 @@ type View = 'teacher' | 'student';
 
 const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
-const SCRIPT_URL_KEY = 'attendance-script-url-v31'; 
+const SCRIPT_URL_KEY = 'attendance-script-url-v32'; 
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
@@ -49,7 +49,7 @@ const App: React.FC = () => {
   
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
     const saved = localStorage.getItem(SCRIPT_URL_KEY);
-    return saved || 'https://script.google.com/macros/s/AKfycbxN1V5a-kImLL2NgeLTTVrPvW36RM22yM5jAalPHzOmm2lOv72WcTLDeDJxSpmKjNlv/exec';
+    return saved || 'https://script.google.com/macros/s/AKfycbxRQQ4tJbecpGtohIkKvDxv45Phrz5DnICfblX-7Lzhy-W0IcUGc9ITouYKlLkdXgCT/exec';
   });
 
   const [syncQueue, setSyncQueue] = useState<SyncTask[]>(() => {
@@ -70,7 +70,7 @@ const App: React.FC = () => {
 
   // Network Listener
   useEffect(() => {
-    console.log("UTS QR Attendance App Mounted - v1.7.2 (New Deployment)");
+    console.log("UTS QR Attendance App Mounted - v1.7.3 (Script Update)");
 
     const handleOnline = () => {
         setIsOnline(true);
