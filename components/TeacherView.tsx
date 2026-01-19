@@ -340,8 +340,21 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             <p className="font-bold text-gray-800">{s.name}</p>
                             <p className="font-mono text-xs text-gray-500">{s.studentId}</p>
                           </td>
-                          <td className="px-4 py-3 text-right text-gray-400 text-xs">
-                            {new Date(s.timestamp).toLocaleTimeString()}
+                          <td className="px-4 py-3 text-right">
+                            <div className="flex flex-col items-end gap-1">
+                                <span className="text-gray-400 text-xs">{new Date(s.timestamp).toLocaleTimeString()}</span>
+                                {pendingIds.has(s.studentId) ? (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-100 text-orange-700">
+                                        <ClockIcon className="w-3 h-3" />
+                                        <span>Pending</span>
+                                    </span>
+                                ) : (
+                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-50 text-green-700 opacity-70">
+                                        <CheckCircleIcon className="w-3 h-3" />
+                                        <span>Saved</span>
+                                    </span>
+                                )}
+                            </div>
                           </td>
                         </tr>
                       ))}
