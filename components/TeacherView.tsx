@@ -21,6 +21,8 @@ import { ClipboardDocumentCheckIcon } from './icons/ClipboardDocumentCheckIcon';
 import { MagnifyingGlassIcon } from './icons/MagnifyingGlassIcon';
 import { GoogleSheetIntegrationInfo } from './GoogleSheetIntegrationInfo';
 import { QrScanner } from './QrScanner';
+import { QrCodeIcon } from './icons/QrCodeIcon';
+import { ListBulletIcon } from './icons/ListBulletIcon';
 
 interface TeacherViewProps {
   attendanceList: Student[];
@@ -89,6 +91,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   
   // Checklist Mode State
   const [checklistSearch, setChecklistSearch] = useState('');
+
+  // Mobile Tab State (QR vs List)
+  const [mobileTab, setMobileTab] = useState<'qr' | 'list'>('qr');
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const prevCountRef = useRef(attendanceList.length);
@@ -290,18 +295,20 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   };
 
   return (
-    <div className="w-full max-w-[1600px] mx-auto p-4 sm:p-6 space-y-6">
-       <div className="relative z-10 flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
+    <div className="w-full max-w-[1600px] mx-auto p-3 sm:p-6 space-y-4 sm:space-y-6 pb-20 sm:pb-6">
+       {/* Main Toolbar */}
+       <div className="relative z-10 flex flex-col xl:flex-row justify-between items-stretch xl:items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
          <div className="flex items-center gap-4">
-             <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-xl shadow-lg" aria-hidden="true">
+             <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-xl shadow-lg shrink-0" aria-hidden="true">
                  <ShieldCheckIcon className="w-7 h-7" />
              </div>
-             <div>
-                 <h1 className="text-2xl font-black text-gray-900 tracking-tight">UTS ATTENDANCE</h1>
+             <div className="min-w-0">
+                 <h1 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight truncate">UTS ATTENDANCE</h1>
                  <p className="text-xs text-gray-500 font-bold tracking-[0.2em] mt-1">SECURE CHECK-IN</p>
              </div>
          </div>
-         <div className="flex items-center gap-2" role="toolbar" aria-label="Toolbar">
+         
+         <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0 no-scrollbar w-full xl:w-auto" role="toolbar" aria-label="Toolbar">
             <button 
               onClick={() => {
                   setShowManualModal(true);
@@ -309,7 +316,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   setManualName('');
                   setManualError('');
               }}
-              className="hidden sm:flex items-center justify-center w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl border hover:bg-indigo-100 transition-colors"
+              className="flex items-center justify-center w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl border hover:bg-indigo-100 transition-colors shrink-0"
               title="Manual Entry"
               aria-label="Manually add student"
             >
@@ -317,7 +324,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </button>
             <button 
               onClick={() => setViewMode(v => v === 'checklist' ? 'teacher' : 'checklist')} 
-              className={`flex items-center justify-center w-12 h-12 rounded-xl border transition-colors shadow-sm ${viewMode === 'checklist' ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-600'}`}
+              className={`flex items-center justify-center w-12 h-12 rounded-xl border transition-colors shadow-sm shrink-0 ${viewMode === 'checklist' ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-600'}`}
               title="Class Register (Checklist)"
               aria-label="Toggle Class Register"
             >
@@ -325,7 +332,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </button>
             <button 
               onClick={() => setIsSoundEnabled(!isSoundEnabled)} 
-              className={`hidden sm:flex items-center justify-center w-12 h-12 rounded-xl border transition-colors shadow-sm ${isSoundEnabled ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-50 text-gray-400'}`} 
+              className={`flex items-center justify-center w-12 h-12 rounded-xl border transition-colors shadow-sm shrink-0 ${isSoundEnabled ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-50 text-gray-400'}`} 
               title={isSoundEnabled ? "Mute Sound" : "Enable Sound"}
               aria-label={isSoundEnabled ? "Mute sound" : "Enable sound"}
               aria-pressed={isSoundEnabled}
@@ -334,11 +341,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </button>
             <button 
               onClick={() => setViewMode(v => v === 'teacher' ? 'classroom' : 'teacher')} 
-              className={`hidden sm:flex group items-center gap-3 px-5 py-3 rounded-xl font-bold transition-all ${viewMode === 'teacher' ? 'bg-gray-50 text-gray-700' : (viewMode === 'classroom' ? 'bg-gray-900 text-white shadow-lg' : 'bg-gray-50 text-gray-400')}`} 
+              className={`flex group items-center gap-3 px-5 py-3 rounded-xl font-bold transition-all shrink-0 ${viewMode === 'teacher' ? 'bg-gray-50 text-gray-700' : (viewMode === 'classroom' ? 'bg-gray-900 text-white shadow-lg' : 'bg-gray-50 text-gray-400')}`} 
               title="Toggle QR View Mode"
               aria-label={`Switch to ${viewMode === 'teacher' ? 'Classroom' : 'Teacher'} view`}
             >
-              <div className="text-right">
+              <div className="text-right hidden sm:block">
                 <span className="text-[10px] uppercase opacity-60">View</span>
                 <span className="block text-xs uppercase tracking-wider">{viewMode === 'classroom' ? 'Classroom' : 'Teacher'}</span>
               </div>
@@ -346,7 +353,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </button>
             <button 
               onClick={onLogout} 
-              className="flex items-center justify-center w-12 h-12 bg-red-50 text-red-600 rounded-xl border hover:bg-red-100" 
+              className="flex items-center justify-center w-12 h-12 bg-red-50 text-red-600 rounded-xl border hover:bg-red-100 shrink-0" 
               title="Log Out"
               aria-label="Log out"
             >
@@ -356,33 +363,38 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
        </div>
 
       {viewMode === 'checklist' ? (
-          <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden flex flex-col h-[calc(100vh-180px)]">
-              <div className="p-4 border-b border-gray-100 bg-gray-50 flex flex-col sm:flex-row gap-4 items-center justify-between">
-                  <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                      <ClipboardDocumentCheckIcon className="w-5 h-5 text-brand-primary" />
-                      Class Register
-                  </h2>
-                  <div className="flex items-center gap-3 w-full sm:w-auto">
-                      <div className="relative flex-1 sm:w-64">
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden flex flex-col h-[calc(100vh-200px)]">
+              <div className="p-4 border-b border-gray-100 bg-gray-50 flex flex-col gap-3">
+                  <div className="flex items-center justify-between">
+                      <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                          <ClipboardDocumentCheckIcon className="w-5 h-5 text-brand-primary" />
+                          Class Register
+                      </h2>
+                      <div className="text-xs text-gray-500 font-medium">
+                          {attendanceList.length} / {knownStudents.length}
+                      </div>
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-3 w-full">
+                      <div className="relative flex-1">
                           <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
                           <input 
                             type="text" 
                             placeholder="Search name or ID..." 
                             value={checklistSearch}
                             onChange={(e) => setChecklistSearch(e.target.value)}
-                            className="w-full pl-9 pr-4 py-2 rounded-lg border-gray-200 text-sm focus:border-brand-primary focus:ring-brand-primary"
+                            className="w-full pl-9 pr-4 py-2.5 rounded-lg border-gray-200 text-sm focus:border-brand-primary focus:ring-brand-primary"
                           />
                       </div>
                       <button 
                         onClick={markAllVisiblePresent}
-                        className="whitespace-nowrap px-4 py-2 bg-brand-primary text-white text-xs font-bold rounded-lg hover:bg-brand-secondary transition-colors"
+                        className="w-full sm:w-auto px-4 py-2.5 bg-brand-primary text-white text-sm font-bold rounded-lg hover:bg-brand-secondary transition-colors"
                       >
                           Mark All Present
                       </button>
                   </div>
               </div>
               <div className="flex-1 overflow-y-auto p-2">
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
                       {filteredChecklist.map(student => {
                           const isPresent = attendanceList.some(a => a.studentId === student.id);
                           return (
@@ -391,11 +403,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                 onClick={() => toggleStudentAttendance(student)}
                                 className={`cursor-pointer p-3 rounded-xl border transition-all duration-200 flex items-center justify-between group ${isPresent ? 'bg-green-50 border-green-200 shadow-sm' : 'bg-white border-gray-100 hover:border-brand-primary/50'}`}
                               >
-                                  <div className="min-w-0">
+                                  <div className="min-w-0 pr-2">
                                       <p className={`text-xs font-black truncate ${isPresent ? 'text-green-800' : 'text-gray-700'}`}>{student.name}</p>
                                       <p className="text-[10px] text-gray-400 font-mono">{student.id}</p>
                                   </div>
-                                  <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${isPresent ? 'bg-green-500 border-green-500' : 'bg-white border-gray-300 group-hover:border-brand-primary'}`}>
+                                  <div className={`w-6 h-6 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors ${isPresent ? 'bg-green-500 border-green-500' : 'bg-white border-gray-300 group-hover:border-brand-primary'}`}>
                                       {isPresent && <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
                                   </div>
                               </div>
@@ -408,241 +420,261 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                       )}
                   </div>
               </div>
-              <div className="p-3 bg-gray-50 border-t text-xs text-gray-500 flex justify-between">
-                  <span>Showing {filteredChecklist.length} students</span>
-                  <span>{attendanceList.length} Present / {knownStudents.length} Total</span>
-              </div>
           </div>
       ) : (
-      <div className={`grid grid-cols-1 gap-6 ${viewMode === 'teacher' ? 'xl:grid-cols-12' : ''} items-start transition-all duration-300`}>
-        
+      <>
+        {/* Mobile View Switcher (Tabs) */}
         {viewMode === 'teacher' && (
-        <div className="w-full xl:col-span-4 order-2 xl:order-1 flex flex-col gap-4">
-          <div className="flex items-center flex-wrap gap-2 py-1" role="status" aria-label="System Status">
-              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-primary/10 text-brand-primary rounded-full text-xs font-bold border border-brand-primary/20" aria-label={`${attendanceList.length} students scanned`}>
-                <UserIcon className="w-3.5 h-3.5" aria-hidden="true" />
-                <span>{attendanceList.length} Scanned</span>
-              </div>
-              {!isOnline && (
-                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-500 text-white rounded-full text-xs font-bold" aria-label="System is offline">
-                  <GlobeIcon className="w-3.5 h-3.5" aria-hidden="true" />
-                  <span>OFFLINE</span>
-                </div>
-              )}
-              {pendingSyncCount > 0 && isOnline && (
-                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-700 rounded-full text-xs font-bold animate-pulse" aria-label={`${pendingSyncCount} records syncing`}>
-                  <GlobeIcon className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
-                  <span>{pendingSyncCount} Syncing...</span>
-                </div>
-              )}
+          <div className="xl:hidden flex w-full bg-gray-200 p-1 rounded-xl shadow-inner">
+            <button 
+              onClick={() => setMobileTab('qr')}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-bold transition-all ${mobileTab === 'qr' ? 'bg-white text-brand-primary shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              <QrCodeIcon className="w-4 h-4" />
+              QR & Settings
+            </button>
+            <button 
+              onClick={() => setMobileTab('list')}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-bold transition-all ${mobileTab === 'list' ? 'bg-white text-brand-primary shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              <ListBulletIcon className="w-4 h-4" />
+              Live List ({attendanceList.length})
+            </button>
           </div>
-          
-          {isOfflineMode && (
-            <div className="w-full flex flex-col items-center p-6 bg-white rounded-xl shadow-md border-2 border-dashed border-brand-primary">
-                <div className="flex items-center gap-2 text-brand-primary mb-3">
-                    <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" aria-hidden="true"></div>
-                    <h3 className="text-sm font-bold uppercase tracking-wider">Offline Hub Active</h3>
-                </div>
-                <button 
-                  onClick={() => setShowScanner(true)} 
-                  className="w-full flex items-center justify-center gap-3 px-4 py-4 bg-brand-primary text-white text-lg font-bold rounded-xl shadow-lg hover:bg-brand-secondary transition-all active:scale-95"
-                  aria-label="Scan Student QR Code"
-                >
-                    <CameraIcon className="w-6 h-6" aria-hidden="true" />
-                    Scan Student QR
-                </button>
-            </div>
-          )}
-
-          <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex-1 flex flex-col overflow-hidden min-h-[400px]">
-            {visibleList.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-full text-gray-400">
-                <UserIcon className="w-12 h-12 mb-2 opacity-20" aria-hidden="true" />
-                <p className="text-sm">No records yet.</p>
-              </div>
-            ) : (
-              <div className="overflow-y-auto flex-1">
-                <table className="w-full text-sm text-left">
-                  <thead className="text-xs text-gray-500 uppercase bg-gray-50 sticky top-0 z-10">
-                    <tr>
-                      <th scope="col" className="px-4 py-3">Student</th>
-                      <th scope="col" className="px-4 py-3 text-right">Time</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                      {visibleList.map(s => (
-                        <tr key={s.studentId} className="hover:bg-gray-50">
-                          <td className="px-4 py-3">
-                            <p className="font-bold text-gray-800">{s.name}</p>
-                            <p className="font-mono text-xs text-gray-500">{s.studentId}</p>
-                          </td>
-                          <td className="px-4 py-3 text-right">
-                            <div className="flex flex-col items-end gap-1">
-                                <span className="text-gray-400 text-xs">{new Date(s.timestamp).toLocaleTimeString()}</span>
-                                {pendingIds.has(s.studentId) ? (
-                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-100 text-orange-700">
-                                        <ClockIcon className="w-3 h-3" />
-                                        <span>Pending</span>
-                                    </span>
-                                ) : (
-                                    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-50 text-green-700 opacity-70">
-                                        <CheckCircleIcon className="w-3 h-3" />
-                                        <span>Saved</span>
-                                    </span>
-                                )}
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
         )}
 
-        <div className={`w-full flex flex-col items-center bg-white p-6 sm:p-8 rounded-2xl shadow-xl border order-1 xl:order-2 transition-all duration-500 ease-in-out z-0 ${viewMode === 'teacher' ? 'xl:col-span-8' : 'col-span-1 xl:col-span-12 min-h-[85vh] justify-center'}`}>
+        <div className={`grid grid-cols-1 gap-6 ${viewMode === 'teacher' ? 'xl:grid-cols-12' : ''} items-start transition-all duration-300`}>
+          
+          {/* LEFT COLUMN (List) */}
           {viewMode === 'teacher' && (
-              <div className="w-full space-y-4 mb-6 relative z-20">
-                <div className="flex justify-between items-center">
-                  <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Configuration</label>
-                  <button 
-                    onClick={() => setShowSettings(!showSettings)} 
-                    className="text-xs text-brand-primary hover:text-brand-secondary font-bold uppercase tracking-wide underline decoration-dotted"
-                    aria-expanded={showSettings}
-                    aria-controls="settings-panel"
-                  >
-                    {showSettings ? 'Close' : 'Settings'}
-                  </button>
+          <div className={`w-full xl:col-span-4 flex-col gap-4 ${mobileTab === 'list' ? 'flex' : 'hidden xl:flex'} order-2 xl:order-1`}>
+            <div className="flex items-center flex-wrap gap-2 py-1" role="status" aria-label="System Status">
+                <div className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-primary/10 text-brand-primary rounded-full text-xs font-bold border border-brand-primary/20" aria-label={`${attendanceList.length} students scanned`}>
+                  <UserIcon className="w-3.5 h-3.5" aria-hidden="true" />
+                  <span>{attendanceList.length} Scanned</span>
                 </div>
-                {showSettings && (
-                    <div id="settings-panel" className="p-5 bg-gray-50 rounded-xl border space-y-5" role="region" aria-label="Settings">
-                      <GoogleSheetIntegrationInfo />
-                      <div>
-                        <label className="block text-sm font-bold text-gray-700 mb-2" htmlFor="script-url-input">Google Web App URL</label>
-                        <input 
-                          id="script-url-input" 
-                          type="text" 
-                          value={scriptUrl} 
-                          onChange={(e) => onScriptUrlChange(e.target.value)} 
-                          className="block w-full bg-white border border-gray-300 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-brand-primary" 
-                          placeholder="https://script.google.com/..." 
-                        />
-                      </div>
-                      
-                      <div className="grid grid-cols-2 gap-3 pt-4 border-t">
-                         <button 
-                          onClick={onTestAttendance} 
-                          className="col-span-2 flex items-center justify-center gap-2 px-3 py-2 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100 transition-colors"
-                          aria-label="Send test data to cloud"
-                        >
-                          <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></div>
-                          Test Cloud Keying
-                        </button>
-                        <button 
-                          onClick={handleExportCSV} 
-                          disabled={attendanceList.length === 0} 
-                          className="flex items-center justify-center gap-2 px-3 py-2 bg-white border rounded-lg text-xs font-bold disabled:opacity-50"
-                          aria-label="Export attendance as CSV"
-                        >
-                          <DownloadIcon className="w-4 h-4" aria-hidden="true" />Export CSV
-                        </button>
-                        <button 
-                          onClick={onClearAttendance} 
-                          disabled={attendanceList.length === 0} 
-                          className="flex items-center justify-center gap-2 px-3 py-2 bg-red-50 border border-red-100 text-red-700 rounded-lg text-xs font-bold disabled:opacity-50"
-                          aria-label="Clear attendance list"
-                        >
-                          <TrashIcon className="w-4 h-4" aria-hidden="true" />Clear List
-                        </button>
-                      </div>
-                    </div>
+                {!isOnline && (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-500 text-white rounded-full text-xs font-bold" aria-label="System is offline">
+                    <GlobeIcon className="w-3.5 h-3.5" aria-hidden="true" />
+                    <span>OFFLINE</span>
+                  </div>
                 )}
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <div className="bg-gray-50 p-3 rounded-xl border">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className={`p-2 rounded-lg ${isOfflineMode ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`} aria-hidden="true">
-                          <GlobeIcon className="w-5 h-5"/>
-                        </div>
-                        <div>
-                          <p className="text-xs font-bold text-gray-700 uppercase" id="session-mode-label">SESSION MODE</p>
-                          <p className="text-[10px] text-gray-500">{isOfflineMode ? 'Offline Hub' : 'Live Sync'}</p>
-                        </div>
-                      </div>
-                      <input 
-                        type="checkbox" 
-                        checked={isOfflineMode} 
-                        onChange={() => setIsOfflineMode(!isOfflineMode)} 
-                        className="toggle toggle-error [--tglbg:theme(colors.green.500)] bg-green-200 hover:bg-green-300 border-green-300"
-                        aria-labelledby="session-mode-label"
-                      />
-                    </div>
+                {pendingSyncCount > 0 && isOnline && (
+                  <div className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-700 rounded-full text-xs font-bold animate-pulse" aria-label={`${pendingSyncCount} records syncing`}>
+                    <GlobeIcon className="w-3.5 h-3.5 animate-spin" aria-hidden="true" />
+                    <span>{pendingSyncCount} Syncing...</span>
                   </div>
-                  <div className="bg-gray-50 p-3 rounded-xl border">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className={`p-2 rounded-lg ${isGeoEnabled ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-500'}`} aria-hidden="true">
-                          <MapPinIcon className="w-5 h-5"/>
-                        </div>
-                        <div>
-                          <p className="text-xs font-bold text-gray-700 uppercase" id="gps-geofence-label">GPS GEOFENCE</p>
-                          <p className="text-[10px] text-gray-500">Require 150m Radius</p>
-                        </div>
-                      </div>
-                      <input 
-                        type="checkbox" 
-                        checked={isGeoEnabled} 
-                        onChange={() => setIsGeoEnabled(!isGeoEnabled)} 
-                        className="toggle toggle-info" 
-                        aria-labelledby="gps-geofence-label"
-                      />
-                    </div>
-                  </div>
-                </div>
+                )}
             </div>
+            
+            {isOfflineMode && (
+              <div className="w-full flex flex-col items-center p-6 bg-white rounded-xl shadow-md border-2 border-dashed border-brand-primary">
+                  <div className="flex items-center gap-2 text-brand-primary mb-3">
+                      <div className="w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse" aria-hidden="true"></div>
+                      <h3 className="text-sm font-bold uppercase tracking-wider">Offline Hub Active</h3>
+                  </div>
+                  <button 
+                    onClick={() => setShowScanner(true)} 
+                    className="w-full flex items-center justify-center gap-3 px-4 py-4 bg-brand-primary text-white text-lg font-bold rounded-xl shadow-lg hover:bg-brand-secondary transition-all active:scale-95"
+                    aria-label="Scan Student QR Code"
+                  >
+                      <CameraIcon className="w-6 h-6" aria-hidden="true" />
+                      Scan Student QR
+                  </button>
+              </div>
+            )}
+
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 flex-1 flex flex-col overflow-hidden min-h-[50vh] xl:min-h-[400px]">
+              {visibleList.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-400 p-8">
+                  <UserIcon className="w-12 h-12 mb-2 opacity-20" aria-hidden="true" />
+                  <p className="text-sm">No records yet.</p>
+                </div>
+              ) : (
+                <div className="overflow-y-auto flex-1">
+                  <table className="w-full text-sm text-left">
+                    <thead className="text-xs text-gray-500 uppercase bg-gray-50 sticky top-0 z-10">
+                      <tr>
+                        <th scope="col" className="px-4 py-3">Student</th>
+                        <th scope="col" className="px-4 py-3 text-right">Time</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                        {visibleList.map(s => (
+                          <tr key={s.studentId} className="hover:bg-gray-50">
+                            <td className="px-4 py-3">
+                              <p className="font-bold text-gray-800">{s.name}</p>
+                              <p className="font-mono text-xs text-gray-500">{s.studentId}</p>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <div className="flex flex-col items-end gap-1">
+                                  <span className="text-gray-400 text-xs">{new Date(s.timestamp).toLocaleTimeString()}</span>
+                                  {pendingIds.has(s.studentId) ? (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-100 text-orange-700">
+                                          <ClockIcon className="w-3 h-3" />
+                                          <span>Pending</span>
+                                      </span>
+                                  ) : (
+                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-50 text-green-700 opacity-70">
+                                          <CheckCircleIcon className="w-3 h-3" />
+                                          <span>Saved</span>
+                                      </span>
+                                  )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
           )}
 
-          <h2 className={`font-bold text-brand-primary tracking-tight text-center transition-all duration-300 ${viewMode === 'classroom' ? 'text-5xl mb-12' : 'text-2xl mb-6'}`}>Scan to Check-in</h2>
-          
-          <div 
-            className={`bg-white p-2 rounded-3xl shadow-[inset_0_2px_8px_rgba(0,0,0,0.05)] border relative w-full transition-all duration-500 ease-in-out ${
-                viewMode === 'teacher' 
-                ? 'max-w-[280px] lg:max-w-[320px]' 
-                : 'max-w-[85vmin] max-h-[85vmin]'
-            } aspect-square flex items-center justify-center z-10`}
-            role="img"
-            aria-label="Dynamic QR Code for attendance. Updates every second."
-          >
-             {isQrLoading && (
-                <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10" aria-label="Loading QR Code">
-                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary"></div>
-                </div>
-             )}
-            <canvas ref={canvasRef} className="w-full h-full max-w-full max-h-full" />
-          </div>
-          
-          <div className="mt-6 flex flex-col items-center">
-            <div className="flex items-center gap-2 text-green-600 bg-green-50 px-3 py-1 rounded-full border" role="status">
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-              </span>
-              <span className="text-xs font-bold uppercase tracking-wide">Live Security Active</span>
+          {/* RIGHT COLUMN (QR + Settings) */}
+          <div className={`w-full flex flex-col items-center bg-white p-4 sm:p-8 rounded-2xl shadow-xl border order-1 xl:order-2 transition-all duration-500 ease-in-out z-0 ${viewMode === 'teacher' ? 'xl:col-span-8' : 'col-span-1 xl:col-span-12 min-h-[85vh] justify-center'} ${viewMode === 'teacher' && mobileTab === 'list' ? 'hidden xl:flex' : 'flex'}`}>
+            {viewMode === 'teacher' && (
+                <div className="w-full space-y-4 mb-6 relative z-20">
+                  <div className="flex justify-between items-center">
+                    <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Configuration</label>
+                    <button 
+                      onClick={() => setShowSettings(!showSettings)} 
+                      className="text-xs text-brand-primary hover:text-brand-secondary font-bold uppercase tracking-wide underline decoration-dotted"
+                      aria-expanded={showSettings}
+                      aria-controls="settings-panel"
+                    >
+                      {showSettings ? 'Close' : 'Settings'}
+                    </button>
+                  </div>
+                  {showSettings && (
+                      <div id="settings-panel" className="p-4 sm:p-5 bg-gray-50 rounded-xl border space-y-5" role="region" aria-label="Settings">
+                        <GoogleSheetIntegrationInfo />
+                        <div>
+                          <label className="block text-sm font-bold text-gray-700 mb-2" htmlFor="script-url-input">Google Web App URL</label>
+                          <input 
+                            id="script-url-input" 
+                            type="text" 
+                            value={scriptUrl} 
+                            onChange={(e) => onScriptUrlChange(e.target.value)} 
+                            className="block w-full bg-white border border-gray-300 rounded-lg py-2.5 px-4 text-sm focus:ring-2 focus:ring-brand-primary" 
+                            placeholder="https://script.google.com/..." 
+                          />
+                        </div>
+                        
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-4 border-t">
+                           <button 
+                            onClick={onTestAttendance} 
+                            className="sm:col-span-2 flex items-center justify-center gap-2 px-3 py-2 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100 transition-colors"
+                            aria-label="Send test data to cloud"
+                          >
+                            <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></div>
+                            Test Cloud Keying
+                          </button>
+                          <button 
+                            onClick={handleExportCSV} 
+                            disabled={attendanceList.length === 0} 
+                            className="flex items-center justify-center gap-2 px-3 py-2 bg-white border rounded-lg text-xs font-bold disabled:opacity-50"
+                            aria-label="Export attendance as CSV"
+                          >
+                            <DownloadIcon className="w-4 h-4" aria-hidden="true" />Export CSV
+                          </button>
+                          <button 
+                            onClick={onClearAttendance} 
+                            disabled={attendanceList.length === 0} 
+                            className="flex items-center justify-center gap-2 px-3 py-2 bg-red-50 border border-red-100 text-red-700 rounded-lg text-xs font-bold disabled:opacity-50"
+                            aria-label="Clear attendance list"
+                          >
+                            <TrashIcon className="w-4 h-4" aria-hidden="true" />Clear List
+                          </button>
+                        </div>
+                      </div>
+                  )}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div className="bg-gray-50 p-3 rounded-xl border">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className={`p-2 rounded-lg ${isOfflineMode ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`} aria-hidden="true">
+                            <GlobeIcon className="w-5 h-5"/>
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-gray-700 uppercase" id="session-mode-label">SESSION MODE</p>
+                            <p className="text-[10px] text-gray-500">{isOfflineMode ? 'Offline Hub' : 'Live Sync'}</p>
+                          </div>
+                        </div>
+                        <input 
+                          type="checkbox" 
+                          checked={isOfflineMode} 
+                          onChange={() => setIsOfflineMode(!isOfflineMode)} 
+                          className="toggle toggle-error [--tglbg:theme(colors.green.500)] bg-green-200 hover:bg-green-300 border-green-300"
+                          aria-labelledby="session-mode-label"
+                        />
+                      </div>
+                    </div>
+                    <div className="bg-gray-50 p-3 rounded-xl border">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className={`p-2 rounded-lg ${isGeoEnabled ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-500'}`} aria-hidden="true">
+                            <MapPinIcon className="w-5 h-5"/>
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-gray-700 uppercase" id="gps-geofence-label">GPS GEOFENCE</p>
+                            <p className="text-[10px] text-gray-500">Require 150m Radius</p>
+                          </div>
+                        </div>
+                        <input 
+                          type="checkbox" 
+                          checked={isGeoEnabled} 
+                          onChange={() => setIsGeoEnabled(!isGeoEnabled)} 
+                          className="toggle toggle-info" 
+                          aria-labelledby="gps-geofence-label"
+                        />
+                      </div>
+                    </div>
+                  </div>
+              </div>
+            )}
+
+            <h2 className={`font-bold text-brand-primary tracking-tight text-center transition-all duration-300 ${viewMode === 'classroom' ? 'text-4xl sm:text-5xl mb-6 sm:mb-12' : 'text-xl sm:text-2xl mb-4 sm:mb-6'}`}>Scan to Check-in</h2>
+            
+            <div 
+              className={`bg-white p-2 rounded-3xl shadow-[inset_0_2px_8px_rgba(0,0,0,0.05)] border relative w-full transition-all duration-500 ease-in-out ${
+                  viewMode === 'teacher' 
+                  ? 'max-w-[260px] lg:max-w-[320px]' 
+                  : 'max-w-[85vmin] max-h-[85vmin]'
+              } aspect-square flex items-center justify-center z-10`}
+              role="img"
+              aria-label="Dynamic QR Code for attendance. Updates every second."
+            >
+               {isQrLoading && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10" aria-label="Loading QR Code">
+                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary"></div>
+                  </div>
+               )}
+              <canvas ref={canvasRef} className="w-full h-full max-w-full max-h-full" />
             </div>
-            <p className="text-gray-400 text-xs mt-1">QR Code refreshes every second.</p>
+            
+            <div className="mt-6 flex flex-col items-center">
+              <div className="flex items-center gap-2 text-green-600 bg-green-50 px-3 py-1 rounded-full border" role="status">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                </span>
+                <span className="text-xs font-bold uppercase tracking-wide">Live Security Active</span>
+              </div>
+              <p className="text-gray-400 text-xs mt-1">QR Code refreshes every second.</p>
+            </div>
           </div>
         </div>
-      </div>
+      </>
       )}
       
       {showScanner && <QrScanner onScan={handleScanResult} onClose={() => setShowScanner(false)} />}
 
       {scanResult && (
-        <div className="fixed inset-0 flex items-center justify-center z-[200] pointer-events-none">
+        <div className="fixed inset-0 flex items-center justify-center z-[200] pointer-events-none p-4">
              <div 
-                className={`transform transition-all duration-300 ease-out translate-y-0 opacity-100 flex flex-col items-center justify-center p-8 rounded-3xl shadow-2xl border-4 ${
+                className={`transform transition-all duration-300 ease-out translate-y-0 opacity-100 flex flex-col items-center justify-center p-6 sm:p-8 rounded-3xl shadow-2xl border-4 ${
                     scanResult.type === 'success' ? 'bg-white border-green-500 text-green-700' : 
                     scanResult.type === 'duplicate' ? 'bg-white border-yellow-500 text-yellow-700' :
                     'bg-white border-red-500 text-red-700'
@@ -654,15 +686,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     scanResult.type === 'duplicate' ? 'bg-yellow-100' :
                     'bg-red-100'
                 }`}>
-                    {scanResult.type === 'success' && <CheckCircleIcon className="w-16 h-16 text-green-600" />}
-                    {scanResult.type === 'duplicate' && <UserIcon className="w-16 h-16 text-yellow-600" />}
-                    {scanResult.type === 'error' && <XCircleIcon className="w-16 h-16 text-red-600" />}
+                    {scanResult.type === 'success' && <CheckCircleIcon className="w-12 h-12 sm:w-16 sm:h-16 text-green-600" />}
+                    {scanResult.type === 'duplicate' && <UserIcon className="w-12 h-12 sm:w-16 sm:h-16 text-yellow-600" />}
+                    {scanResult.type === 'error' && <XCircleIcon className="w-12 h-12 sm:w-16 sm:h-16 text-red-600" />}
                 </div>
-                <h3 className="text-2xl font-black uppercase tracking-tight mb-1">
+                <h3 className="text-xl sm:text-2xl font-black uppercase tracking-tight mb-1 text-center">
                     {scanResult.type === 'success' ? 'Checked In' : 
                      scanResult.type === 'duplicate' ? 'Already Scanned' : 'Scan Failed'}
                 </h3>
-                <p className="text-lg font-bold text-center max-w-xs">{scanResult.message}</p>
+                <p className="text-base sm:text-lg font-bold text-center max-w-xs">{scanResult.message}</p>
              </div>
         </div>
       )}
