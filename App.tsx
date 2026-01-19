@@ -10,7 +10,7 @@ type View = 'teacher' | 'student';
 
 const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
-const SCRIPT_URL_KEY = 'attendance-script-url-v33'; 
+const SCRIPT_URL_KEY = 'attendance-script-url-v34'; 
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
@@ -70,7 +70,7 @@ const App: React.FC = () => {
 
   // Network Listener
   useEffect(() => {
-    console.log("UTS QR Attendance App Mounted - v1.7.4 (Script URL Update)");
+    console.log("UTS QR Attendance App Mounted - v1.7.5 (Robust Sheet Handling)");
 
     const handleOnline = () => {
         setIsOnline(true);

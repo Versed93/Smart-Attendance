@@ -5,7 +5,7 @@ import { PRE_REGISTERED_STUDENTS } from '../studentList';
 
 const appScriptCode = `
 /**
- * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.8 - W6-W10 Robust)
+ * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.9 - Auto-Create Fix)
  * 
  * SETUP INSTRUCTIONS:
  * 1. Paste this code into Extensions > Apps Script
@@ -61,7 +61,14 @@ function doPost(e) {
     for (var i = 0; i < configs.length; i++) {
       var conf = configs[i];
       var sheet = doc.getSheetByName(conf.name);
-      if (!sheet) continue;
+      
+      // AUTO-FIX: Create sheet if it doesn't exist
+      if (!sheet) {
+         sheet = doc.insertSheet(conf.name);
+         // Initialize basic headers
+         sheet.getRange(13, 2).setValue("STUDENT ID"); // B13
+         sheet.getRange(13, 4).setValue("STUDENT NAME"); // D13
+      }
       
       // Get headers in Row 12, Cols M(13) to T(20)
       var range = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1);
@@ -91,29 +98,32 @@ function doPost(e) {
       if (targetSheet) break;
     }
 
-    if (!targetSheet) throw "Sheet 'W6-W10' not found or week range (M-T) is full.";
+    if (!targetSheet) throw "Week range (M-T) is full in 'W6-W10'.";
 
-    // 2. Find Student Row in Column B (Index 2), rows 14 to 224+
+    // 2. Find Student Row in Column B (Index 2), rows 14+
     var startRow = 14;
-    var lastRow = Math.max(targetSheet.getLastRow(), 224);
-    // Read Student IDs from Column B
-    var idRange = targetSheet.getRange(startRow, 2, lastRow - startRow + 1, 1);
-    var ids = idRange.getDisplayValues(); // Use DisplayValues for better text matching
-    
+    var lastRow = targetSheet.getLastRow();
     var studentRowAbs = -1;
-    for (var r = 0; r < ids.length; r++) {
-      var idInCell = String(ids[r][0]).toUpperCase().trim();
-      if (idInCell === studentId) {
-        studentRowAbs = startRow + r;
-        break;
+
+    // Only search if there is data in the range
+    if (lastRow >= startRow) {
+      // Read Student IDs from Column B
+      var idRange = targetSheet.getRange(startRow, 2, lastRow - startRow + 1, 1);
+      var ids = idRange.getDisplayValues(); 
+      
+      for (var r = 0; r < ids.length; r++) {
+        var idInCell = String(ids[r][0]).toUpperCase().trim();
+        if (idInCell === studentId) {
+          studentRowAbs = startRow + r;
+          break;
+        }
       }
     }
 
-    // 3. If student not found, append to the end of the list? 
-    // Or strictly rely on pre-filled list. 
-    // If not found, we will append to avoid data loss, but typically should match.
+    // 3. If student not found, append to the end
     if (studentRowAbs === -1) {
-       studentRowAbs = lastRow + 1;
+       // Ensure we start at least at row 14
+       studentRowAbs = Math.max(lastRow + 1, startRow);
        targetSheet.getRange(studentRowAbs, 2).setValue(studentId); // Col B
        targetSheet.getRange(studentRowAbs, 4).setValue(studentName); // Col D
     }
@@ -143,7 +153,8 @@ function doGet(e) {
       var sheet = doc.getSheetByName(conf.name);
       if (!sheet) continue;
       
-      var lastRow = Math.max(sheet.getLastRow(), 224);
+      var lastRow = sheet.getLastRow();
+      if (lastRow < 14) continue;
       
       // Get Student Data (B14:D)
       var studentData = sheet.getRange(14, 2, lastRow - 14 + 1, 3).getValues(); // B, C, D
@@ -260,7 +271,7 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
           </div>
           <div className="mt-4 bg-gray-900 p-4 rounded-xl border border-blue-200">
             <div className="flex justify-between items-center mb-3">
-              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">APPS SCRIPT V3.8 (W6-W10)</span>
+              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">APPS SCRIPT V3.9 (Auto-Fix)</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-4 py-1.5 rounded-full font-bold transition-all ${copied ? 'bg-green-600 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
