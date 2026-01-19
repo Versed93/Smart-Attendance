@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircleIcon } from './icons/CheckCircleIcon';
-import { ClockIcon } from './icons/ClockIcon';
 import { GlobeIcon } from './icons/GlobeIcon';
 import { MapPinIcon } from './icons/MapPinIcon';
 import { PRE_REGISTERED_STUDENTS } from '../studentList';
@@ -14,6 +13,7 @@ interface StudentViewProps {
   onExit?: () => void;
   isSyncing?: boolean;
   isOnline?: boolean;
+  syncStatus?: string;
 }
 
 type Status = 'validating' | 'validating-gps' | 'form' | 'success' | 'error' | 'cooldown';
@@ -46,7 +46,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
   bypassRestrictions = false, 
   onExit, 
   isSyncing = false, 
-  isOnline = true 
+  isOnline = true,
+  syncStatus = "Connecting to Google Sheets..."
 }) => {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
@@ -328,7 +329,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
                                         </div>
                                         <div className="flex-1">
                                             <span className="text-sm font-bold text-indigo-900 block">Step 2: Uploading to Cloud</span>
-                                            <span className="text-xs text-indigo-600">Connecting to Google Sheets...</span>
+                                            <span className="text-xs text-indigo-600">{syncStatus}</span>
                                         </div>
                                     </div>
                                     <div className="bg-white/60 rounded-lg p-3 text-xs text-indigo-800 leading-relaxed border border-indigo-100">

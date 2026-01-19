@@ -62,6 +62,7 @@ const App: React.FC = () => {
   });
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [syncStatus, setSyncStatus] = useState<string>('Initializing...');
   
   // Ref to hold the resolve function of the jitter delay promise, allowing manual retry
   const retryResolveRef = useRef<(() => void) | null>(null);
@@ -69,7 +70,7 @@ const App: React.FC = () => {
   // Network Listener
   useEffect(() => {
     // Debug log to confirm app version in production console
-    console.log("UTS QR Attendance App Mounted - v1.1.0 (High Concurrency Fix)");
+    console.log("UTS QR Attendance App Mounted - v1.2.0 (Detailed Status)");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -143,6 +144,7 @@ const App: React.FC = () => {
         const task = syncQueue[0];
 
         try {
+            setSyncStatus('Preparing data package...');
             const formData = new URLSearchParams();
             Object.entries(task.data).forEach(([k, v]) => formData.append(k, String(v)));
 
@@ -156,7 +158,12 @@ const App: React.FC = () => {
 
             const controller = new AbortController();
             // Increased timeout to 60 seconds (60000ms) to handle high concurrency server waits (LockService takes up to 30s)
-            const timeoutId = setTimeout(() => controller.abort(), 60000);
+            const timeoutId = setTimeout(() => {
+                if (active) setSyncStatus('Server is busy (High Traffic)...');
+                controller.abort();
+            }, 60000);
+
+            if (active) setSyncStatus('Connecting to Google Server...');
 
             const response = await fetch(scriptUrl.trim(), {
                 method: 'POST',
@@ -166,6 +173,8 @@ const App: React.FC = () => {
             });
 
             clearTimeout(timeoutId);
+
+            if (active) setSyncStatus('Verifying server response...');
 
             if (!response.ok) {
                 const errText = await response.text().catch(() => response.statusText);
@@ -186,6 +195,7 @@ const App: React.FC = () => {
             }
 
             if (active) {
+              setSyncStatus('Sync successful!');
               setSyncQueue(prev => prev.filter(t => t.id !== task.id));
               setSyncError(null);
             }
@@ -196,9 +206,13 @@ const App: React.FC = () => {
             let detailedError = err.message || "Failed to sync with cloud.";
             if (err.name === 'AbortError') {
               detailedError = "Connection Timeout: Server busy (High Traffic). Retrying...";
+              if (active) setSyncStatus('Request timed out. Retrying...');
             } else if (err.message === 'Failed to fetch') {
               // Usually indicates offline or DNS failure
               detailedError = "Network Error: Could not connect to Google Script. Pausing.";
+              if (active) setSyncStatus('Network error. Pausing sync...');
+            } else {
+              if (active) setSyncStatus(`Error: ${detailedError.substring(0, 30)}...`);
             }
             
             if (active) setSyncError(detailedError);
@@ -400,6 +414,7 @@ const App: React.FC = () => {
                        onExit={() => { setIsKioskMode(false); setView('teacher'); }}
                        isSyncing={isSyncing || syncQueue.length > 0}
                        isOnline={isOnline}
+                       syncStatus={syncStatus}
                    />
                </div>
            </div>
