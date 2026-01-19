@@ -44,7 +44,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   markAttendance, 
   token, 
   courseName, 
-  geoConstraints,
+  geoConstraints, 
   bypassRestrictions = false, 
   onExit, 
   isSyncing = false, 
@@ -288,10 +288,22 @@ export const StudentView: React.FC<StudentViewProps> = ({
                                     )}
                                 </div>
                             ) : (
-                                <div className="text-left space-y-4">
-                                    <div className="flex items-start gap-3"><GlobeIcon className="w-5 h-5 text-orange-500 mt-0.5" aria-hidden="true" /><div><p className="text-sm font-bold text-orange-900">Upload Pending</p><p className="text-xs text-orange-700 mt-1">Your attendance is saved and will upload automatically.</p></div></div>
-                                    <div className="bg-orange-100/50 p-3 text-xs text-orange-800 border border-orange-200 rounded-lg"><strong>You can safely close this tab now.</strong></div>
-                                </div>
+                                (isSyncing || !isOnline) ? (
+                                    <div className="text-left space-y-4">
+                                        <div className="flex items-start gap-3"><GlobeIcon className="w-5 h-5 text-orange-500 mt-0.5" aria-hidden="true" /><div><p className="text-sm font-bold text-orange-900">Upload Pending</p><p className="text-xs text-orange-700 mt-1">Your attendance is saved and will upload automatically.</p></div></div>
+                                        <div className="bg-orange-100/50 p-3 text-xs text-orange-800 border border-orange-200 rounded-lg"><strong>You can safely close this tab now.</strong></div>
+                                    </div>
+                                ) : (
+                                    <div className="text-left space-y-4">
+                                         <div className="flex items-center gap-3">
+                                            <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs font-bold shrink-0" aria-hidden="true">✓</div>
+                                            <div>
+                                                <p className="text-sm font-bold text-green-900">Successfully Recorded</p>
+                                                <p className="text-xs text-green-700 mt-1">Your name has been added to the class list.</p>
+                                            </div>
+                                         </div>
+                                    </div>
+                                )
                             )}
                         </div>
                     </div>
