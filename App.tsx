@@ -5,6 +5,7 @@ import { LoginView } from './components/LoginView';
 import { ExclamationTriangleIcon } from './components/icons/ExclamationTriangleIcon';
 import { GlobeIcon } from './components/icons/GlobeIcon';
 import type { Student, SyncTask } from './types';
+import { PRE_REGISTERED_STUDENTS, PreRegisteredStudent } from './studentList';
 
 type View = 'teacher' | 'student';
 
@@ -13,6 +14,7 @@ const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
 const SCRIPT_URL_KEY = 'attendance-script-url-v36'; 
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v3';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
+const KNOWN_STUDENTS_KEY = 'attendance-known-students-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
 
 const App: React.FC = () => {
@@ -35,6 +37,29 @@ const App: React.FC = () => {
   });
   const [attendanceList, setAttendanceList] = useState<Student[]>([]);
   
+  // Dynamic Student Registry (Syncs with Cloud & Manual Entries)
+  const [knownStudents, setKnownStudents] = useState<PreRegisteredStudent[]>(() => {
+      const saved = localStorage.getItem(KNOWN_STUDENTS_KEY);
+      const initial = PRE_REGISTERED_STUDENTS; // Start with hardcoded list
+      if (saved) {
+          try {
+              const parsed = JSON.parse(saved);
+              if (Array.isArray(parsed)) {
+                  // Merge saved with initial to ensure we have both
+                  const map = new Map();
+                  initial.forEach(s => map.set(s.id, s));
+                  parsed.forEach(s => map.set(s.id, s)); // Saved overrides/adds to initial
+                  return Array.from(map.values());
+              }
+          } catch (e) { console.error("Error loading known students", e); }
+      }
+      return initial;
+  });
+
+  useEffect(() => {
+      localStorage.setItem(KNOWN_STUDENTS_KEY, JSON.stringify(knownStudents));
+  }, [knownStudents]);
+
   // Network Status
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
@@ -70,7 +95,7 @@ const App: React.FC = () => {
 
   // Network Listener
   useEffect(() => {
-    console.log("UTS QR Attendance App Mounted - v1.7.8 (Retry Button)");
+    console.log("UTS QR Attendance App Mounted - v1.7.9 (Dynamic Registry)");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -139,19 +164,47 @@ const App: React.FC = () => {
         const data = await response.json();
         
         if (Array.isArray(data)) {
+            // 1. Update Known Students Registry (Learn new names from cloud)
+            setKnownStudents(prev => {
+                const existingMap = new Map(prev.map(s => [s.id, s.name]));
+                const newEntries: PreRegisteredStudent[] = [];
+                let hasChanges = false;
+
+                data.forEach((item: any) => {
+                    const sId = String(item.studentId).toUpperCase();
+                    const sName = String(item.name).toUpperCase();
+                    if (sId && sName && !existingMap.has(sId)) {
+                        existingMap.set(sId, sName);
+                        newEntries.push({ id: sId, name: sName });
+                        hasChanges = true;
+                    }
+                });
+
+                if (hasChanges) {
+                    return [...prev, ...newEntries];
+                }
+                return prev;
+            });
+
+            // 2. Update Attendance List
             setAttendanceList(prev => {
                 const existingIds = new Set(prev.map(s => s.studentId));
                 const newStudents: Student[] = [];
                 
                 data.forEach((item: any) => {
                     const sId = String(item.studentId).toUpperCase();
-                    if (!existingIds.has(sId) && !locallyDeletedIds.has(sId)) {
+                    
+                    // CRITICAL UPDATE: Only fetch students marked as 'P' (Present)
+                    // We interpret null/undefined as P for backward compatibility, but 'A' is strictly ignored.
+                    const isPresent = !item.status || item.status === 'P';
+
+                    if (isPresent && !existingIds.has(sId) && !locallyDeletedIds.has(sId)) {
                         newStudents.push({
                             name: item.name,
                             studentId: sId,
                             email: `${sId}@STUDENT.UTS.EDU.MY`,
                             timestamp: Date.now(), // Estimate timestamp for remote records
-                            status: item.status as 'P' | 'A'
+                            status: 'P'
                         });
                     }
                 });
@@ -326,6 +379,15 @@ const App: React.FC = () => {
 
   const addStudent = (name: string, studentId: string, email: string, status: 'P' | 'A', overrideTimestamp?: number) => {
       const timestamp = overrideTimestamp || Date.now();
+      
+      // Update Registry with new manually added student if not exists
+      setKnownStudents(prev => {
+         if (!prev.some(s => s.id === studentId)) {
+             return [...prev, { id: studentId, name: name }];
+         }
+         return prev;
+      });
+
       const newStudent: Student = { name, studentId, email, timestamp, status };
       
       const studentExists = attendanceList.some(s => s.studentId === studentId);
@@ -359,12 +421,39 @@ const App: React.FC = () => {
   };
 
   const onRemoveStudents = (ids: string[]) => {
+      // 1. Identify students to be removed to get their details for the sync task
+      const studentsToRemove = attendanceList.filter(s => ids.includes(s.studentId));
+
+      // 2. Remove from local list
       setAttendanceList(prev => prev.filter(s => !ids.includes(s.studentId)));
+      
+      // 3. Add to locally deleted set (to prevent auto-re-adding from polling)
       setLocallyDeletedIds(prev => {
           const next = new Set(prev);
           ids.forEach(id => next.add(id));
           return next;
       });
+
+      // 4. Queue Sync Tasks with Status 'A' (Absent)
+      const tasks: SyncTask[] = [];
+      const now = Date.now();
+      studentsToRemove.forEach(student => {
+           tasks.push({
+               id: `${student.studentId}-${now}-absent`,
+               data: {
+                   studentId: student.studentId,
+                   name: student.name,
+                   email: student.email,
+                   status: 'A', // Explicitly mark as Absent in cloud
+                   timestamp: now.toString()
+               },
+               timestamp: now
+           });
+      });
+      
+      if (tasks.length > 0) {
+          setSyncQueue(prev => [...prev, ...tasks]);
+      }
   };
 
   const onBulkStatusUpdate = (ids: string[], status: 'P' | 'A') => {
@@ -436,6 +525,7 @@ const App: React.FC = () => {
                      isOnline={isOnline}
                      onLogout={handleLogout}
                      addStudent={addStudent}
+                     knownStudents={knownStudents}
                  />
                  
                  {syncError && isOnline && (
@@ -489,6 +579,7 @@ const App: React.FC = () => {
                        syncStatus={syncStatus}
                        isOfflineScan={isOfflineScan}
                        onRetry={handleRetryNow}
+                       knownStudents={knownStudents}
                    />
                </div>
            </div>

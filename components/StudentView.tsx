@@ -4,7 +4,8 @@ import { CheckCircleIcon } from './icons/CheckCircleIcon';
 import { GlobeIcon } from './icons/GlobeIcon';
 import { MapPinIcon } from './icons/MapPinIcon';
 import { QrCodeIcon } from './icons/QrCodeIcon';
-import { PRE_REGISTERED_STUDENTS } from '../studentList';
+import type { PreRegisteredStudent } from '../studentList';
+import { LockClosedIcon } from './icons/LockClosedIcon';
 
 interface StudentViewProps {
   markAttendance: (name: string, studentId: string, email: string) => { success: boolean, message: string };
@@ -18,11 +19,13 @@ interface StudentViewProps {
   syncStatus?: string;
   isOfflineScan?: boolean;
   onRetry?: () => void;
+  knownStudents: PreRegisteredStudent[];
 }
 
-type Status = 'validating' | 'validating-gps' | 'form' | 'success' | 'error' | 'show-student-qr';
+type Status = 'validating' | 'validating-gps' | 'form' | 'success' | 'error' | 'show-student-qr' | 'device-locked';
 
 const STUDENT_PROFILE_KEY = 'attendance-student-profile-v1';
+const DEVICE_LOCK_KEY = 'attendance-device-lock-v1';
 
 // Haversine formula
 const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -51,7 +54,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
   isOnline = true,
   syncStatus = "Connecting to Google Sheets...",
   isOfflineScan = false,
-  onRetry
+  onRetry,
+  knownStudents
 }) => {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
@@ -75,7 +79,19 @@ export const StudentView: React.FC<StudentViewProps> = ({
               if (sEmail) setEmail(sEmail);
           } catch (e) { console.error("Failed to load profile", e); }
       }
-  }, []);
+      
+      // Check for Device Lock
+      if (!bypassRestrictions) {
+          const lockData = localStorage.getItem(DEVICE_LOCK_KEY);
+          if (lockData) {
+              const lockTime = parseInt(lockData, 10);
+              const twelveHours = 12 * 60 * 60 * 1000;
+              if (Date.now() - lockTime < twelveHours) {
+                  setStatus('device-locked');
+              }
+          }
+      }
+  }, [bypassRestrictions]);
 
   useEffect(() => {
     // Show retry button if syncing takes longer than 5 seconds
@@ -90,6 +106,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   }, [isSyncing, status]);
 
   useEffect(() => {
+    if (status === 'device-locked') return;
     if (bypassRestrictions) { setStatus('form'); return; }
     if (!token) { setStatus('error'); setMessage('Invalid link. Please scan the QR code again.'); return; }
     
@@ -130,7 +147,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
         setStatus('error');
         setMessage('This QR code has expired. Please scan the new code.');
     }
-  }, [token, bypassRestrictions, geoConstraints]);
+  }, [token, bypassRestrictions, geoConstraints, status]);
 
   useEffect(() => {
     if (status === 'show-student-qr' && canvasRef.current && studentQrData) {
@@ -156,6 +173,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
         const result = markAttendance(name, studentId, email);
         if (result.success) {
           setStatus('success');
+          // Set Device Lock
+          if (!bypassRestrictions) {
+             localStorage.setItem(DEVICE_LOCK_KEY, Date.now().toString());
+          }
         } else {
           setStatus('error');
         }
@@ -166,11 +187,21 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const handleStudentIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
       const val = e.target.value.toUpperCase();
       setStudentId(val);
-      const matched = PRE_REGISTERED_STUDENTS.find(s => s.id === val);
+      const matched = knownStudents.find(s => s.id === val);
       if (matched) { setName(matched.name); setIsNewStudent(false); } 
       else { if (!isNewStudent && name) setName(''); setIsNewStudent(true); }
       if (/^[A-Z]{3}\d{8}$/.test(val)) setEmail(`${val}@STUDENT.UTS.EDU.MY`);
   };
+
+  if (status === 'device-locked') return (
+     <div className="text-center py-12 px-4" role="alert" aria-label="Device Locked">
+        <div className="bg-gray-100 rounded-full p-4 w-24 h-24 mx-auto mb-4 flex items-center justify-center">
+            <LockClosedIcon className="w-12 h-12 text-gray-500" />
+        </div>
+        <h3 className="text-xl font-black text-gray-800 mb-2">Device Already Used</h3>
+        <p className="text-sm text-gray-600">Attendance has already been submitted from this device. To prevent fraud, you can only submit once per session.</p>
+     </div>
+  );
 
   if (status === 'validating') return <div className="text-center py-12" role="status" aria-label="Validating session"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary mx-auto"></div><p className="mt-4 text-gray-600">Verifying...</p></div>;
   if (status === 'validating-gps') return <div className="text-center py-12" role="status" aria-label="Validating location"><MapPinIcon className="w-12 h-12 text-brand-primary mx-auto animate-bounce" /><p className="mt-4 text-gray-600">Verifying Location...</p></div>;

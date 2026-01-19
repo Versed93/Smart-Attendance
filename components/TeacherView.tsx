@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import type { Student, SyncTask } from '../types';
+import type { PreRegisteredStudent } from '../studentList';
 import QRCode from 'qrcode';
 import { DownloadIcon } from './icons/DownloadIcon';
 import { EyeIcon } from './icons/EyeIcon';
-import { EyeSlashIcon } from './icons/EyeSlashIcon';
 import { UserIcon } from './icons/UserIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
@@ -14,12 +14,12 @@ import { XCircleIcon } from './icons/XCircleIcon';
 import { GlobeIcon } from './icons/GlobeIcon';
 import { MapPinIcon } from './icons/MapPinIcon';
 import { CameraIcon } from './icons/CameraIcon';
-import { ExclamationTriangleIcon } from './icons/ExclamationTriangleIcon';
 import { LockClosedIcon } from './icons/LockClosedIcon';
 import { SpeakerWaveIcon } from './icons/SpeakerWaveIcon';
 import { SpeakerXMarkIcon } from './icons/SpeakerXMarkIcon';
+import { ClipboardDocumentCheckIcon } from './icons/ClipboardDocumentCheckIcon';
+import { MagnifyingGlassIcon } from './icons/MagnifyingGlassIcon';
 import { GoogleSheetIntegrationInfo } from './GoogleSheetIntegrationInfo';
-import { PRE_REGISTERED_STUDENTS } from '../studentList';
 import { QrScanner } from './QrScanner';
 
 interface TeacherViewProps {
@@ -39,9 +39,8 @@ interface TeacherViewProps {
   onRetrySync?: () => void;
   isOnline?: boolean;
   onLogout: () => void;
+  knownStudents: PreRegisteredStudent[];
 }
-
-type SortOption = 'id' | 'newest' | 'oldest';
 
 export const TeacherView: React.FC<TeacherViewProps> = ({ 
   attendanceList, 
@@ -58,7 +57,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   syncQueue = [],
   syncError = null,
   isOnline = true,
-  onLogout
+  onLogout,
+  knownStudents
 }) => {
   const [baseUrl] = useState<string>(window.location.href.split('?')[0]);
   const [qrData, setQrData] = useState<string>('');
@@ -66,10 +66,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [courseName, setCourseName] = useState(() => localStorage.getItem('attendance-course-name') || '');
   
   const [showSettings, setShowSettings] = useState<boolean>(false);
-  const [viewMode, setViewMode] = useState<'teacher' | 'classroom'>('teacher');
+  const [viewMode, setViewMode] = useState<'teacher' | 'classroom' | 'checklist'>('teacher');
   const [isSoundEnabled, setIsSoundEnabled] = useState(true);
-  
-  const [sortBy, setSortBy] = useState<SortOption>('newest');
   
   // New Offline Hub Mode
   const [isOfflineMode, setIsOfflineMode] = useState(false);
@@ -78,21 +76,19 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   const [isGeoEnabled, setIsGeoEnabled] = useState(false);
   const [teacherLocation, setTeacherLocation] = useState<{lat: number, lng: number} | null>(null);
-  const [geoError, setGeoError] = useState('');
   
-  const [timeFilter, setTimeFilter] = useState<'all' | number>('all');
   const [currentTime, setCurrentTime] = useState(Date.now());
   
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualId, setManualId] = useState('');
   const [manualName, setManualName] = useState('');
-  const [manualStatus, setManualStatus] = useState<'P' | 'A'>('P');
   const [manualError, setManualError] = useState('');
   const [manualIsNew, setManualIsNew] = useState(false);
 
   const [isQrLoading, setIsQrLoading] = useState(true);
+  
+  // Checklist Mode State
+  const [checklistSearch, setChecklistSearch] = useState('');
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const prevCountRef = useRef(attendanceList.length);
@@ -179,7 +175,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         if (studentData.studentId && studentData.name && studentData.email) {
             const result = addStudent(studentData.name, studentData.studentId, studentData.email, 'P', studentData.timestamp);
             if (result.success) {
-                // Success sound is triggered by useEffect on list change
                 setScanResult({ type: 'success', message: `${studentData.name} checked in!` });
             } else {
                 playSound('duplicate');
@@ -233,7 +228,67 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     link.download = `attendance-${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
   };
+
+  const handleManualIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value.toUpperCase().trim();
+    setManualId(val);
+    const matched = knownStudents.find(s => s.id === val);
+    if (matched) {
+        setManualName(matched.name);
+        setManualIsNew(false);
+        setManualError('');
+    } else {
+        if (!manualIsNew) setManualName('');
+        setManualIsNew(true);
+    }
+  };
+
+  const submitManualAdd = () => {
+      if (!manualId) { setManualError('Student ID is required.'); return; }
+      if (!manualName) { setManualError('Student Name is required.'); return; }
+      
+      const email = `${manualId}@STUDENT.UTS.EDU.MY`;
+      const result = onManualAdd(manualName, manualId, email, 'P');
+      
+      if (result.success) {
+          setShowManualModal(false);
+          setManualId('');
+          setManualName('');
+          setManualError('');
+      } else {
+          setManualError(result.message);
+      }
+  };
   
+  // Checklist Mode Logic
+  const filteredChecklist = knownStudents.filter(s => 
+      s.name.toLowerCase().includes(checklistSearch.toLowerCase()) || 
+      s.id.toLowerCase().includes(checklistSearch.toLowerCase())
+  ).sort((a, b) => a.name.localeCompare(b.name));
+
+  const toggleStudentAttendance = (student: PreRegisteredStudent) => {
+      const isPresent = attendanceList.some(a => a.studentId === student.id);
+      if (isPresent) {
+          onRemoveStudents([student.id]);
+      } else {
+          addStudent(student.name, student.id, `${student.id}@STUDENT.UTS.EDU.MY`, 'P');
+      }
+  };
+
+  const markAllVisiblePresent = () => {
+      if (!confirm(`Mark all ${filteredChecklist.length} visible students as present?`)) return;
+      
+      let count = 0;
+      filteredChecklist.forEach(s => {
+          const isPresent = attendanceList.some(a => a.studentId === s.id);
+          if (!isPresent) {
+              addStudent(s.name, s.id, `${s.id}@STUDENT.UTS.EDU.MY`, 'P');
+              count++;
+          }
+      });
+      alert(`Marked ${count} students as present.`);
+  };
+
   return (
     <div className="w-full max-w-[1600px] mx-auto p-4 sm:p-6 space-y-6">
        <div className="relative z-10 flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
@@ -248,8 +303,29 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
          </div>
          <div className="flex items-center gap-2" role="toolbar" aria-label="Toolbar">
             <button 
+              onClick={() => {
+                  setShowManualModal(true);
+                  setManualId('');
+                  setManualName('');
+                  setManualError('');
+              }}
+              className="hidden sm:flex items-center justify-center w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl border hover:bg-indigo-100 transition-colors"
+              title="Manual Entry"
+              aria-label="Manually add student"
+            >
+              <PencilSquareIcon className="w-5 h-5" />
+            </button>
+            <button 
+              onClick={() => setViewMode(v => v === 'checklist' ? 'teacher' : 'checklist')} 
+              className={`flex items-center justify-center w-12 h-12 rounded-xl border transition-colors shadow-sm ${viewMode === 'checklist' ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-600'}`}
+              title="Class Register (Checklist)"
+              aria-label="Toggle Class Register"
+            >
+              <ClipboardDocumentCheckIcon className="w-5 h-5" />
+            </button>
+            <button 
               onClick={() => setIsSoundEnabled(!isSoundEnabled)} 
-              className={`flex items-center justify-center w-12 h-12 rounded-xl border transition-colors shadow-sm ${isSoundEnabled ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-50 text-gray-400'}`} 
+              className={`hidden sm:flex items-center justify-center w-12 h-12 rounded-xl border transition-colors shadow-sm ${isSoundEnabled ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-50 text-gray-400'}`} 
               title={isSoundEnabled ? "Mute Sound" : "Enable Sound"}
               aria-label={isSoundEnabled ? "Mute sound" : "Enable sound"}
               aria-pressed={isSoundEnabled}
@@ -258,13 +334,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </button>
             <button 
               onClick={() => setViewMode(v => v === 'teacher' ? 'classroom' : 'teacher')} 
-              className={`group flex items-center gap-3 px-5 py-3 rounded-xl font-bold transition-all ${viewMode === 'teacher' ? 'bg-gray-50 text-gray-700' : 'bg-gray-900 text-white shadow-lg'}`} 
-              title="Toggle View Mode"
+              className={`hidden sm:flex group items-center gap-3 px-5 py-3 rounded-xl font-bold transition-all ${viewMode === 'teacher' ? 'bg-gray-50 text-gray-700' : (viewMode === 'classroom' ? 'bg-gray-900 text-white shadow-lg' : 'bg-gray-50 text-gray-400')}`} 
+              title="Toggle QR View Mode"
               aria-label={`Switch to ${viewMode === 'teacher' ? 'Classroom' : 'Teacher'} view`}
             >
               <div className="text-right">
                 <span className="text-[10px] uppercase opacity-60">View</span>
-                <span className="block text-xs uppercase tracking-wider">{viewMode}</span>
+                <span className="block text-xs uppercase tracking-wider">{viewMode === 'classroom' ? 'Classroom' : 'Teacher'}</span>
               </div>
               <EyeIcon className="w-5 h-5" aria-hidden="true" />
             </button>
@@ -279,6 +355,65 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
          </div>
        </div>
 
+      {viewMode === 'checklist' ? (
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden flex flex-col h-[calc(100vh-180px)]">
+              <div className="p-4 border-b border-gray-100 bg-gray-50 flex flex-col sm:flex-row gap-4 items-center justify-between">
+                  <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                      <ClipboardDocumentCheckIcon className="w-5 h-5 text-brand-primary" />
+                      Class Register
+                  </h2>
+                  <div className="flex items-center gap-3 w-full sm:w-auto">
+                      <div className="relative flex-1 sm:w-64">
+                          <MagnifyingGlassIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                          <input 
+                            type="text" 
+                            placeholder="Search name or ID..." 
+                            value={checklistSearch}
+                            onChange={(e) => setChecklistSearch(e.target.value)}
+                            className="w-full pl-9 pr-4 py-2 rounded-lg border-gray-200 text-sm focus:border-brand-primary focus:ring-brand-primary"
+                          />
+                      </div>
+                      <button 
+                        onClick={markAllVisiblePresent}
+                        className="whitespace-nowrap px-4 py-2 bg-brand-primary text-white text-xs font-bold rounded-lg hover:bg-brand-secondary transition-colors"
+                      >
+                          Mark All Present
+                      </button>
+                  </div>
+              </div>
+              <div className="flex-1 overflow-y-auto p-2">
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
+                      {filteredChecklist.map(student => {
+                          const isPresent = attendanceList.some(a => a.studentId === student.id);
+                          return (
+                              <div 
+                                key={student.id}
+                                onClick={() => toggleStudentAttendance(student)}
+                                className={`cursor-pointer p-3 rounded-xl border transition-all duration-200 flex items-center justify-between group ${isPresent ? 'bg-green-50 border-green-200 shadow-sm' : 'bg-white border-gray-100 hover:border-brand-primary/50'}`}
+                              >
+                                  <div className="min-w-0">
+                                      <p className={`text-xs font-black truncate ${isPresent ? 'text-green-800' : 'text-gray-700'}`}>{student.name}</p>
+                                      <p className="text-[10px] text-gray-400 font-mono">{student.id}</p>
+                                  </div>
+                                  <div className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-colors ${isPresent ? 'bg-green-500 border-green-500' : 'bg-white border-gray-300 group-hover:border-brand-primary'}`}>
+                                      {isPresent && <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
+                                  </div>
+                              </div>
+                          );
+                      })}
+                      {filteredChecklist.length === 0 && (
+                          <div className="col-span-full text-center py-10 text-gray-400">
+                              No students found matching "{checklistSearch}"
+                          </div>
+                      )}
+                  </div>
+              </div>
+              <div className="p-3 bg-gray-50 border-t text-xs text-gray-500 flex justify-between">
+                  <span>Showing {filteredChecklist.length} students</span>
+                  <span>{attendanceList.length} Present / {knownStudents.length} Total</span>
+              </div>
+          </div>
+      ) : (
       <div className={`grid grid-cols-1 gap-6 ${viewMode === 'teacher' ? 'xl:grid-cols-12' : ''} items-start transition-all duration-300`}>
         
         {viewMode === 'teacher' && (
@@ -500,6 +635,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           </div>
         </div>
       </div>
+      )}
       
       {showScanner && <QrScanner onScan={handleScanResult} onClose={() => setShowScanner(false)} />}
 
@@ -528,6 +664,51 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 </h3>
                 <p className="text-lg font-bold text-center max-w-xs">{scanResult.message}</p>
              </div>
+        </div>
+      )}
+
+      {/* Manual Add Modal */}
+      {showManualModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200">
+            <div className="bg-gray-50 px-6 py-4 border-b flex justify-between items-center">
+              <h3 className="text-lg font-bold text-gray-900">Manual Entry</h3>
+              <button onClick={() => setShowManualModal(false)} className="text-gray-400 hover:text-gray-600">
+                <XCircleIcon className="w-6 h-6" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+               <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Student ID</label>
+                  <input 
+                    type="text" 
+                    value={manualId}
+                    onChange={handleManualIdChange}
+                    className="w-full border-2 border-gray-200 rounded-xl px-4 py-2 font-mono uppercase font-bold focus:border-brand-primary outline-none"
+                    placeholder="FIA..."
+                    autoFocus
+                  />
+               </div>
+               <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Student Name</label>
+                  <input 
+                    type="text" 
+                    value={manualName}
+                    onChange={(e) => setManualName(e.target.value.toUpperCase())}
+                    className={`w-full border-2 rounded-xl px-4 py-2 font-bold outline-none ${!manualIsNew && manualName ? 'bg-gray-100 border-transparent text-gray-500' : 'border-gray-200 focus:border-brand-primary'}`}
+                    readOnly={!manualIsNew && !!manualName}
+                    placeholder="NAME"
+                  />
+               </div>
+               {manualError && <p className="text-xs text-red-500 font-bold">{manualError}</p>}
+               <button 
+                 onClick={submitManualAdd}
+                 className="w-full bg-brand-primary text-white font-bold py-3 rounded-xl hover:bg-brand-secondary active:scale-95 transition-all"
+               >
+                 Add to List
+               </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
