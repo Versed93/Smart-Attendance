@@ -20,6 +20,7 @@ const App: React.FC = () => {
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('t');
   const courseName = urlParams.get('c');
+  const isOfflineScan = urlParams.get('offline') === 'true';
   
   // Geolocation params
   const latParam = urlParams.get('lat');
@@ -70,7 +71,7 @@ const App: React.FC = () => {
 
   // Network Listener
   useEffect(() => {
-    console.log("UTS QR Attendance App Mounted - v1.3.0 (Sync Loop Fix)");
+    console.log("UTS QR Attendance App Mounted - v1.6.0 (Offline Hub Mode)");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -159,10 +160,11 @@ const App: React.FC = () => {
             formData.append('customDate', `${day}/${month}/${year}`);
 
             const controller = new AbortController();
+            // TIMEOUT REDUCED TO 15s to prevent "Stuck" screens
             const timeoutId = setTimeout(() => {
                 if (isMounted) setSyncStatus('Server is busy (High Traffic)...');
                 controller.abort();
-            }, 60000); // 60s timeout
+            }, 15000); 
 
             if (isMounted) setSyncStatus('Connecting to Google Server...');
 
@@ -207,11 +209,13 @@ const App: React.FC = () => {
             
             let detailedError = err.message || "Failed to sync.";
             if (err.name === 'AbortError') {
+              // Crucial: Set specific status so UI knows to switch to 'Background Mode'
               detailedError = "Connection Timeout: Server busy. Retrying...";
-              if (isMounted) setSyncStatus('Request timed out. Retrying...');
+              if (isMounted) setSyncStatus('Saved. Uploading in background...');
             } else if (err.message === 'Failed to fetch') {
-              detailedError = "Network Error: Pausing.";
-              if (isMounted) setSyncStatus('Network error. Pausing...');
+              // Handle network errors gracefully (offline, ad-blocker, etc.)
+              detailedError = "Network Error: Could not connect to Google. Check internet or disable ad-blockers. Retrying automatically.";
+              if (isMounted) setSyncStatus('Saved. Uploading in background...');
             } else {
               if (isMounted) setSyncStatus(`Error: ${detailedError.substring(0, 30)}...`);
             }
@@ -234,7 +238,7 @@ const App: React.FC = () => {
 
     processNext();
     return () => { isMounted = false; };
-  }, [syncQueue, scriptUrl, isOnline, retryTrigger]); // NOTE: isSyncing is NOT a dependency to avoid loops
+  }, [syncQueue, scriptUrl, isOnline, retryTrigger]); 
 
   const handleRetryNow = useCallback(() => {
       setRetryTrigger(c => c + 1);
@@ -259,7 +263,12 @@ const App: React.FC = () => {
       const timestamp = overrideTimestamp || Date.now();
       const newStudent: Student = { name, studentId, email, timestamp, status };
       
-      setAttendanceList(prev => [newStudent, ...prev.filter(s => s.studentId !== studentId)]);
+      const studentExists = attendanceList.some(s => s.studentId === studentId);
+      if (studentExists) {
+        return { success: false, message: "This student is already on the list." };
+      }
+
+      setAttendanceList(prev => [newStudent, ...prev]);
 
       const task: SyncTask = {
           id: `${studentId}-${timestamp}`,
@@ -360,6 +369,7 @@ const App: React.FC = () => {
                      onRetrySync={handleRetryNow}
                      isOnline={isOnline}
                      onLogout={handleLogout}
+                     addStudent={addStudent}
                  />
                  
                  {syncError && isOnline && (
@@ -411,6 +421,7 @@ const App: React.FC = () => {
                        isSyncing={isSyncing || syncQueue.length > 0}
                        isOnline={isOnline}
                        syncStatus={syncStatus}
+                       isOfflineScan={isOfflineScan}
                    />
                </div>
            </div>
