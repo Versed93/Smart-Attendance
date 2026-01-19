@@ -11,7 +11,7 @@ type View = 'teacher' | 'student';
 
 const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
-const SCRIPT_URL_KEY = 'attendance-script-url-v26'; 
+const SCRIPT_URL_KEY = 'attendance-script-url-v28'; 
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
@@ -195,16 +195,17 @@ const App: React.FC = () => {
         try {
             if (isMounted) setSyncStatus('Preparing data package...');
             
-            const formData = new URLSearchParams();
-            Object.entries(task.data).forEach(([k, v]) => formData.append(k, String(v)));
-
-            // Feature: Send ACTUAL date
+            // Prepare Payload
             const recordTimestamp = parseInt(task.data.timestamp || Date.now().toString());
             const recordDate = new Date(recordTimestamp);
             const day = String(recordDate.getDate()).padStart(2, '0');
             const month = String(recordDate.getMonth() + 1).padStart(2, '0');
             const year = recordDate.getFullYear();
-            formData.append('customDate', `${day}/${month}/${year}`);
+
+            const payload = {
+                ...task.data,
+                customDate: `${day}/${month}/${year}`
+            };
 
             const controller = new AbortController();
             // TIMEOUT REDUCED TO 15s to prevent "Stuck" screens
@@ -215,10 +216,11 @@ const App: React.FC = () => {
 
             if (isMounted) setSyncStatus('Connecting to Google Server...');
 
+            // Use JSON body with text/plain to avoid CORS Preflight (OPTIONS)
             const response = await fetch(scriptUrl.trim(), {
                 method: 'POST',
-                body: formData,
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: JSON.stringify(payload),
+                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
                 signal: controller.signal
             });
 
