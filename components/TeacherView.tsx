@@ -315,20 +315,21 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   };
 
   return (
-    <div className="w-full max-w-[1600px] mx-auto p-3 sm:p-6 space-y-4 sm:space-y-6 pb-20 sm:pb-6">
+    <div className="w-full max-w-[1600px] mx-auto p-2 sm:p-6 space-y-4 sm:space-y-6 pb-20 sm:pb-6">
        {/* Main Toolbar */}
-       <div className="relative z-10 flex flex-col xl:flex-row justify-between items-stretch xl:items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
-         <div className="flex items-center gap-4">
-             <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-xl shadow-lg shrink-0" aria-hidden="true">
-                 <ShieldCheckIcon className="w-7 h-7" />
+       <div className="relative z-10 flex flex-col xl:flex-row justify-between items-stretch xl:items-center bg-white p-3 sm:p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
+         <div className="flex items-center gap-3 sm:gap-4">
+             <div className="flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-xl shadow-lg shrink-0" aria-hidden="true">
+                 <ShieldCheckIcon className="w-6 h-6 sm:w-7 sm:h-7" />
              </div>
              <div className="min-w-0">
-                 <h1 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight truncate">UTS ATTENDANCE</h1>
-                 <p className="text-xs text-gray-500 font-bold tracking-[0.2em] mt-1">SECURE CHECK-IN</p>
+                 <h1 className="text-lg sm:text-2xl font-black text-gray-900 tracking-tight truncate">UTS ATTENDANCE</h1>
+                 <p className="text-[10px] sm:text-xs text-gray-500 font-bold tracking-[0.2em] mt-0.5 sm:mt-1">SECURE CHECK-IN</p>
              </div>
          </div>
          
-         <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0 no-scrollbar w-full xl:w-auto" role="toolbar" aria-label="Toolbar">
+         {/* Toolbar Buttons - Horizontal Scroll on Mobile */}
+         <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0 no-scrollbar w-full xl:w-auto mask-fade-right" role="toolbar" aria-label="Toolbar">
             <button 
               onClick={() => {
                   setShowManualModal(true);
@@ -336,7 +337,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   setManualName('');
                   setManualError('');
               }}
-              className="flex items-center justify-center w-12 h-12 bg-indigo-50 text-indigo-600 rounded-xl border hover:bg-indigo-100 transition-colors shrink-0"
+              className="flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 bg-indigo-50 text-indigo-600 rounded-xl border hover:bg-indigo-100 transition-colors shrink-0"
               title="Manual Entry"
               aria-label="Manually add student"
             >
@@ -344,7 +345,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </button>
             <button 
               onClick={() => setViewMode(v => v === 'checklist' ? 'teacher' : 'checklist')} 
-              className={`flex items-center justify-center w-12 h-12 rounded-xl border transition-colors shadow-sm shrink-0 ${viewMode === 'checklist' ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-600'}`}
+              className={`flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 rounded-xl border transition-colors shadow-sm shrink-0 ${viewMode === 'checklist' ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-600'}`}
               title="Class Register (Checklist)"
               aria-label="Toggle Class Register"
             >
@@ -352,7 +353,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </button>
             <button 
               onClick={() => setIsSoundEnabled(!isSoundEnabled)} 
-              className={`flex items-center justify-center w-12 h-12 rounded-xl border transition-colors shadow-sm shrink-0 ${isSoundEnabled ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-50 text-gray-400'}`} 
+              className={`flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 rounded-xl border transition-colors shadow-sm shrink-0 ${isSoundEnabled ? 'bg-indigo-50 text-indigo-600' : 'bg-gray-50 text-gray-400'}`} 
               title={isSoundEnabled ? "Mute Sound" : "Enable Sound"}
               aria-label={isSoundEnabled ? "Mute sound" : "Enable sound"}
               aria-pressed={isSoundEnabled}
@@ -361,7 +362,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </button>
             <button 
               onClick={() => setViewMode(v => v === 'teacher' ? 'classroom' : 'teacher')} 
-              className={`flex group items-center gap-3 px-5 py-3 rounded-xl font-bold transition-all shrink-0 ${viewMode === 'teacher' ? 'bg-gray-50 text-gray-700' : (viewMode === 'classroom' ? 'bg-gray-900 text-white shadow-lg' : 'bg-gray-50 text-gray-400')}`} 
+              className={`flex group items-center gap-3 px-3 sm:px-5 py-2 sm:py-3 rounded-xl font-bold transition-all shrink-0 ${viewMode === 'teacher' ? 'bg-gray-50 text-gray-700' : (viewMode === 'classroom' ? 'bg-gray-900 text-white shadow-lg' : 'bg-gray-50 text-gray-400')}`} 
               title="Toggle QR View Mode"
               aria-label={`Switch to ${viewMode === 'teacher' ? 'Classroom' : 'Teacher'} view`}
             >
@@ -373,7 +374,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </button>
             <button 
               onClick={onLogout} 
-              className="flex items-center justify-center w-12 h-12 bg-red-50 text-red-600 rounded-xl border hover:bg-red-100 shrink-0" 
+              className="flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 bg-red-50 text-red-600 rounded-xl border hover:bg-red-100 shrink-0" 
               title="Log Out"
               aria-label="Log out"
             >
@@ -383,10 +384,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
        </div>
 
       {viewMode === 'checklist' ? (
-          <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden flex flex-col h-[calc(100vh-200px)]">
-              <div className="p-4 border-b border-gray-100 bg-gray-50 flex flex-col gap-3">
+          <div className="bg-white rounded-2xl shadow-lg border border-gray-200 overflow-hidden flex flex-col h-[calc(100vh-220px)] sm:h-[calc(100vh-200px)]">
+              <div className="p-3 sm:p-4 border-b border-gray-100 bg-gray-50 flex flex-col gap-3">
                   <div className="flex items-center justify-between">
-                      <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                      <h2 className="text-base sm:text-lg font-bold text-gray-800 flex items-center gap-2">
                           <ClipboardDocumentCheckIcon className="w-5 h-5 text-brand-primary" />
                           Class Register
                       </h2>
@@ -459,7 +460,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       <>
         {/* Mobile View Switcher (Tabs) */}
         {viewMode === 'teacher' && (
-          <div className="xl:hidden flex w-full bg-gray-200 p-1 rounded-xl shadow-inner">
+          <div className="xl:hidden flex w-full bg-gray-200 p-1 rounded-xl shadow-inner mb-4">
             <button 
               onClick={() => setMobileTab('qr')}
               className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-bold transition-all ${mobileTab === 'qr' ? 'bg-white text-brand-primary shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
@@ -477,7 +478,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           </div>
         )}
 
-        <div className={`grid grid-cols-1 gap-6 ${viewMode === 'teacher' ? 'xl:grid-cols-12' : ''} items-start transition-all duration-300`}>
+        <div className={`grid grid-cols-1 gap-4 sm:gap-6 ${viewMode === 'teacher' ? 'xl:grid-cols-12' : ''} items-start transition-all duration-300`}>
           
           {/* LEFT COLUMN (List) */}
           {viewMode === 'teacher' && (
@@ -539,12 +540,12 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                           return (
                             <tr key={s.studentId} className={isReason ? "bg-yellow-50 hover:bg-yellow-100" : "hover:bg-gray-50"}>
                               <td className="px-4 py-3">
-                                <p className={`font-bold ${isReason ? 'text-yellow-900' : 'text-gray-800'}`}>{s.name}</p>
-                                <p className="font-mono text-xs text-gray-500">{s.studentId}</p>
+                                <p className={`font-bold text-sm ${isReason ? 'text-yellow-900' : 'text-gray-800'}`}>{s.name}</p>
+                                <p className="font-mono text-[10px] sm:text-xs text-gray-500">{s.studentId}</p>
                               </td>
                               <td className="px-4 py-3 text-right">
                                 <div className="flex flex-col items-end gap-1">
-                                    <span className="text-gray-400 text-xs">{new Date(s.timestamp).toLocaleTimeString()}</span>
+                                    <span className="text-gray-400 text-xs">{new Date(s.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                                     {pendingIds.has(s.studentId) ? (
                                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-100 text-orange-700">
                                             <ClockIcon className="w-3 h-3" />
@@ -577,9 +578,87 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
           {/* RIGHT COLUMN (QR + Settings) */}
           <div className={`w-full flex flex-col items-center bg-white p-4 sm:p-8 rounded-2xl shadow-xl border order-1 xl:order-2 transition-all duration-500 ease-in-out z-0 ${viewMode === 'teacher' ? 'xl:col-span-8' : 'col-span-1 xl:col-span-12 min-h-[85vh] justify-center'} ${viewMode === 'teacher' && mobileTab === 'list' ? 'hidden xl:flex' : 'flex'}`}>
+            
+            {/* QR Code Section - Reordered for Mobile to be at the top visually via Flex order or just placed first */}
+            <div className="w-full flex flex-col items-center mb-6 order-1">
+                <h2 className={`font-bold text-brand-primary tracking-tight text-center transition-all duration-300 ${viewMode === 'classroom' ? 'text-4xl sm:text-5xl mb-6 sm:mb-12' : 'text-xl sm:text-2xl mb-4 sm:mb-6'}`}>Scan to Check-in</h2>
+                
+                <div 
+                  className={`bg-white p-2 rounded-3xl shadow-[inset_0_2px_8px_rgba(0,0,0,0.05)] border relative w-full transition-all duration-500 ease-in-out ${
+                      viewMode === 'teacher' 
+                      ? 'max-w-[100px] sm:max-w-[130px]' 
+                      : 'max-w-[85vmin] max-h-[85vmin]'
+                  } aspect-square flex items-center justify-center z-10 mx-auto`}
+                  role="img"
+                  aria-label="Dynamic QR Code for attendance. Updates every second."
+                >
+                   {isQrLoading && (
+                      <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10" aria-label="Loading QR Code">
+                          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary"></div>
+                      </div>
+                   )}
+                  <canvas ref={canvasRef} className="w-full h-full object-contain" />
+                </div>
+                
+                <div className="mt-6 flex flex-col items-center">
+                  <div className="flex items-center gap-2 text-green-600 bg-green-50 px-3 py-1 rounded-full border" role="status">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                    </span>
+                    <span className="text-xs font-bold uppercase tracking-wide">Live Security Active</span>
+                  </div>
+                  <p className="text-gray-400 text-xs mt-1">QR Code refreshes every second.</p>
+                </div>
+            </div>
+
+            {/* Configuration Section - Below QR Code on Mobile for "Teacher" view */}
             {viewMode === 'teacher' && (
-                <div className="w-full space-y-4 mb-6 relative z-20">
-                  <div className="flex justify-between items-center">
+                <div className="w-full space-y-4 mb-6 relative z-20 order-2">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                    <div className="bg-gray-50 p-3 rounded-xl border">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className={`p-2 rounded-lg ${isOfflineMode ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`} aria-hidden="true">
+                            <GlobeIcon className="w-5 h-5"/>
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-gray-700 uppercase" id="session-mode-label">SESSION MODE</p>
+                            <p className="text-[10px] text-gray-500">{isOfflineMode ? 'Offline Hub' : 'Live Sync'}</p>
+                          </div>
+                        </div>
+                        <input 
+                          type="checkbox" 
+                          checked={isOfflineMode} 
+                          onChange={() => setIsOfflineMode(!isOfflineMode)} 
+                          className="toggle toggle-error [--tglbg:theme(colors.green.500)] bg-green-200 hover:bg-green-300 border-green-300"
+                          aria-labelledby="session-mode-label"
+                        />
+                      </div>
+                    </div>
+                    <div className="bg-gray-50 p-3 rounded-xl border">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className={`p-2 rounded-lg ${isGeoEnabled ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-500'}`} aria-hidden="true">
+                            <MapPinIcon className="w-5 h-5"/>
+                          </div>
+                          <div>
+                            <p className="text-xs font-bold text-gray-700 uppercase" id="gps-geofence-label">GPS GEOFENCE</p>
+                            <p className="text-[10px] text-gray-500">Require 150m Radius</p>
+                          </div>
+                        </div>
+                        <input 
+                          type="checkbox" 
+                          checked={isGeoEnabled} 
+                          onChange={() => setIsGeoEnabled(!isGeoEnabled)} 
+                          className="toggle toggle-info" 
+                          aria-labelledby="gps-geofence-label"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center border-t pt-4">
                     <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Configuration</label>
                     <button 
                       onClick={() => setShowSettings(!showSettings)} 
@@ -633,80 +712,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         </div>
                       </div>
                   )}
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div className="bg-gray-50 p-3 rounded-xl border">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className={`p-2 rounded-lg ${isOfflineMode ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-600'}`} aria-hidden="true">
-                            <GlobeIcon className="w-5 h-5"/>
-                          </div>
-                          <div>
-                            <p className="text-xs font-bold text-gray-700 uppercase" id="session-mode-label">SESSION MODE</p>
-                            <p className="text-[10px] text-gray-500">{isOfflineMode ? 'Offline Hub' : 'Live Sync'}</p>
-                          </div>
-                        </div>
-                        <input 
-                          type="checkbox" 
-                          checked={isOfflineMode} 
-                          onChange={() => setIsOfflineMode(!isOfflineMode)} 
-                          className="toggle toggle-error [--tglbg:theme(colors.green.500)] bg-green-200 hover:bg-green-300 border-green-300"
-                          aria-labelledby="session-mode-label"
-                        />
-                      </div>
-                    </div>
-                    <div className="bg-gray-50 p-3 rounded-xl border">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <div className={`p-2 rounded-lg ${isGeoEnabled ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-500'}`} aria-hidden="true">
-                            <MapPinIcon className="w-5 h-5"/>
-                          </div>
-                          <div>
-                            <p className="text-xs font-bold text-gray-700 uppercase" id="gps-geofence-label">GPS GEOFENCE</p>
-                            <p className="text-[10px] text-gray-500">Require 150m Radius</p>
-                          </div>
-                        </div>
-                        <input 
-                          type="checkbox" 
-                          checked={isGeoEnabled} 
-                          onChange={() => setIsGeoEnabled(!isGeoEnabled)} 
-                          className="toggle toggle-info" 
-                          aria-labelledby="gps-geofence-label"
-                        />
-                      </div>
-                    </div>
-                  </div>
               </div>
             )}
-
-            <h2 className={`font-bold text-brand-primary tracking-tight text-center transition-all duration-300 ${viewMode === 'classroom' ? 'text-4xl sm:text-5xl mb-6 sm:mb-12' : 'text-xl sm:text-2xl mb-4 sm:mb-6'}`}>Scan to Check-in</h2>
-            
-            <div 
-              className={`bg-white p-2 rounded-3xl shadow-[inset_0_2px_8px_rgba(0,0,0,0.05)] border relative w-full transition-all duration-500 ease-in-out ${
-                  viewMode === 'teacher' 
-                  ? 'max-w-[200px] lg:max-w-[240px]' 
-                  : 'max-w-[85vmin] max-h-[85vmin]'
-              } aspect-square flex items-center justify-center z-10 mx-auto`}
-              role="img"
-              aria-label="Dynamic QR Code for attendance. Updates every second."
-            >
-               {isQrLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10" aria-label="Loading QR Code">
-                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary"></div>
-                  </div>
-               )}
-              <canvas ref={canvasRef} className="w-full h-full object-contain" />
-            </div>
-            
-            <div className="mt-6 flex flex-col items-center">
-              <div className="flex items-center gap-2 text-green-600 bg-green-50 px-3 py-1 rounded-full border" role="status">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
-                </span>
-                <span className="text-xs font-bold uppercase tracking-wide">Live Security Active</span>
-              </div>
-              <p className="text-gray-400 text-xs mt-1">QR Code refreshes every second.</p>
-            </div>
           </div>
         </div>
       </>

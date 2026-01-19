@@ -209,13 +209,13 @@ export const StudentView: React.FC<StudentViewProps> = ({
   if (status === 'show-student-qr') {
     return (
         <div className="text-center py-8 flex flex-col items-center">
-            <h3 className="text-2xl font-black text-gray-800 mb-2">Your Attendance Code</h3>
-            <p className="text-sm text-gray-500 mb-6 max-w-xs">Please present this QR code to the lecturer for scanning.</p>
-            <div className="bg-white p-4 rounded-xl shadow-lg border w-full max-w-[250px] aspect-square" role="img" aria-label={`QR Code for ${name}`}>
+            <h3 className="text-xl sm:text-2xl font-black text-gray-800 mb-2">Your Attendance Code</h3>
+            <p className="text-xs sm:text-sm text-gray-500 mb-6 max-w-xs">Please present this QR code to the lecturer for scanning.</p>
+            <div className="bg-white p-2 rounded-xl shadow-lg border w-full max-w-[100px] aspect-square" role="img" aria-label={`QR Code for ${name}`}>
                 <canvas ref={canvasRef} className="w-full h-full object-contain" />
             </div>
             <div className="mt-6 text-center bg-gray-50 p-3 rounded-lg border w-full max-w-[250px]">
-                <p className="text-sm font-bold text-gray-900">{name}</p>
+                <p className="text-sm font-bold text-gray-900 break-words">{name}</p>
                 <p className="text-xs text-gray-500 font-mono">{studentId}</p>
             </div>
         </div>
@@ -238,20 +238,20 @@ export const StudentView: React.FC<StudentViewProps> = ({
         )}
 
         {status === 'form' && (
-            <form onSubmit={handleSubmit} className="space-y-5" aria-labelledby="form-title">
-                <div className="text-center mb-6">
-                    <h3 id="form-title" className="text-xl font-bold text-gray-800">Check-in Details</h3>
+            <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-5" aria-labelledby="form-title">
+                <div className="text-center mb-4 sm:mb-6">
+                    <h3 id="form-title" className="text-lg sm:text-xl font-bold text-gray-800">Check-in Details</h3>
                     <div className="flex flex-col items-center gap-1 mt-2">
-                        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-xs font-bold border border-green-200 shadow-sm">
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-[10px] sm:text-xs font-bold border border-green-200 shadow-sm">
                            <CheckCircleIcon className="w-3.5 h-3.5" aria-hidden="true" /><span>Secure Link Verified</span>
                         </div>
                         {geoConstraints && (
-                            <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-bold border border-blue-200 shadow-sm">
+                            <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-[10px] sm:text-xs font-bold border border-blue-200 shadow-sm">
                                 <MapPinIcon className="w-3.5 h-3.5" aria-hidden="true" /><span>Location Verified</span>
                             </div>
                         )}
                         {isOfflineScan && (
-                             <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-50 text-purple-700 rounded-full text-xs font-bold border border-purple-200 shadow-sm">
+                             <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-50 text-purple-700 rounded-full text-[10px] sm:text-xs font-bold border border-purple-200 shadow-sm">
                                 <QrCodeIcon className="w-3.5 h-3.5" aria-hidden="true" /><span>Offline Mode</span>
                             </div>
                         )}
@@ -260,27 +260,27 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
                 {courseName && (
                     <div className="bg-brand-primary/5 border border-brand-primary/10 rounded-lg p-3 text-center mb-4">
-                        <p className="text-xs font-bold text-brand-primary uppercase tracking-wider mb-1">Session</p>
-                        <p className="text-gray-900 font-bold">{decodeURIComponent(courseName)}</p>
+                        <p className="text-[10px] sm:text-xs font-bold text-brand-primary uppercase tracking-wider mb-1">Session</p>
+                        <p className="text-sm sm:text-base text-gray-900 font-bold">{decodeURIComponent(courseName)}</p>
                     </div>
                 )}
                 
                 <div>
                     <label htmlFor="student-id" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Student ID</label>
-                    <input id="student-id" type="text" value={studentId} placeholder="FIA..." onChange={handleStudentIdChange} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-3 px-4 text-gray-900 uppercase font-mono font-bold transition-all outline-none" required aria-required="true" />
+                    <input id="student-id" type="text" value={studentId} placeholder="FIA..." onChange={handleStudentIdChange} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-2.5 sm:py-3 px-4 text-gray-900 uppercase font-mono font-bold transition-all outline-none text-sm sm:text-base" required aria-required="true" />
                 </div>
                 <div>
                     <label htmlFor="full-name" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Full Name</label>
-                    <input id="full-name" type="text" value={name} placeholder="AS PER IC" onChange={(e) => setName(e.target.value.toUpperCase())} readOnly={!isNewStudent && name.length > 0} className={`block w-full border-2 rounded-lg py-3 px-4 text-gray-900 uppercase font-bold transition-all outline-none ${!isNewStudent && name.length > 0 ? 'bg-gray-100 border-transparent text-gray-600' : 'bg-base-100 border-base-200 focus:border-brand-primary'}`} required aria-required="true" />
+                    <input id="full-name" type="text" value={name} placeholder="AS PER IC" onChange={(e) => setName(e.target.value.toUpperCase())} readOnly={!isNewStudent && name.length > 0} className={`block w-full border-2 rounded-lg py-2.5 sm:py-3 px-4 text-gray-900 uppercase font-bold transition-all outline-none text-sm sm:text-base ${!isNewStudent && name.length > 0 ? 'bg-gray-100 border-transparent text-gray-600' : 'bg-base-100 border-base-200 focus:border-brand-primary'}`} required aria-required="true" />
                 </div>
                 <div>
                     <label htmlFor="email-address" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Email Address</label>
-                    <input id="email-address" type="email" value={email} onChange={(e) => setEmail(e.target.value.toUpperCase())} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-3 px-4 text-gray-900 uppercase font-medium transition-all outline-none" required aria-required="true" />
+                    <input id="email-address" type="email" value={email} onChange={(e) => setEmail(e.target.value.toUpperCase())} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-2.5 sm:py-3 px-4 text-gray-900 uppercase font-medium transition-all outline-none text-sm sm:text-base" required aria-required="true" />
                 </div>
                 
                 {formError && <p className="text-sm text-red-500 font-bold text-center bg-red-50 py-2 rounded" role="alert">{formError}</p>}
                 
-                <button type="submit" className="w-full flex justify-center items-center gap-2 py-4 px-4 rounded-xl shadow-lg shadow-brand-primary/30 text-base font-bold text-white bg-brand-primary hover:bg-brand-secondary active:scale-[0.98] transition-all mt-4 focus:ring-4 focus:ring-brand-primary/50 focus:outline-none">
+                <button type="submit" className="w-full flex justify-center items-center gap-2 py-3.5 sm:py-4 px-4 rounded-xl shadow-lg shadow-brand-primary/30 text-sm sm:text-base font-bold text-white bg-brand-primary hover:bg-brand-secondary active:scale-[0.98] transition-all mt-4 focus:ring-4 focus:ring-brand-primary/50 focus:outline-none">
                     {isOfflineScan ? 'Generate My QR Code' : 'Submit Attendance'}
                 </button>
                 <p className="text-[10px] text-center text-gray-400">Details will be saved for next time.</p>
@@ -288,27 +288,27 @@ export const StudentView: React.FC<StudentViewProps> = ({
         )}
 
         {(status === 'success' || status === 'error') && (
-            <div className="text-center py-8" role={status === 'error' ? 'alert' : 'status'}>
-                <div className={`mx-auto flex items-center justify-center h-28 w-28 rounded-full ${status === 'success' ? 'bg-green-100' : 'bg-red-100'} mb-6 shadow-sm`}>
-                    {status === 'success' ? ( isOnline && isSyncing ? <div className="animate-spin h-14 w-14 border-4 border-brand-primary border-t-transparent rounded-full" aria-label="Syncing"></div> : <CheckCircleIcon className="h-16 w-16 text-green-600" aria-hidden="true" />) : <p className="text-5xl" aria-hidden="true">😟</p>}
+            <div className="text-center py-6 sm:py-8" role={status === 'error' ? 'alert' : 'status'}>
+                <div className={`mx-auto flex items-center justify-center h-20 w-20 sm:h-28 sm:w-28 rounded-full ${status === 'success' ? 'bg-green-100' : 'bg-red-100'} mb-4 sm:mb-6 shadow-sm`}>
+                    {status === 'success' ? ( isOnline && isSyncing ? <div className="animate-spin h-10 w-10 sm:h-14 sm:w-14 border-4 border-brand-primary border-t-transparent rounded-full" aria-label="Syncing"></div> : <CheckCircleIcon className="h-12 w-12 sm:h-16 sm:w-16 text-green-600" aria-hidden="true" />) : <p className="text-4xl sm:text-5xl" aria-hidden="true">😟</p>}
                 </div>
-                <h3 className={`text-3xl font-extrabold ${status === 'success' ? (isOnline && isSyncing && !isBackgroundUpload ? 'text-brand-primary' : (isBackgroundUpload ? 'text-orange-600' : 'text-green-800')) : 'text-red-600'} mb-2`}>
+                <h3 className={`text-2xl sm:text-3xl font-extrabold ${status === 'success' ? (isOnline && isSyncing && !isBackgroundUpload ? 'text-brand-primary' : (isBackgroundUpload ? 'text-orange-600' : 'text-green-800')) : 'text-red-600'} mb-2`}>
                     {status === 'success' ? (isOnline && isSyncing ? (isBackgroundUpload ? 'Saved' : 'Syncing...') : 'Verified!') : 'Failed'}
                 </h3>
-                {status === 'error' && <p className="text-sm text-red-600 font-medium">{message}</p>}
+                {status === 'error' && <p className="text-xs sm:text-sm text-red-600 font-medium">{message}</p>}
                 {status === 'success' && (
-                    <div className={`max-w-sm mx-auto rounded-2xl border overflow-hidden shadow-sm ${!isOnline ? 'bg-yellow-50 border-yellow-200' : (isSyncing ? (isBackgroundUpload ? 'bg-orange-50 border-orange-200' : 'bg-indigo-50 border-indigo-200') : 'bg-green-50 border-green-200')}`}>
-                        <div className={`px-6 py-4 border-b ${!isOnline ? 'border-yellow-200 bg-yellow-100/50' : (isSyncing ? (isBackgroundUpload ? 'border-orange-200 bg-orange-100/50' : 'border-indigo-200 bg-indigo-100/50') : 'border-green-200 bg-green-100/50')}`}>
-                            <p className={`font-bold text-lg ${!isOnline ? 'text-yellow-800' : (isSyncing ? (isBackgroundUpload ? 'text-orange-800' : 'text-indigo-800') : 'text-green-800')}`}>
+                    <div className={`max-w-sm mx-auto rounded-2xl border overflow-hidden shadow-sm mt-4 ${!isOnline ? 'bg-yellow-50 border-yellow-200' : (isSyncing ? (isBackgroundUpload ? 'bg-orange-50 border-orange-200' : 'bg-indigo-50 border-indigo-200') : 'bg-green-50 border-green-200')}`}>
+                        <div className={`px-4 sm:px-6 py-3 sm:py-4 border-b ${!isOnline ? 'border-yellow-200 bg-yellow-100/50' : (isSyncing ? (isBackgroundUpload ? 'border-orange-200 bg-orange-100/50' : 'border-indigo-200 bg-indigo-100/50') : 'border-green-200 bg-green-100/50')}`}>
+                            <p className={`font-bold text-sm sm:text-lg ${!isOnline ? 'text-yellow-800' : (isSyncing ? (isBackgroundUpload ? 'text-orange-800' : 'text-indigo-800') : 'text-green-800')}`}>
                                 {!isOnline ? 'OFFLINE MODE' : (isSyncing ? (isBackgroundUpload ? 'UPLOAD PENDING' : 'DATA SYNC') : 'RECORDED')}
                             </p>
                         </div>
-                        <div className="p-6">
+                        <div className="p-4 sm:p-6">
                             {isSyncing && isOnline && !isBackgroundUpload ? (
                                 <div className="text-left space-y-4">
-                                    <div className="flex items-center gap-3 opacity-50"><div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs font-bold" aria-hidden="true">✓</div><span className="text-sm font-bold text-gray-500 line-through">Step 1: Save to Device</span></div>
-                                    <div className="flex items-center gap-3"><div className="relative w-6 h-6"><div className="absolute w-full h-full rounded-full bg-indigo-400 opacity-25 animate-ping"></div><div className="w-2.5 h-2.5 bg-indigo-600 rounded-full m-auto"></div></div><div className="flex-1"><span className="text-sm font-bold text-indigo-900 block">Step 2: Uploading to Cloud</span><span className="text-xs text-indigo-600">{syncStatus}</span></div></div>
-                                    <div className="bg-white/60 p-3 text-xs text-indigo-800 border border-indigo-100 rounded-lg"><strong>⚠️ Do not close this tab.</strong><br/>Sending data to class register...</div>
+                                    <div className="flex items-center gap-3 opacity-50"><div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs font-bold" aria-hidden="true">✓</div><span className="text-xs sm:text-sm font-bold text-gray-500 line-through">Step 1: Save to Device</span></div>
+                                    <div className="flex items-center gap-3"><div className="relative w-6 h-6"><div className="absolute w-full h-full rounded-full bg-indigo-400 opacity-25 animate-ping"></div><div className="w-2.5 h-2.5 bg-indigo-600 rounded-full m-auto"></div></div><div className="flex-1"><span className="text-xs sm:text-sm font-bold text-indigo-900 block">Step 2: Uploading to Cloud</span><span className="text-[10px] sm:text-xs text-indigo-600">{syncStatus}</span></div></div>
+                                    <div className="bg-white/60 p-3 text-[10px] sm:text-xs text-indigo-800 border border-indigo-100 rounded-lg"><strong>⚠️ Do not close this tab.</strong><br/>Sending data to class register...</div>
                                     {showRetry && onRetry && (
                                         <button 
                                           onClick={() => { onRetry(); }}
@@ -321,16 +321,16 @@ export const StudentView: React.FC<StudentViewProps> = ({
                             ) : (
                                 (isSyncing || !isOnline) ? (
                                     <div className="text-left space-y-4">
-                                        <div className="flex items-start gap-3"><GlobeIcon className="w-5 h-5 text-orange-500 mt-0.5" aria-hidden="true" /><div><p className="text-sm font-bold text-orange-900">Upload Pending</p><p className="text-xs text-orange-700 mt-1">Your attendance is saved and will upload automatically.</p></div></div>
-                                        <div className="bg-orange-100/50 p-3 text-xs text-orange-800 border border-orange-200 rounded-lg"><strong>You can safely close this tab now.</strong></div>
+                                        <div className="flex items-start gap-3"><GlobeIcon className="w-5 h-5 text-orange-500 mt-0.5" aria-hidden="true" /><div><p className="text-xs sm:text-sm font-bold text-orange-900">Upload Pending</p><p className="text-[10px] sm:text-xs text-orange-700 mt-1">Your attendance is saved and will upload automatically.</p></div></div>
+                                        <div className="bg-orange-100/50 p-3 text-[10px] sm:text-xs text-orange-800 border border-orange-200 rounded-lg"><strong>You can safely close this tab now.</strong></div>
                                     </div>
                                 ) : (
                                     <div className="text-left space-y-4">
                                          <div className="flex items-center gap-3">
                                             <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs font-bold shrink-0" aria-hidden="true">✓</div>
                                             <div>
-                                                <p className="text-sm font-bold text-green-900">Successfully Recorded</p>
-                                                <p className="text-xs text-green-700 mt-1">Your name has been added to the class list.</p>
+                                                <p className="text-xs sm:text-sm font-bold text-green-900">Successfully Recorded</p>
+                                                <p className="text-[10px] sm:text-xs text-green-700 mt-1">Your name has been added to the class list.</p>
                                             </div>
                                          </div>
                                     </div>
