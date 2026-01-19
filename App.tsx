@@ -129,6 +129,53 @@ const App: React.FC = () => {
     localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(syncQueue));
   }, [syncQueue]);
 
+  // --- POLLING ENGINE (NEW) ---
+  const fetchRemoteAttendance = useCallback(async () => {
+    if (view !== 'teacher' || !isOnline || !scriptUrl) return;
+
+    try {
+        const response = await fetch(scriptUrl);
+        if (!response.ok) return;
+        
+        const data = await response.json();
+        
+        if (Array.isArray(data)) {
+            setAttendanceList(prev => {
+                const existingIds = new Set(prev.map(s => s.studentId));
+                const newStudents: Student[] = [];
+                
+                data.forEach((item: any) => {
+                    const sId = String(item.studentId).toUpperCase();
+                    if (!existingIds.has(sId) && !locallyDeletedIds.has(sId)) {
+                        newStudents.push({
+                            name: item.name,
+                            studentId: sId,
+                            email: `${sId}@STUDENT.UTS.EDU.MY`,
+                            timestamp: Date.now(), // Estimate timestamp for remote records
+                            status: item.status as 'P' | 'A'
+                        });
+                    }
+                });
+                
+                if (newStudents.length > 0) {
+                    return [...newStudents, ...prev];
+                }
+                return prev;
+            });
+        }
+    } catch (e) {
+        console.warn("Polling failed (background)", e);
+    }
+  }, [scriptUrl, isOnline, view, locallyDeletedIds]);
+
+  useEffect(() => {
+    if (view === 'teacher') {
+        fetchRemoteAttendance();
+        const interval = setInterval(fetchRemoteAttendance, 10000); // Poll every 10 seconds
+        return () => clearInterval(interval);
+    }
+  }, [fetchRemoteAttendance, view]);
+
   // --- CORE SYNC ENGINE (FIXED) ---
   useEffect(() => {
     // Conditions to SKIP processing
@@ -202,6 +249,8 @@ const App: React.FC = () => {
               setSyncStatus('Sync successful!');
               setSyncQueue(prev => prev.filter(t => t.id !== task.id)); // This triggers the effect again for next item
               setSyncError(null);
+              // Trigger a fetch to update the list with any other changes
+              setTimeout(() => setRetryTrigger(c => c + 1), 500);
             }
 
         } catch (err: any) {
