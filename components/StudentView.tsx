@@ -80,8 +80,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
     const isValid = !isNaN(qrTime) && (now - qrTime < 60000); 
     
     if (isValid) {
-        // Cooldown check removed to allow multiple scans
-        
         // Check Geolocation if constraints exist
         if (geoConstraints) {
             setStatus('validating-gps');
@@ -161,22 +159,22 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   if (status === 'validating') {
       return (
-        <div className="text-center py-12 flex flex-col items-center">
-            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary mb-4"></div>
-            <p className="text-gray-600">Verifying secure link...</p>
+        <div className="text-center py-12 flex flex-col items-center" role="status" aria-live="polite">
+            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary mb-4" aria-hidden="true"></div>
+            <p className="text-gray-600 font-medium">Verifying secure link...</p>
         </div>
       );
   }
 
   if (status === 'validating-gps') {
       return (
-        <div className="text-center py-12 flex flex-col items-center px-6">
-            <div className="animate-bounce rounded-full p-4 bg-blue-50 text-brand-primary mb-4">
+        <div className="text-center py-12 flex flex-col items-center px-6" role="status" aria-live="polite">
+            <div className="animate-bounce rounded-full p-4 bg-blue-50 text-brand-primary mb-4" aria-hidden="true">
                 <MapPinIcon className="w-8 h-8" />
             </div>
             <h3 className="text-lg font-bold text-gray-800 mb-2">Verifying Location</h3>
             <p className="text-gray-500 text-sm max-w-xs mx-auto mb-4">Please allow location access. This may take a moment to get a precise GPS fix.</p>
-            <div className="w-full max-w-[200px] h-1 bg-gray-100 rounded-full overflow-hidden">
+            <div className="w-full max-w-[200px] h-1 bg-gray-100 rounded-full overflow-hidden" role="progressbar" aria-label="Acquiring GPS Signal">
                 <div className="h-full bg-brand-primary animate-progress"></div>
             </div>
         </div>
@@ -186,21 +184,27 @@ export const StudentView: React.FC<StudentViewProps> = ({
   return (
     <div className="relative">
         {bypassRestrictions && onExit && (
-            <button onClick={onExit} className="absolute -top-2 -right-2 text-xs text-gray-400 hover:text-gray-600 p-2">✕ Exit Admin</button>
+            <button 
+                onClick={onExit} 
+                className="absolute -top-2 -right-2 text-xs text-gray-400 hover:text-gray-600 p-2 focus:outline-none focus:ring-2 focus:ring-red-500 rounded"
+                aria-label="Exit Admin Mode"
+            >
+                ✕ Exit Admin
+            </button>
         )}
 
         {status === 'form' && (
-            <form onSubmit={handleSubmit} className="space-y-5">
+            <form onSubmit={handleSubmit} className="space-y-5" aria-labelledby="form-title">
                 <div className="text-center mb-6">
-                    <h3 className="text-xl font-bold text-gray-800">Check-in Details</h3>
+                    <h3 id="form-title" className="text-xl font-bold text-gray-800">Check-in Details</h3>
                     <div className="flex flex-col items-center gap-1 mt-2">
                         <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-xs font-bold border border-green-200 shadow-sm">
-                            <CheckCircleIcon className="w-3.5 h-3.5" />
+                            <CheckCircleIcon className="w-3.5 h-3.5" aria-hidden="true" />
                             <span>Secure Link Verified</span>
                         </div>
                         {geoConstraints && (
                             <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-xs font-bold border border-blue-200 shadow-sm">
-                                <MapPinIcon className="w-3.5 h-3.5" />
+                                <MapPinIcon className="w-3.5 h-3.5" aria-hidden="true" />
                                 <span>Location Verified</span>
                             </div>
                         )}
@@ -215,21 +219,53 @@ export const StudentView: React.FC<StudentViewProps> = ({
                 )}
 
                 <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Student ID</label>
-                    <input type="text" value={studentId} placeholder="FIA..." onChange={handleStudentIdChange} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-3 px-4 text-gray-900 uppercase font-mono font-bold transition-all outline-none" />
+                    <label htmlFor="student-id" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Student ID</label>
+                    <input 
+                        id="student-id"
+                        type="text" 
+                        value={studentId} 
+                        placeholder="FIA..." 
+                        onChange={handleStudentIdChange} 
+                        className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-3 px-4 text-gray-900 uppercase font-mono font-bold transition-all outline-none" 
+                        aria-required="true"
+                    />
                 </div>
                 <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Full Name</label>
-                    <input type="text" value={name} placeholder="AS PER IC" onChange={(e) => setName(e.target.value.toUpperCase())} readOnly={!isNewStudent && name.length > 0} className={`block w-full border-2 rounded-lg py-3 px-4 text-gray-900 uppercase font-bold transition-all outline-none ${!isNewStudent && name.length > 0 ? 'bg-gray-100 border-transparent text-gray-600' : 'bg-base-100 border-base-200 focus:border-brand-primary'}`} />
+                    <label htmlFor="full-name" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Full Name</label>
+                    <input 
+                        id="full-name"
+                        type="text" 
+                        value={name} 
+                        placeholder="AS PER IC" 
+                        onChange={(e) => setName(e.target.value.toUpperCase())} 
+                        readOnly={!isNewStudent && name.length > 0} 
+                        className={`block w-full border-2 rounded-lg py-3 px-4 text-gray-900 uppercase font-bold transition-all outline-none ${!isNewStudent && name.length > 0 ? 'bg-gray-100 border-transparent text-gray-600' : 'bg-base-100 border-base-200 focus:border-brand-primary'}`} 
+                        aria-required="true"
+                        aria-readonly={!isNewStudent && name.length > 0}
+                    />
                 </div>
                 <div>
-                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Email Address</label>
-                    <input type="email" value={email} onChange={(e) => setEmail(e.target.value.toUpperCase())} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-3 px-4 text-gray-900 uppercase font-medium transition-all outline-none" />
+                    <label htmlFor="email-address" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Email Address</label>
+                    <input 
+                        id="email-address"
+                        type="email" 
+                        value={email} 
+                        onChange={(e) => setEmail(e.target.value.toUpperCase())} 
+                        className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-3 px-4 text-gray-900 uppercase font-medium transition-all outline-none" 
+                        aria-required="true"
+                    />
                 </div>
                 
-                {formError && <p className="text-sm text-red-500 font-bold text-center bg-red-50 py-2 rounded">{formError}</p>}
+                {formError && (
+                    <p className="text-sm text-red-500 font-bold text-center bg-red-50 py-2 rounded" role="alert" aria-live="assertive">
+                        {formError}
+                    </p>
+                )}
                 
-                <button type="submit" className="w-full flex justify-center items-center gap-2 py-4 px-4 rounded-xl shadow-lg shadow-brand-primary/30 text-base font-bold text-white bg-brand-primary hover:bg-brand-secondary active:scale-[0.98] transition-all mt-4">
+                <button 
+                    type="submit" 
+                    className="w-full flex justify-center items-center gap-2 py-4 px-4 rounded-xl shadow-lg shadow-brand-primary/30 text-base font-bold text-white bg-brand-primary hover:bg-brand-secondary active:scale-[0.98] transition-all mt-4 focus:ring-4 focus:ring-brand-primary/50 focus:outline-none"
+                >
                     Submit Attendance
                 </button>
                 
@@ -238,8 +274,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
         )}
 
         {(status === 'success' || status === 'error') && (
-            <div className="text-center py-8">
-                <div className={`mx-auto flex items-center justify-center h-28 w-28 rounded-full ${status === 'success' ? 'bg-green-100' : 'bg-red-100'} mb-6 shadow-sm`}>
+            <div className="text-center py-8" role={status === 'error' ? 'alert' : 'status'} aria-live="polite">
+                <div className={`mx-auto flex items-center justify-center h-28 w-28 rounded-full ${status === 'success' ? 'bg-green-100' : 'bg-red-100'} mb-6 shadow-sm`} aria-hidden="true">
                     {status === 'success' ? (
                         isOnline && isSyncing ? (
                             <div className="relative">
@@ -264,6 +300,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
                     <h3 className={`text-3xl font-extrabold ${status === 'success' ? (isOnline && isSyncing ? 'text-brand-primary' : 'text-green-800') : 'text-red-600'} mb-2`}>
                         {status === 'success' ? (isOnline && isSyncing ? 'Syncing...' : 'Verified!') : 'Failed'}
                     </h3>
+                    {status === 'error' && <p className="text-sm text-red-600 font-medium">{message}</p>}
                 </div>
                 
                 {status === 'success' && (
@@ -281,11 +318,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
                             {isSyncing && isOnline ? (
                                  <div className="text-left space-y-4">
                                     <div className="flex items-center gap-3 opacity-50">
-                                        <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs font-bold">✓</div>
+                                        <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs font-bold" aria-hidden="true">✓</div>
                                         <span className="text-sm font-bold text-gray-500 line-through">Step 1: Save to Device</span>
                                     </div>
                                     <div className="flex items-center gap-3">
-                                        <div className="relative flex items-center justify-center w-6 h-6">
+                                        <div className="relative flex items-center justify-center w-6 h-6" aria-hidden="true">
                                             <div className="absolute w-full h-full rounded-full bg-indigo-400 opacity-25 animate-ping"></div>
                                             <div className="w-2.5 h-2.5 bg-indigo-600 rounded-full"></div>
                                         </div>
@@ -303,7 +340,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
                                  /* Offline details */
                                  <div className="text-left space-y-4">
                                      <div className="flex items-start gap-3">
-                                        <div className="mt-0.5 min-w-[20px]">
+                                        <div className="mt-0.5 min-w-[20px]" aria-hidden="true">
                                             <GlobeIcon className="w-5 h-5 text-yellow-600" />
                                         </div>
                                         <div>
@@ -319,7 +356,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
                             ) : (
                                  /* Success details */
                                  <div className="text-center space-y-4">
-                                    <div className="flex justify-center">
+                                    <div className="flex justify-center" aria-hidden="true">
                                         <div className="bg-green-100 p-3 rounded-full">
                                             <CheckCircleIcon className="w-8 h-8 text-green-600" />
                                         </div>
@@ -337,13 +374,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
                                  </div>
                             )}
                             
-                            {/* "Register Next Student" button is now available even without bypassRestrictions if needed, 
-                                but we'll show it based on completion state. 
-                                Since we removed cooldown, they can just refresh or we can add a button. 
-                                For now, I'll allow the "Register Next Student" button if they are in success mode 
-                                and want to add another. */}
-                            
-                            <button onClick={() => { setName(''); setStudentId(''); setEmail(''); setStatus('form'); }} className="mt-6 w-full py-3 bg-brand-primary text-white rounded-xl font-bold shadow-lg shadow-brand-primary/20 hover:scale-[1.02] active:scale-95 transition-all">
+                            <button 
+                                onClick={() => { setName(''); setStudentId(''); setEmail(''); setStatus('form'); }} 
+                                className="mt-6 w-full py-3 bg-brand-primary text-white rounded-xl font-bold shadow-lg shadow-brand-primary/20 hover:scale-[1.02] active:scale-95 transition-all focus:ring-4 focus:ring-brand-primary/50 focus:outline-none"
+                            >
                                 Register Next Student
                             </button>
                         </div>

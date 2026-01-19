@@ -49,7 +49,7 @@ const App: React.FC = () => {
   
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
     const saved = localStorage.getItem(SCRIPT_URL_KEY);
-    return saved || 'https://script.google.com/macros/s/AKfycbyiqXBYucrOqYSzfmK2q2jsuzBuSv34-8JrqVEmZ05myEN4ibUoGZ6zzmxlRDGvhLHa/exec';
+    return saved || 'https://script.google.com/macros/s/AKfycbyB5m9zC99c-xlR-hPgdSbEIqzJF7fgLlexTQonylrlxbPQTJ4JB9dJZ6zzfdEhXsjYPw/exec';
   });
 
   const [syncQueue, setSyncQueue] = useState<SyncTask[]>(() => {
@@ -69,7 +69,7 @@ const App: React.FC = () => {
   // Network Listener
   useEffect(() => {
     // Debug log to confirm app version in production console
-    console.log("UTS QR Attendance App Mounted - v1.0.8");
+    console.log("UTS QR Attendance App Mounted - v1.0.9");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -351,9 +351,9 @@ const App: React.FC = () => {
                  
                  {/* Prominent Error Notification */}
                  {syncError && isOnline && (
-                    <div className="fixed top-6 right-6 max-w-sm w-full bg-white border-l-4 border-red-500 shadow-2xl rounded-r-lg p-5 z-[100] flex flex-col gap-3 animate-pulse">
+                    <div className="fixed top-6 right-6 max-w-sm w-full bg-white border-l-4 border-red-500 shadow-2xl rounded-r-lg p-5 z-[100] flex flex-col gap-3 animate-pulse" role="alert" aria-live="assertive">
                         <div className="flex items-start gap-4">
-                            <div className="text-red-500 bg-red-100 p-2 rounded-full">
+                            <div className="text-red-500 bg-red-100 p-2 rounded-full" aria-hidden="true">
                               <ExclamationTriangleIcon className="w-6 h-6" />
                             </div>
                             <div className="flex-1">
@@ -365,17 +365,17 @@ const App: React.FC = () => {
                         <div className="flex justify-end gap-2 mt-1">
                             <button 
                               onClick={handleRetryNow} 
-                              className="px-4 py-2 bg-red-600 text-white text-sm font-bold rounded shadow hover:bg-red-700 transition-colors flex items-center gap-2"
+                              className="px-4 py-2 bg-red-600 text-white text-sm font-bold rounded shadow hover:bg-red-700 transition-colors flex items-center gap-2 focus:ring-2 focus:ring-red-500 focus:outline-none"
                             >
-                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
+                              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                               Retry Now
                             </button>
                         </div>
                     </div>
                  )}
                  {!isOnline && syncQueue.length > 0 && (
-                     <div className="fixed top-6 right-6 max-w-sm w-full bg-yellow-50 border-l-4 border-yellow-500 shadow-xl rounded-r-lg p-4 z-[100] flex items-center gap-3">
-                         <GlobeIcon className="w-6 h-6 text-yellow-600" />
+                     <div className="fixed top-6 right-6 max-w-sm w-full bg-yellow-50 border-l-4 border-yellow-500 shadow-xl rounded-r-lg p-4 z-[100] flex items-center gap-3" role="status">
+                         <GlobeIcon className="w-6 h-6 text-yellow-600" aria-hidden="true" />
                          <div>
                              <h3 className="font-bold text-yellow-800 text-sm">Offline Mode</h3>
                              <p className="text-xs text-yellow-700">{syncQueue.length} records pending upload.</p>
