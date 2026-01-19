@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { TeacherView } from './components/TeacherView';
 import { StudentView } from './components/StudentView';
@@ -95,7 +96,7 @@ const App: React.FC = () => {
 
   // Network Listener
   useEffect(() => {
-    console.log("UTS QR Attendance App Mounted - v1.7.9 (Dynamic Registry)");
+    console.log("UTS QR Attendance App Mounted - v1.8.0 (Reason Support)");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -187,30 +188,46 @@ const App: React.FC = () => {
             });
 
             // 2. Update Attendance List
-            setAttendanceList(prev => {
-                const existingIds = new Set(prev.map(s => s.studentId));
+            setAttendanceList((prev: Student[]) => {
+                const existingMap = new Map<string, Student>();
+                prev.forEach(s => existingMap.set(s.studentId, s));
+                
                 const newStudents: Student[] = [];
+                let listChanged = false;
                 
                 data.forEach((item: any) => {
                     const sId = String(item.studentId).toUpperCase();
+                    const status = item.status || 'P';
                     
-                    // CRITICAL UPDATE: Only fetch students marked as 'P' (Present)
-                    // We interpret null/undefined as P for backward compatibility, but 'A' is strictly ignored.
-                    const isPresent = !item.status || item.status === 'P';
+                    // Show anyone who is NOT 'A' (Absent).
+                    // 'P' = Present, 'Medical' = Present with Reason, etc.
+                    // 'A' implies they should be removed from the view.
+                    const shouldShow = status !== 'A';
 
-                    if (isPresent && !existingIds.has(sId) && !locallyDeletedIds.has(sId)) {
-                        newStudents.push({
-                            name: item.name,
-                            studentId: sId,
-                            email: `${sId}@STUDENT.UTS.EDU.MY`,
-                            timestamp: Date.now(), // Estimate timestamp for remote records
-                            status: 'P'
-                        });
+                    if (shouldShow && !locallyDeletedIds.has(sId)) {
+                        if (!existingMap.has(sId)) {
+                            // New remote student
+                            newStudents.push({
+                                name: item.name,
+                                studentId: sId,
+                                email: `${sId}@STUDENT.UTS.EDU.MY`,
+                                timestamp: Date.now(), // Estimate timestamp
+                                status: status
+                            });
+                            listChanged = true;
+                        } else {
+                            // Update existing student status if changed (e.g. from P to Medical)
+                            const current = existingMap.get(sId);
+                            if (current && current.status !== status) {
+                                current.status = status;
+                                listChanged = true;
+                            }
+                        }
                     }
                 });
                 
-                if (newStudents.length > 0) {
-                    return [...newStudents, ...prev];
+                if (listChanged) {
+                    return [...newStudents, ...Array.from(existingMap.values())].sort((a: Student, b: Student) => b.timestamp - a.timestamp);
                 }
                 return prev;
             });
@@ -228,7 +245,7 @@ const App: React.FC = () => {
     }
   }, [fetchRemoteAttendance, view]);
 
-  // --- CORE SYNC ENGINE (FIXED FOR NO-CORS) ---
+  // --- CORE SYNC ENGINE (REINFORCED RETRY) ---
   useEffect(() => {
     // Conditions to SKIP processing
     if (syncQueue.length === 0) return;
@@ -262,16 +279,15 @@ const App: React.FC = () => {
 
             const controller = new AbortController();
             
-            // INCREASED TIMEOUT: Google Apps Script LockService waits 30s max. 
-            // We set client timeout to 45s to allow for lock wait + execution.
+            // TIMEOUT STRATEGY: 45s timeout.
+            // If server is busy, it might lock for 30s. We give 15s buffer.
             const timeoutId = setTimeout(() => {
-                if (isMounted) setSyncStatus('Server is busy (Lock wait)...');
+                if (isMounted) setSyncStatus('Server taking too long...');
                 controller.abort();
             }, 45000); 
 
             if (isMounted) setSyncStatus('Connecting to Google Server...');
 
-            // VITAL FIX: Use text/plain to avoid CORS Preflight (OPTIONS request)
             const response = await fetch(scriptUrl.trim(), {
                 method: 'POST',
                 body: JSON.stringify(payload),
@@ -292,7 +308,7 @@ const App: React.FC = () => {
 
             const text = await response.text();
             
-            // Handle HTML responses (usually Google Login page = Permission Error)
+            // Handle HTML responses
             if (text.trim().startsWith('<')) {
                 throw new Error("Access Denied: Script permissions incorrect. Set to 'Anyone'.");
             }
@@ -301,7 +317,6 @@ const App: React.FC = () => {
             try {
                 result = JSON.parse(text);
             } catch(e) {
-                // If script returns text but not JSON, check if it says "success" vaguely
                 if (text.toLowerCase().includes('success')) {
                     result = { result: 'success' };
                 } else {
@@ -326,14 +341,16 @@ const App: React.FC = () => {
             console.error("Cloud Sync Error:", err);
             
             let detailedError = err.message || "Failed to sync.";
+            let shouldRetryImmediately = false;
+
             if (err.name === 'AbortError') {
-              detailedError = "Connection Timeout: Server busy (High Load). Retrying...";
-              if (isMounted) setSyncStatus('Waiting for server...');
+              detailedError = "Connection Timeout: Server busy. Auto-retrying...";
+              if (isMounted) setSyncStatus('Timeout. Retrying...');
+              shouldRetryImmediately = true;
             } else if (err.message === 'Failed to fetch') {
-              detailedError = "Network Error: Could not connect. Check internet. Retrying...";
-              if (isMounted) setSyncStatus('Saved. Uploading in background...');
+              detailedError = "Network Error: Auto-retrying when connected...";
+              if (isMounted) setSyncStatus('Network error. Pending...');
             } else if (detailedError.includes("Access Denied")) {
-               // Persistent error, don't just retry immediately
                if (isMounted) setSyncStatus('Permission Error.');
             } else {
               if (isMounted) setSyncStatus(`Error: ${detailedError.substring(0, 30)}...`);
@@ -342,10 +359,11 @@ const App: React.FC = () => {
             if (isMounted) {
                 setSyncError(detailedError);
                 // Schedule Retry
-                const jitter = 2000 + Math.random() * 5000;
+                // If it was a timeout, retry faster (2s). Otherwise standard jitter.
+                const delay = shouldRetryImmediately ? 2000 : (3000 + Math.random() * 5000);
                 setTimeout(() => {
                    if (isMounted) setRetryTrigger(c => c + 1);
-                }, jitter);
+                }, delay);
             }
         } finally {
             if (isMounted) {
@@ -377,10 +395,10 @@ const App: React.FC = () => {
     localStorage.removeItem(AUTH_KEY);
   };
 
-  const addStudent = (name: string, studentId: string, email: string, status: 'P' | 'A', overrideTimestamp?: number) => {
+  const addStudent = (name: string, studentId: string, email: string, status: string, overrideTimestamp?: number) => {
       const timestamp = overrideTimestamp || Date.now();
       
-      // Update Registry with new manually added student if not exists
+      // Update Registry
       setKnownStudents(prev => {
          if (!prev.some(s => s.id === studentId)) {
              return [...prev, { id: studentId, name: name }];
@@ -388,14 +406,24 @@ const App: React.FC = () => {
          return prev;
       });
 
-      const newStudent: Student = { name, studentId, email, timestamp, status };
-      
-      const studentExists = attendanceList.some(s => s.studentId === studentId);
-      if (studentExists) {
-        return { success: false, message: "This student is already on the list." };
-      }
+      // Update Attendance List locally
+      setAttendanceList(prev => {
+        // If student exists, update status
+        if (prev.some(s => s.studentId === studentId)) {
+            return prev.map(s => s.studentId === studentId ? { ...s, status, timestamp } : s);
+        }
+        // Else add new
+        return [{ name, studentId, email, timestamp, status }, ...prev];
+      });
 
-      setAttendanceList(prev => [newStudent, ...prev]);
+      // Remove from local deletion list if they are being added back
+      if (locallyDeletedIds.has(studentId)) {
+          setLocallyDeletedIds(prev => {
+              const next = new Set(prev);
+              next.delete(studentId);
+              return next;
+          });
+      }
 
       const task: SyncTask = {
           id: `${studentId}-${timestamp}`,
@@ -416,35 +444,36 @@ const App: React.FC = () => {
       return addStudent(name, studentId, email, 'P');
   };
 
-  const onManualAdd = (name: string, id: string, email: string, status: 'P' | 'A') => {
+  const onManualAdd = (name: string, id: string, email: string, status: string) => {
       return addStudent(name, id, email, status);
   };
 
   const onRemoveStudents = (ids: string[]) => {
-      // 1. Identify students to be removed to get their details for the sync task
-      const studentsToRemove = attendanceList.filter(s => ids.includes(s.studentId));
-
-      // 2. Remove from local list
+      // 1. Remove from local list
       setAttendanceList(prev => prev.filter(s => !ids.includes(s.studentId)));
       
-      // 3. Add to locally deleted set (to prevent auto-re-adding from polling)
+      // 2. Add to locally deleted set
       setLocallyDeletedIds(prev => {
           const next = new Set(prev);
           ids.forEach(id => next.add(id));
           return next;
       });
 
-      // 4. Queue Sync Tasks with Status 'A' (Absent)
+      // 3. Queue Sync Tasks with Status 'A' (Absent)
       const tasks: SyncTask[] = [];
       const now = Date.now();
-      studentsToRemove.forEach(student => {
+      ids.forEach(id => {
+           // We need name/email from known students or current list if possible
+           const student = attendanceList.find(s => s.studentId === id) || knownStudents.find(k => k.id === id);
+           const name = student ? ('name' in student ? student.name : student.name) : 'Unknown';
+           
            tasks.push({
-               id: `${student.studentId}-${now}-absent`,
+               id: `${id}-${now}-absent`,
                data: {
-                   studentId: student.studentId,
-                   name: student.name,
-                   email: student.email,
-                   status: 'A', // Explicitly mark as Absent in cloud
+                   studentId: id,
+                   name: name,
+                   email: `${id}@STUDENT.UTS.EDU.MY`,
+                   status: 'A', 
                    timestamp: now.toString()
                },
                timestamp: now
@@ -456,7 +485,8 @@ const App: React.FC = () => {
       }
   };
 
-  const onBulkStatusUpdate = (ids: string[], status: 'P' | 'A') => {
+  const onBulkStatusUpdate = (ids: string[], status: string) => {
+      // Update local state
       setAttendanceList(prev => prev.map(s => ids.includes(s.studentId) ? { ...s, status } : s));
       
       const tasks: SyncTask[] = [];
@@ -487,7 +517,6 @@ const App: React.FC = () => {
   };
   
   const onTestAttendance = () => {
-      // Use NOW instead of future date so it appears in the current active column if it exists
       const now = Date.now();
       addStudent(
         "TEST DATA KEYING", 

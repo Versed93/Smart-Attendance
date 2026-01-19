@@ -4,7 +4,7 @@ export interface Student {
   studentId: string;
   email: string;
   timestamp: number;
-  status: 'P' | 'A';
+  status: string; // Changed from 'P' | 'A' to string to support reasons like "Medical", "Exempt"
 }
 
 export interface SyncTask {

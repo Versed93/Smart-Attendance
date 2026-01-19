@@ -23,6 +23,7 @@ import { GoogleSheetIntegrationInfo } from './GoogleSheetIntegrationInfo';
 import { QrScanner } from './QrScanner';
 import { QrCodeIcon } from './icons/QrCodeIcon';
 import { ListBulletIcon } from './icons/ListBulletIcon';
+import { DocumentTextIcon } from './icons/DocumentTextIcon';
 
 interface TeacherViewProps {
   attendanceList: Student[];
@@ -34,7 +35,7 @@ interface TeacherViewProps {
   onScriptUrlChange: (url: string) => void;
   onOpenKiosk: () => void;
   onManualAdd: (name: string, id: string, email: string, status: 'P' | 'A') => {success: boolean, message: string};
-  addStudent: (name: string, studentId: string, email: string, status: 'P' | 'A', overrideTimestamp?: number) => { success: boolean, message: string };
+  addStudent: (name: string, studentId: string, email: string, status: string, overrideTimestamp?: number) => { success: boolean, message: string };
   pendingSyncCount?: number;
   syncQueue?: SyncTask[];
   syncError?: string | null;
@@ -91,6 +92,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   
   // Checklist Mode State
   const [checklistSearch, setChecklistSearch] = useState('');
+  const [reasonModalStudent, setReasonModalStudent] = useState<PreRegisteredStudent | null>(null);
+  const [reasonInput, setReasonInput] = useState('');
 
   // Mobile Tab State (QR vs List)
   const [mobileTab, setMobileTab] = useState<'qr' | 'list'>('qr');
@@ -223,7 +226,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     if (attendanceList.length === 0) return;
     const headers = ['Timestamp', 'Student Name', 'Student ID', 'Email', 'Status', 'Sync Status'];
     const csvContent = [headers.join(','), ...visibleList.map(s => [
-        new Date(s.timestamp).toLocaleString(), `"${s.name}"`, `"${s.studentId}"`, `"${s.email}"`, s.status,
+        new Date(s.timestamp).toLocaleString(), `"${s.name}"`, `"${s.studentId}"`, `"${s.email}"`, `"${s.status}"`,
         pendingIds.has(s.studentId) ? 'PENDING' : 'SAVED'
     ].join(','))].join('\n');
     const blob = new Blob(["\ufeff" + csvContent], { type: 'text/csv;charset=utf-8;' });
@@ -292,6 +295,23 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           }
       });
       alert(`Marked ${count} students as present.`);
+  };
+
+  const openReasonModal = (student: PreRegisteredStudent, e: React.MouseEvent) => {
+      e.stopPropagation(); // Prevent toggling attendance
+      setReasonModalStudent(student);
+      setReasonInput('');
+  };
+
+  const submitReason = (reason: string) => {
+      if (!reasonModalStudent) return;
+      addStudent(
+          reasonModalStudent.name, 
+          reasonModalStudent.id, 
+          `${reasonModalStudent.id}@STUDENT.UTS.EDU.MY`, 
+          reason
+      );
+      setReasonModalStudent(null);
   };
 
   return (
@@ -396,19 +416,33 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               <div className="flex-1 overflow-y-auto p-2">
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
                       {filteredChecklist.map(student => {
-                          const isPresent = attendanceList.some(a => a.studentId === student.id);
+                          const attendanceRecord = attendanceList.find(a => a.studentId === student.id);
+                          const isPresent = !!attendanceRecord;
+                          const isReason = isPresent && attendanceRecord.status !== 'P';
+                          const statusText = isPresent ? (attendanceRecord.status === 'P' ? 'Present' : attendanceRecord.status) : '';
+
                           return (
                               <div 
                                 key={student.id}
                                 onClick={() => toggleStudentAttendance(student)}
-                                className={`cursor-pointer p-3 rounded-xl border transition-all duration-200 flex items-center justify-between group ${isPresent ? 'bg-green-50 border-green-200 shadow-sm' : 'bg-white border-gray-100 hover:border-brand-primary/50'}`}
+                                className={`cursor-pointer p-3 rounded-xl border transition-all duration-200 flex items-center justify-between group ${isReason ? 'bg-yellow-50 border-yellow-200 shadow-sm' : (isPresent ? 'bg-green-50 border-green-200 shadow-sm' : 'bg-white border-gray-100 hover:border-brand-primary/50')}`}
                               >
                                   <div className="min-w-0 pr-2">
-                                      <p className={`text-xs font-black truncate ${isPresent ? 'text-green-800' : 'text-gray-700'}`}>{student.name}</p>
+                                      <p className={`text-xs font-black truncate ${isReason ? 'text-yellow-800' : (isPresent ? 'text-green-800' : 'text-gray-700')}`}>{student.name}</p>
                                       <p className="text-[10px] text-gray-400 font-mono">{student.id}</p>
+                                      {isReason && <p className="text-[10px] font-bold text-yellow-600 mt-1 uppercase">{statusText}</p>}
                                   </div>
-                                  <div className={`w-6 h-6 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors ${isPresent ? 'bg-green-500 border-green-500' : 'bg-white border-gray-300 group-hover:border-brand-primary'}`}>
-                                      {isPresent && <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
+                                  <div className="flex items-center gap-2">
+                                      <button 
+                                        onClick={(e) => openReasonModal(student, e)}
+                                        className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${isReason ? 'bg-yellow-200 text-yellow-700' : 'bg-gray-100 text-gray-400 hover:bg-gray-200 hover:text-gray-600'}`}
+                                        title="Mark Absent with Reason"
+                                      >
+                                        <DocumentTextIcon className="w-4 h-4" />
+                                      </button>
+                                      <div className={`w-6 h-6 shrink-0 rounded-full border-2 flex items-center justify-center transition-colors ${isPresent && !isReason ? 'bg-green-500 border-green-500' : (isReason ? 'bg-yellow-400 border-yellow-400' : 'bg-white border-gray-300 group-hover:border-brand-primary')}`}>
+                                          {isPresent && <svg className="w-4 h-4 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>}
+                                      </div>
                                   </div>
                               </div>
                           );
@@ -500,30 +534,39 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100">
-                        {visibleList.map(s => (
-                          <tr key={s.studentId} className="hover:bg-gray-50">
-                            <td className="px-4 py-3">
-                              <p className="font-bold text-gray-800">{s.name}</p>
-                              <p className="font-mono text-xs text-gray-500">{s.studentId}</p>
-                            </td>
-                            <td className="px-4 py-3 text-right">
-                              <div className="flex flex-col items-end gap-1">
-                                  <span className="text-gray-400 text-xs">{new Date(s.timestamp).toLocaleTimeString()}</span>
-                                  {pendingIds.has(s.studentId) ? (
-                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-100 text-orange-700">
-                                          <ClockIcon className="w-3 h-3" />
-                                          <span>Pending</span>
-                                      </span>
-                                  ) : (
-                                      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-50 text-green-700 opacity-70">
-                                          <CheckCircleIcon className="w-3 h-3" />
-                                          <span>Saved</span>
-                                      </span>
-                                  )}
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
+                        {visibleList.map(s => {
+                          const isReason = s.status !== 'P';
+                          return (
+                            <tr key={s.studentId} className={isReason ? "bg-yellow-50 hover:bg-yellow-100" : "hover:bg-gray-50"}>
+                              <td className="px-4 py-3">
+                                <p className={`font-bold ${isReason ? 'text-yellow-900' : 'text-gray-800'}`}>{s.name}</p>
+                                <p className="font-mono text-xs text-gray-500">{s.studentId}</p>
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <div className="flex flex-col items-end gap-1">
+                                    <span className="text-gray-400 text-xs">{new Date(s.timestamp).toLocaleTimeString()}</span>
+                                    {pendingIds.has(s.studentId) ? (
+                                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-orange-100 text-orange-700">
+                                            <ClockIcon className="w-3 h-3" />
+                                            <span>Pending</span>
+                                        </span>
+                                    ) : (
+                                        isReason ? (
+                                           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-200 text-yellow-800">
+                                              <span>{s.status}</span>
+                                           </span>
+                                        ) : (
+                                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-green-50 text-green-700 opacity-70">
+                                              <CheckCircleIcon className="w-3 h-3" />
+                                              <span>Saved</span>
+                                          </span>
+                                        )
+                                    )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
                     </tbody>
                   </table>
                 </div>
@@ -740,6 +783,53 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                  Add to List
                </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reason Modal */}
+      {reasonModalStudent && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden animate-in fade-in zoom-in duration-200">
+             <div className="bg-yellow-50 px-6 py-4 border-b border-yellow-100 flex justify-between items-center">
+                <h3 className="text-lg font-bold text-yellow-800">Mark Absent with Reason</h3>
+                <button onClick={() => setReasonModalStudent(null)} className="text-yellow-600 hover:text-yellow-800">
+                   <XCircleIcon className="w-6 h-6" />
+                </button>
+             </div>
+             <div className="p-6">
+                <p className="text-sm font-bold text-gray-800 mb-1">{reasonModalStudent.name}</p>
+                <p className="text-xs text-gray-400 font-mono mb-4">{reasonModalStudent.id}</p>
+                
+                <div className="grid grid-cols-2 gap-2 mb-4">
+                   {['Medical', 'University Activity', 'Exempt', 'Other'].map(r => (
+                       <button 
+                         key={r}
+                         onClick={() => submitReason(r)}
+                         className="px-3 py-2 bg-gray-50 border hover:bg-yellow-50 hover:border-yellow-200 hover:text-yellow-700 rounded-lg text-xs font-bold transition-all"
+                       >
+                         {r}
+                       </button>
+                   ))}
+                </div>
+                
+                <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Custom Reason</label>
+                <div className="flex gap-2">
+                    <input 
+                      type="text" 
+                      value={reasonInput}
+                      onChange={(e) => setReasonInput(e.target.value)}
+                      className="flex-1 border-2 border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-yellow-400 outline-none"
+                      placeholder="Type reason..."
+                    />
+                    <button 
+                      onClick={() => submitReason(reasonInput || 'Other')}
+                      className="px-4 py-2 bg-yellow-400 text-yellow-900 font-bold rounded-lg hover:bg-yellow-500 transition-colors"
+                    >
+                      Save
+                    </button>
+                </div>
+             </div>
           </div>
         </div>
       )}

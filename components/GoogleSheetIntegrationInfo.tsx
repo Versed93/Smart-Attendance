@@ -5,7 +5,7 @@ import { PRE_REGISTERED_STUDENTS } from '../studentList';
 
 const appScriptCode = `
 /**
- * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.9 - Auto-Create Fix)
+ * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v4.0 - Reason Support)
  * 
  * SETUP INSTRUCTIONS:
  * 1. Paste this code into Extensions > Apps Script
@@ -174,7 +174,7 @@ function doGet(e) {
         for (var c = 0; c < headers.length; c++) {
           var date = headers[c];
           var status = attValues[r][c];
-          if (date && (status === 'P' || status === 'A')) {
+          if (date && status !== "") { // Fetch any status that isn't empty
              results.push({ 
                studentId: sId, 
                name: sName, 
@@ -271,7 +271,7 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
           </div>
           <div className="mt-4 bg-gray-900 p-4 rounded-xl border border-blue-200">
             <div className="flex justify-between items-center mb-3">
-              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">APPS SCRIPT V3.9 (Auto-Fix)</span>
+              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">APPS SCRIPT V4.0 (Reason Support)</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-4 py-1.5 rounded-full font-bold transition-all ${copied ? 'bg-green-600 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
