@@ -235,7 +235,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   
   return (
     <div className="w-full max-w-[1600px] mx-auto p-4 sm:p-6 space-y-6">
-       <div className="flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
+       <div className="relative z-10 flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
          <div className="flex items-center gap-4">
              <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-xl shadow-lg" aria-hidden="true">
                  <ShieldCheckIcon className="w-7 h-7" />
@@ -353,9 +353,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         </div>
         )}
 
-        <div className={`w-full flex flex-col items-center bg-white p-6 sm:p-8 rounded-2xl shadow-xl border order-1 xl:order-2 transition-all duration-500 ease-in-out ${viewMode === 'teacher' ? 'xl:col-span-8' : 'col-span-1 xl:col-span-12 min-h-[85vh] justify-center'}`}>
+        <div className={`w-full flex flex-col items-center bg-white p-6 sm:p-8 rounded-2xl shadow-xl border order-1 xl:order-2 transition-all duration-500 ease-in-out z-0 ${viewMode === 'teacher' ? 'xl:col-span-8' : 'col-span-1 xl:col-span-12 min-h-[85vh] justify-center'}`}>
           {viewMode === 'teacher' && (
-              <div className="w-full space-y-4 mb-6">
+              <div className="w-full space-y-4 mb-6 relative z-20">
                 <div className="flex justify-between items-center">
                   <label className="text-xs font-bold text-gray-400 uppercase tracking-wide">Configuration</label>
                   <button 
@@ -446,14 +446,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </div>
           )}
 
-          <h2 className={`text-2xl font-bold mb-6 text-brand-primary tracking-tight text-center ${viewMode === 'classroom' ? 'scale-150 mb-10' : ''}`}>Scan to Check-in</h2>
+          <h2 className={`font-bold text-brand-primary tracking-tight text-center transition-all duration-300 ${viewMode === 'classroom' ? 'text-5xl mb-12' : 'text-2xl mb-6'}`}>Scan to Check-in</h2>
           
           <div 
             className={`bg-white p-2 rounded-3xl shadow-[inset_0_2px_8px_rgba(0,0,0,0.05)] border relative w-full transition-all duration-500 ease-in-out ${
                 viewMode === 'teacher' 
-                ? 'max-w-[420px] lg:max-w-[480px]' 
+                ? 'max-w-[380px] lg:max-w-[420px]' 
                 : 'max-w-[650px] lg:max-w-[800px]'
-            } aspect-square flex items-center justify-center`}
+            } aspect-square flex items-center justify-center z-10`}
             role="img"
             aria-label="Dynamic QR Code for attendance. Updates every second."
           >
@@ -462,7 +462,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary"></div>
                 </div>
              )}
-            <canvas ref={canvasRef} className="w-full h-full" />
+            <canvas ref={canvasRef} className="w-full h-full max-w-full max-h-full" />
           </div>
           
           <div className="mt-6 flex flex-col items-center">
