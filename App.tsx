@@ -69,7 +69,7 @@ const App: React.FC = () => {
   // Network Listener
   useEffect(() => {
     // Debug log to confirm app version in production console
-    console.log("UTS QR Attendance App Mounted - v1.0.9");
+    console.log("UTS QR Attendance App Mounted - v1.1.0 (High Concurrency Fix)");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -155,7 +155,8 @@ const App: React.FC = () => {
             formData.append('customDate', `${day}/${month}/${year}`);
 
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 20000);
+            // Increased timeout to 60 seconds (60000ms) to handle high concurrency server waits (LockService takes up to 30s)
+            const timeoutId = setTimeout(() => controller.abort(), 60000);
 
             const response = await fetch(scriptUrl.trim(), {
                 method: 'POST',
@@ -194,7 +195,7 @@ const App: React.FC = () => {
             
             let detailedError = err.message || "Failed to sync with cloud.";
             if (err.name === 'AbortError') {
-              detailedError = "Connection Timeout: Server took too long to respond.";
+              detailedError = "Connection Timeout: Server busy (High Traffic). Retrying...";
             } else if (err.message === 'Failed to fetch') {
               // Usually indicates offline or DNS failure
               detailedError = "Network Error: Could not connect to Google Script. Pausing.";
@@ -203,7 +204,8 @@ const App: React.FC = () => {
             if (active) setSyncError(detailedError);
             
             // Wait before retry, but allow immediate retry if 'online' event fires
-            const jitter = 5000 + Math.random() * 10000;
+            // Adjusted jitter: 2s to 22s to better spread out the 'thundering herd' of 230 students
+            const jitter = 2000 + Math.random() * 20000;
             await new Promise<void>(resolve => {
                 retryResolveRef.current = resolve;
                 setTimeout(resolve, jitter);
