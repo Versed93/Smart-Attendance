@@ -7,11 +7,11 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "dev": "vite",
-    "start": "vite preview",
+    "dev": "vite --host",
+    "start": "vite preview --host",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview --host"
   },
   "dependencies": {
     "jsqr": "^1.4.0",

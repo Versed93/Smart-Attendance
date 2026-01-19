@@ -4,14 +4,13 @@ import { StudentView } from './components/StudentView';
 import { LoginView } from './components/LoginView';
 import { ExclamationTriangleIcon } from './components/icons/ExclamationTriangleIcon';
 import { GlobeIcon } from './components/icons/GlobeIcon';
-import { InstallPwaPrompt } from './components/InstallPwaPrompt';
 import type { Student, SyncTask } from './types';
 
 type View = 'teacher' | 'student';
 
 const STORAGE_KEY = 'attendance-storage-standard-v1';
 const DELETED_IDS_KEY = 'attendance-deleted-ids-v1';
-const SCRIPT_URL_KEY = 'attendance-script-url-v28'; 
+const SCRIPT_URL_KEY = 'attendance-script-url-v30'; 
 const SYNC_QUEUE_KEY = 'attendance-sync-queue-v2';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
@@ -50,7 +49,7 @@ const App: React.FC = () => {
   
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
     const saved = localStorage.getItem(SCRIPT_URL_KEY);
-    return saved || 'https://script.google.com/macros/s/AKfycbyiqXBYucrOqYSzfmK2q2jsuzBuSv34-8JrqVEmZ05myEN4ibUoGZ6zzmxlRDGvhLHa/exec';
+    return saved || 'https://script.google.com/macros/s/AKfycbxJ5Ut87J_oDkF97vSTIGd__CTuKDcIE2Ky2eHMH5lnG9igURV9H0yKqhMlfixWx-16/exec';
   });
 
   const [syncQueue, setSyncQueue] = useState<SyncTask[]>(() => {
@@ -71,7 +70,7 @@ const App: React.FC = () => {
 
   // Network Listener
   useEffect(() => {
-    console.log("UTS QR Attendance App Mounted - v1.6.0 (Offline Hub Mode)");
+    console.log("UTS QR Attendance App Mounted - v1.7.1 (URL Update)");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -129,7 +128,7 @@ const App: React.FC = () => {
     localStorage.setItem(SYNC_QUEUE_KEY, JSON.stringify(syncQueue));
   }, [syncQueue]);
 
-  // --- POLLING ENGINE (NEW) ---
+  // --- POLLING ENGINE ---
   const fetchRemoteAttendance = useCallback(async () => {
     if (view !== 'teacher' || !isOnline || !scriptUrl) return;
 
@@ -176,7 +175,7 @@ const App: React.FC = () => {
     }
   }, [fetchRemoteAttendance, view]);
 
-  // --- CORE SYNC ENGINE (FIXED) ---
+  // --- CORE SYNC ENGINE (FIXED FOR NO-CORS) ---
   useEffect(() => {
     // Conditions to SKIP processing
     if (syncQueue.length === 0) return;
@@ -202,13 +201,13 @@ const App: React.FC = () => {
             const month = String(recordDate.getMonth() + 1).padStart(2, '0');
             const year = recordDate.getFullYear();
 
+            // Structure data specifically for the new script
             const payload = {
                 ...task.data,
                 customDate: `${day}/${month}/${year}`
             };
 
             const controller = new AbortController();
-            // TIMEOUT REDUCED TO 15s to prevent "Stuck" screens
             const timeoutId = setTimeout(() => {
                 if (isMounted) setSyncStatus('Server is busy (High Traffic)...');
                 controller.abort();
@@ -216,11 +215,14 @@ const App: React.FC = () => {
 
             if (isMounted) setSyncStatus('Connecting to Google Server...');
 
-            // Use JSON body with text/plain to avoid CORS Preflight (OPTIONS)
+            // VITAL FIX: Use text/plain to avoid CORS Preflight (OPTIONS request)
+            // The Google Apps Script must parse the JSON from the post body string.
             const response = await fetch(scriptUrl.trim(), {
                 method: 'POST',
                 body: JSON.stringify(payload),
-                headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+                headers: { 
+                  'Content-Type': 'text/plain;charset=utf-8' 
+                },
                 signal: controller.signal
             });
 
@@ -238,8 +240,9 @@ const App: React.FC = () => {
             try {
                 result = JSON.parse(text);
             } catch(e) {
-                const snippet = text.length > 100 ? text.substring(0, 100) + '...' : text;
-                throw new Error(`Invalid JSON: "${snippet}"`);
+                // If script returns text but not JSON, it might still be success in some GAS configs, 
+                // but we expect JSON {result: "success"}
+                throw new Error(`Invalid Server Response`);
             }
 
             if (result.result !== 'success') {
@@ -249,7 +252,7 @@ const App: React.FC = () => {
             // SUCCESS
             if (isMounted) {
               setSyncStatus('Sync successful!');
-              setSyncQueue(prev => prev.filter(t => t.id !== task.id)); // This triggers the effect again for next item
+              setSyncQueue(prev => prev.filter(t => t.id !== task.id)); // Remove processed item
               setSyncError(null);
               // Trigger a fetch to update the list with any other changes
               setTimeout(() => setRetryTrigger(c => c + 1), 500);
@@ -260,12 +263,10 @@ const App: React.FC = () => {
             
             let detailedError = err.message || "Failed to sync.";
             if (err.name === 'AbortError') {
-              // Crucial: Set specific status so UI knows to switch to 'Background Mode'
               detailedError = "Connection Timeout: Server busy. Retrying...";
               if (isMounted) setSyncStatus('Saved. Uploading in background...');
             } else if (err.message === 'Failed to fetch') {
-              // Handle network errors gracefully (offline, ad-blocker, etc.)
-              detailedError = "Network Error: Could not connect to Google. Check internet or disable ad-blockers. Retrying automatically.";
+              detailedError = "Network Error: Could not connect. Check internet. Retrying...";
               if (isMounted) setSyncStatus('Saved. Uploading in background...');
             } else {
               if (isMounted) setSyncStatus(`Error: ${detailedError.substring(0, 30)}...`);
@@ -309,7 +310,6 @@ const App: React.FC = () => {
     localStorage.removeItem(AUTH_KEY);
   };
 
-  // Modified addStudent to accept an optional overrideTimestamp
   const addStudent = (name: string, studentId: string, email: string, status: 'P' | 'A', overrideTimestamp?: number) => {
       const timestamp = overrideTimestamp || Date.now();
       const newStudent: Student = { name, studentId, email, timestamp, status };
@@ -477,8 +477,6 @@ const App: React.FC = () => {
                </div>
            </div>
        )}
-       
-       <InstallPwaPrompt />
     </div>
   );
 };

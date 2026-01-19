@@ -5,11 +5,9 @@ import { PRE_REGISTERED_STUDENTS } from '../studentList';
 
 const appScriptCode = `
 /**
- * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.5)
- * Optimized for 200-300 simultaneous requests.
- * Supports offline sync with correct dates.
- * Logic Update: Date Row moved to 12 (K12:T12).
- * Configuration: Prioritizes W6-W10 for new classes.
+ * HIGH-CONCURRENCY ATTENDANCE SCRIPT (v3.6)
+ * Optimized for React Apps using text/plain JSON payloads to avoid CORS.
+ * Logic Update: Robust JSON parsing and 200-300 concurrent user support.
  */
 
 function getFormattedDate(d) {
@@ -18,7 +16,7 @@ function getFormattedDate(d) {
 }
 
 function getSheetConfigs() {
-  // UPDATED v3.5: Date row moved to 12. Order prioritizes W6-W10.
+  // Order prioritizes W6-W10.
   return [
     { name: "W6-W10", dateRow: 12, startCol: 11, endCol: 20 },
     { name: "W1-W5", dateRow: 12, startCol: 11, endCol: 20 },
@@ -34,10 +32,18 @@ function doPost(e) {
     
     var doc = SpreadsheetApp.getActiveSpreadsheet();
     var data = {};
+    
+    // V3.6 FIX: Robust parsing for text/plain payloads (avoids CORS)
     try {
-      if (e.postData) data = JSON.parse(e.postData.contents);
-    } catch(err) {
-      data = e.parameter || {};
+      if (e.postData && e.postData.contents) {
+        data = JSON.parse(e.postData.contents);
+      } else if (e.parameter) {
+        data = e.parameter;
+      }
+    } catch(parseErr) {
+      // If parsing fails, try to use raw content if simple encoded
+      console.error("JSON Parse Error: " + parseErr);
+      return ContentService.createTextOutput(JSON.stringify({result: "error", message: "Invalid JSON format"})).setMimeType(ContentService.MimeType.JSON);
     }
     
     var studentId = String(data.studentId || "").toUpperCase().trim();
@@ -271,7 +277,7 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
           </p>
           <div className="mt-4 bg-gray-900 p-4 rounded-xl border border-blue-200">
             <div className="flex justify-between items-center mb-3">
-              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">APPS SCRIPT V3.5</span>
+              <span className="text-[10px] text-blue-400 font-mono tracking-widest uppercase">APPS SCRIPT V3.6 (JSON FIX)</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-4 py-1.5 rounded-full font-bold transition-all ${copied ? 'bg-green-600 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
