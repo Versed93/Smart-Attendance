@@ -70,7 +70,7 @@ const App: React.FC = () => {
 
   // Network Listener
   useEffect(() => {
-    console.log("UTS QR Attendance App Mounted - v1.7.7 (Timeout Fix)");
+    console.log("UTS QR Attendance App Mounted - v1.7.8 (Retry Button)");
 
     const handleOnline = () => {
         setIsOnline(true);
@@ -398,13 +398,14 @@ const App: React.FC = () => {
   };
   
   const onTestAttendance = () => {
-      const futureDate = new Date('2030-01-01T12:00:00');
+      // Use NOW instead of future date so it appears in the current active column if it exists
+      const now = Date.now();
       addStudent(
-        "TEST W6-W10 (Future Date)", 
-        `TEST-${Date.now().toString().slice(-4)}`, 
+        "TEST DATA KEYING", 
+        `TEST-${now.toString().slice(-4)}`, 
         "test@example.com", 
         'P', 
-        futureDate.getTime()
+        now
       );
   };
 
@@ -487,6 +488,7 @@ const App: React.FC = () => {
                        isOnline={isOnline}
                        syncStatus={syncStatus}
                        isOfflineScan={isOfflineScan}
+                       onRetry={handleRetryNow}
                    />
                </div>
            </div>

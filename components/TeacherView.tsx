@@ -45,6 +45,7 @@ type SortOption = 'id' | 'newest' | 'oldest';
 
 export const TeacherView: React.FC<TeacherViewProps> = ({ 
   attendanceList, 
+  onTestAttendance,
   onClearAttendance, 
   onRemoveStudents,
   onBulkStatusUpdate,
@@ -394,7 +395,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                           placeholder="https://script.google.com/..." 
                         />
                       </div>
+                      
                       <div className="grid grid-cols-2 gap-3 pt-4 border-t">
+                         <button 
+                          onClick={onTestAttendance} 
+                          className="col-span-2 flex items-center justify-center gap-2 px-3 py-2 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100 transition-colors"
+                          aria-label="Send test data to cloud"
+                        >
+                          <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></div>
+                          Test Cloud Keying
+                        </button>
                         <button 
                           onClick={handleExportCSV} 
                           disabled={attendanceList.length === 0} 

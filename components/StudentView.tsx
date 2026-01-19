@@ -17,6 +17,7 @@ interface StudentViewProps {
   isOnline?: boolean;
   syncStatus?: string;
   isOfflineScan?: boolean;
+  onRetry?: () => void;
 }
 
 type Status = 'validating' | 'validating-gps' | 'form' | 'success' | 'error' | 'show-student-qr';
@@ -49,7 +50,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
   isSyncing = false, 
   isOnline = true,
   syncStatus = "Connecting to Google Sheets...",
-  isOfflineScan = false
+  isOfflineScan = false,
+  onRetry
 }) => {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
@@ -59,6 +61,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [message, setMessage] = useState('');
   const [formError, setFormError] = useState('');
   const [studentQrData, setStudentQrData] = useState('');
+  const [showRetry, setShowRetry] = useState(false);
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
@@ -73,6 +76,18 @@ export const StudentView: React.FC<StudentViewProps> = ({
           } catch (e) { console.error("Failed to load profile", e); }
       }
   }, []);
+
+  useEffect(() => {
+    // Show retry button if syncing takes longer than 5 seconds
+    let timeout: ReturnType<typeof setTimeout>;
+    if (isSyncing && status === 'success') {
+        setShowRetry(false);
+        timeout = setTimeout(() => setShowRetry(true), 5000);
+    } else {
+        setShowRetry(false);
+    }
+    return () => clearTimeout(timeout);
+  }, [isSyncing, status]);
 
   useEffect(() => {
     if (bypassRestrictions) { setStatus('form'); return; }
@@ -262,7 +277,15 @@ export const StudentView: React.FC<StudentViewProps> = ({
                                 <div className="text-left space-y-4">
                                     <div className="flex items-center gap-3 opacity-50"><div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs font-bold" aria-hidden="true">✓</div><span className="text-sm font-bold text-gray-500 line-through">Step 1: Save to Device</span></div>
                                     <div className="flex items-center gap-3"><div className="relative w-6 h-6"><div className="absolute w-full h-full rounded-full bg-indigo-400 opacity-25 animate-ping"></div><div className="w-2.5 h-2.5 bg-indigo-600 rounded-full m-auto"></div></div><div className="flex-1"><span className="text-sm font-bold text-indigo-900 block">Step 2: Uploading to Cloud</span><span className="text-xs text-indigo-600">{syncStatus}</span></div></div>
-                                    <div className="bg-white/60 p-3 text-xs text-indigo-800 border border-indigo-100 rounded-lg"><strong>⚠️ Do not close this tab.</strong><br/>Waiting for confirmation from lecturer's screen.</div>
+                                    <div className="bg-white/60 p-3 text-xs text-indigo-800 border border-indigo-100 rounded-lg"><strong>⚠️ Do not close this tab.</strong><br/>Sending data to class register...</div>
+                                    {showRetry && onRetry && (
+                                        <button 
+                                          onClick={() => { onRetry(); }}
+                                          className="w-full mt-2 py-2 px-3 bg-indigo-600 text-white text-xs font-bold rounded shadow hover:bg-indigo-700 transition-colors animate-in fade-in zoom-in"
+                                        >
+                                            Taking too long? Tap to Retry
+                                        </button>
+                                    )}
                                 </div>
                             ) : (
                                 <div className="text-left space-y-4">
