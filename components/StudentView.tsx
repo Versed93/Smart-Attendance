@@ -208,13 +208,18 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   if (status === 'show-student-qr') {
     return (
-        <div className="text-center py-8 flex flex-col items-center">
+        <div className="w-full text-center py-8 flex flex-col items-center justify-center">
             <h3 className="text-xl sm:text-2xl font-black text-gray-800 mb-2">Your Attendance Code</h3>
             <p className="text-xs sm:text-sm text-gray-500 mb-6 max-w-xs">Please present this QR code to the lecturer for scanning.</p>
-            <div className="bg-white p-2 rounded-xl shadow-lg border w-full max-w-[100px] aspect-square" role="img" aria-label={`QR Code for ${name}`}>
+            <div 
+                className="bg-white p-2 rounded-xl shadow-lg border w-full aspect-square mx-auto flex items-center justify-center"
+                style={{ width: '130px', height: '130px' }}
+                role="img" 
+                aria-label={`QR Code for ${name}`}
+            >
                 <canvas ref={canvasRef} className="w-full h-full object-contain" />
             </div>
-            <div className="mt-6 text-center bg-gray-50 p-3 rounded-lg border w-full max-w-[250px]">
+            <div className="mt-6 text-center bg-gray-50 p-3 rounded-lg border w-full max-w-[250px] mx-auto">
                 <p className="text-sm font-bold text-gray-900 break-words">{name}</p>
                 <p className="text-xs text-gray-500 font-mono">{studentId}</p>
             </div>
