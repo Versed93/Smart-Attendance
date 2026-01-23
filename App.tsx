@@ -281,7 +281,7 @@ const App: React.FC = () => {
         const task = syncQueue[0];
         
         try {
-            if (isMounted) setSyncStatus('Preparing data package...');
+            if (isMounted) setSyncStatus(`Uploading ${task.data.studentId}...`);
             
             // Prepare Payload
             const recordTimestamp = parseInt(task.data.timestamp || Date.now().toString());
@@ -556,6 +556,23 @@ const App: React.FC = () => {
       );
   };
 
+  const onBulkTest = () => {
+    if (window.confirm('This will add 200 test students to the sync queue to test system performance. Continue?')) {
+      const now = Date.now();
+      for (let i = 1; i <= 200; i++) {
+        const studentId = `BULK-TEST-${now.toString().slice(-5)}-${i.toString().padStart(3, '0')}`;
+        const studentName = `BULK TEST STUDENT #${i}`;
+        addStudent(
+          studentName,
+          studentId,
+          `${studentId}@test.uts.edu`,
+          'P',
+          now + i // Stagger timestamp slightly to ensure unique task IDs and order
+        );
+      }
+    }
+  };
+
   const onOpenKiosk = () => {
       setIsKioskMode(true);
       setView('student');
@@ -584,6 +601,7 @@ const App: React.FC = () => {
                      onLogout={handleLogout}
                      addStudent={addStudent}
                      knownStudents={knownStudents}
+                     onBulkTest={onBulkTest}
                  />
                  
                  {syncError && isOnline && (

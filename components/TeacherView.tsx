@@ -48,6 +48,7 @@ interface TeacherViewProps {
   isOnline?: boolean;
   onLogout: () => void;
   knownStudents: PreRegisteredStudent[];
+  onBulkTest: () => void;
 }
 
 export const TeacherView: React.FC<TeacherViewProps> = ({ 
@@ -66,7 +67,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   syncError = null,
   isOnline = true,
   onLogout,
-  knownStudents
+  knownStudents,
+  onBulkTest
 }) => {
   const [baseUrl] = useState<string>(() => {
     return window.location.origin + window.location.pathname;
@@ -533,8 +535,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     {/* BOTTOM / FULL WIDTH Data Management */}
                     <div className="md:col-span-2 space-y-3 p-4 rounded-xl border bg-gray-50/70">
                         <h4 className="text-sm font-bold text-gray-700">Data Management</h4>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                            <button onClick={onTestAttendance} className="flex items-center justify-center gap-2 px-3 py-2 bg-indigo-50 border border-indigo-100 text-indigo-700 rounded-lg text-xs font-bold hover:bg-indigo-100"><div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></div>Test Keying</button>
+                           <button onClick={onBulkTest} className="flex items-center justify-center gap-2 px-3 py-2 bg-purple-50 border border-purple-100 text-purple-700 rounded-lg text-xs font-bold hover:bg-purple-100"><UsersIcon className="w-4 h-4" />Bulk Test (200)</button>
                            <button onClick={() => handleExportCSV()} disabled={attendanceList.length === 0} className="flex items-center justify-center gap-2 px-3 py-2 bg-white border rounded-lg text-xs font-bold disabled:opacity-50"><DownloadIcon className="w-4 h-4" />Export CSV</button>
                            <button onClick={onClearAttendance} disabled={attendanceList.length === 0} className="flex items-center justify-center gap-2 px-3 py-2 bg-red-50 border border-red-100 text-red-700 rounded-lg text-xs font-bold disabled:opacity-50"><TrashIcon className="w-4 h-4" />Clear List</button>
                         </div>
