@@ -275,6 +275,78 @@ const App: React.FC = () => {
     }
   };
 
+  const handleCheckPendingRecords = async (): Promise<{ success: boolean; message: string; count: number }> => {
+    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) {
+      return { success: false, message: "Firebase is not configured in firebaseConfig.ts.", count: 0 };
+    }
+
+    try {
+      const response = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+      if (!response.ok) {
+        throw new Error('Firebase returned an error: ' + response.statusText);
+      }
+      const data = await response.json();
+      if (data) {
+        const count = Object.keys(data).length;
+        return { success: true, message: `Found ${count} pending records.`, count };
+      } else {
+        return { success: true, message: "No pending records found.", count: 0 };
+      }
+    } catch (error) {
+      console.error("Firebase pending check error:", error);
+      return { success: false, message: "Failed to check. Check Firebase config & network.", count: 0 };
+    }
+  };
+  
+  const handleForceSync = async (): Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number }> => {
+    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET || !scriptUrl) {
+        return { success: false, message: "Firebase/Script URL not configured.", syncedCount: 0, errorCount: 0, total: 0 };
+    }
+
+    // 1. Fetch pending records
+    const check = await handleCheckPendingRecords();
+    if (!check.success || check.count === 0) {
+        return { success: true, message: check.message, syncedCount: 0, errorCount: 0, total: 0 };
+    }
+
+    const response = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+    const records = await response.json();
+    const studentIds = Object.keys(records);
+    
+    let syncedCount = 0;
+    let errorCount = 0;
+
+    const syncPromises = studentIds.map(async (id) => {
+        const record = records[id];
+        try {
+            // 2. Send record to Google Apps Script
+            const postResponse = await fetch(scriptUrl, {
+                method: 'POST',
+                mode: 'no-cors', // Apps Script web apps often require no-cors for simple POSTs from web clients
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(record),
+            });
+            
+            // Due to 'no-cors', we can't inspect the response. We assume success and proceed to delete.
+            // This is a limitation of calling Apps Script from a web client. The script must be robust.
+
+            // 3. Delete from Firebase
+            await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
+                method: 'DELETE',
+            });
+            syncedCount++;
+        } catch (e) {
+            console.error(`Failed to sync student ${id}:`, e);
+            errorCount++;
+        }
+    });
+
+    await Promise.all(syncPromises);
+
+    const message = `Sync complete. Synced: ${syncedCount}, Failed: ${errorCount}.`;
+    return { success: errorCount === 0, message, syncedCount, errorCount, total: studentIds.length };
+  };
+
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
        {view === 'teacher' ? (
@@ -293,6 +365,8 @@ const App: React.FC = () => {
                      onLogout={handleLogout}
                      knownStudents={knownStudents}
                      onSendTestRecord={handleSendTestRecord}
+                     onCheckPendingRecords={handleCheckPendingRecords}
+                     onForceSync={handleForceSync}
                  />
              </div>
            ) : <LoginView onLogin={handleLogin} />

@@ -37,6 +37,8 @@ interface TeacherViewProps {
   onLogout: () => void;
   knownStudents: PreRegisteredStudent[];
   onSendTestRecord: (courseName: string) => Promise<{ success: boolean; message: string }>;
+  onCheckPendingRecords: () => Promise<{ success: boolean; message: string; count: number }>;
+  onForceSync: () => Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number; }>;
 }
 
 export const TeacherView: React.FC<TeacherViewProps> = ({ 
@@ -52,6 +54,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onLogout,
   knownStudents,
   onSendTestRecord,
+  onCheckPendingRecords,
+  onForceSync,
 }) => {
   const [baseUrl] = useState<string>(() => window.location.origin + window.location.pathname);
   const [qrData, setQrData] = useState<string>('');
@@ -405,7 +409,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             {unlockMessage && <p className="text-green-700 text-xs mt-2 text-center font-semibold animate-in fade-in">{unlockMessage}</p>}
                         </div>
                     </div>
-                    <GoogleSheetIntegrationInfo onSendTestRecord={() => onSendTestRecord(courseName)} />
+                    <GoogleSheetIntegrationInfo onSendTestRecord={() => onSendTestRecord(courseName)} onCheckPendingRecords={onCheckPendingRecords} onForceSync={onForceSync} />
                 </div>
             </div>
         </div>
