@@ -4,9 +4,9 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v25.0)
+ * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v26.0)
  * Layout: ID Col B(2) | Name Col D(4) | Headers Row 12, Col O+(15+)
- * Note: Removed timestamp from status string.
+ * Note: Includes Mark and Absence Reason.
  */
 
 // --- CONFIG ---
@@ -32,7 +32,7 @@ function doPost(e) {
     
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   } catch(err) {
-    console.error("UTS v25 Error: " + err.toString());
+    console.error("UTS v26 Error: " + err.toString());
     return ContentService.createTextOutput(JSON.stringify({error:err.toString()})).setMimeType(ContentService.MimeType.JSON);
   } finally {
     lock.releaseLock();
@@ -69,10 +69,14 @@ function handleBulkRecords(data, source) {
         headerText += " - " + record.courseName;
       }
       
+      var statusString = record.status;
+      if (record.mark !== undefined) statusString += " (M:" + record.mark + ")";
+      if (record.absenceReason) statusString += " [" + record.absenceReason + "]";
+      
       processEntry({
         id: record.studentId,
         name: record.name,
-        status: record.status, // Timestamp removed as requested
+        status: statusString,
         header: headerText
       }, doc);
       processedKeys[id] = null; 
@@ -101,13 +105,11 @@ function processEntry(item, doc) {
   var sheets = doc.getSheets();
   var targetSheet;
 
-  // PRIORITY SEARCH: W6-W10
   for (var i = 0; i < sheets.length; i++) {
     var n = sheets[i].getName().toUpperCase();
     if (n.indexOf("W6-W10") !== -1) { targetSheet = sheets[i]; break; }
   }
 
-  // FALLBACK: ANY WEEK
   if (!targetSheet) {
     for (var i = sheets.length - 1; i >= 0; i--) {
       var n = sheets[i].getName().toUpperCase();
@@ -117,7 +119,6 @@ function processEntry(item, doc) {
 
   sheet = targetSheet || sheets[0];
 
-  // Headers (Row 12, Column O+)
   var headersRange = sheet.getRange(12, 15, 1, 400);
   var headers = headersRange.getDisplayValues()[0];
   for (var c = 0; c < headers.length; c++) {
@@ -130,7 +131,6 @@ function processEntry(item, doc) {
   }
   if (!col) col = 15;
 
-  // Students (Column B, Row 14+)
   var rowsToSearch = Math.max(sheet.getLastRow(), 500);
   var dataRows = sheet.getRange(14, 2, Math.max(rowsToSearch - 13, 1), 1).getValues();
   var row = -1;
@@ -149,7 +149,7 @@ function processEntry(item, doc) {
 }
 
 function doGet(e) {
-  return ContentService.createTextOutput("UTS Sync v25.0 READY (No Timestamps).").setMimeType(ContentService.MimeType.TEXT);
+  return ContentService.createTextOutput("UTS Sync v26.0 READY (With Marks & Reasons).").setMimeType(ContentService.MimeType.TEXT);
 }
 `;
 
@@ -186,7 +186,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
     <div className="space-y-4">
       <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
         <div className="flex justify-between items-center mb-2">
-          <h4 className="text-sm font-black text-gray-800 uppercase tracking-tight">Sync Panel v25.0</h4>
+          <h4 className="text-sm font-black text-gray-800 uppercase tracking-tight">Sync Panel v26.0</h4>
           <button 
             onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
             className={`text-[10px] px-3 py-1 rounded-full font-black transition-all ${copied ? 'bg-green-500 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
@@ -196,8 +196,8 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
         </div>
         
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
-          <p className="text-[10px] font-bold text-amber-800 uppercase mb-1">Sheet Setup v25.0</p>
-          <p className="text-[10px] text-amber-700 leading-relaxed font-medium">v25.0: Timestamps removed from cell output. Deployment access must be <strong>"Anyone"</strong>.</p>
+          <p className="text-[10px] font-bold text-amber-800 uppercase mb-1">Sheet Setup v26.0</p>
+          <p className="text-[10px] text-amber-700 leading-relaxed font-medium">v26.0: Includes Mark and Reason. Deployment access must be <strong>"Anyone"</strong>.</p>
         </div>
 
         <div className="grid grid-cols-2 gap-2">

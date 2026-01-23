@@ -4,5 +4,9 @@ export interface Student {
   studentId: string;
   email: string;
   timestamp: number;
-  status: string; // Changed from 'P' | 'A' to string to support reasons like "Medical", "Exempt"
+  status: string;
+  // The course name associated with the attendance record
+  courseName: string;
+  mark?: number;
+  absenceReason?: string;
 }

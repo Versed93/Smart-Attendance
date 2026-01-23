@@ -13,7 +13,6 @@ import { AdjustmentsHorizontalIcon } from './icons/AdjustmentsHorizontalIcon';
 import { MagnifyingGlassIcon } from './icons/MagnifyingGlassIcon';
 import { XCircleIcon } from './icons/XCircleIcon';
 import { GoogleSheetIntegrationInfo } from './GoogleSheetIntegrationInfo';
-import { DevicePhoneMobileIcon } from './icons/DevicePhoneMobileIcon';
 import { ArrowDownTrayIcon } from './icons/ArrowDownTrayIcon';
 import { CheckIcon } from './icons/CheckIcon';
 import { XMarkIcon } from './icons/XMarkIcon';
@@ -25,13 +24,13 @@ import { TrashIcon } from './icons/TrashIcon';
 interface TeacherViewProps {
   attendanceList: Student[];
   onRemoveStudents: (studentIds: string[], courseName: string) => void;
-  onBulkStatusUpdate: (studentIds:string[], status: string, courseName: string) => void;
+  onBulkStatusUpdate: (studentIds:string[], status: string, courseName: string, absenceReason?: string) => void;
   onNewSession: () => void;
   scriptUrl: string;
   onScriptUrlChange: (url: string) => void;
   onOpenKiosk: () => void;
-  onManualAdd: (name: string, id: string, email: string, status: string, courseName: string) => Promise<{success: boolean, message: string}>;
-  addStudent: (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number) => Promise<{ success: boolean, message: string }>;
+  onManualAdd: (name: string, id: string, email: string, status: string, courseName: string, mark?: number, reason?: string) => Promise<{success: boolean, message: string}>;
+  addStudent: (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number, mark?: number, reason?: string) => Promise<{ success: boolean, message: string }>;
   onLogout: () => void;
   knownStudents: PreRegisteredStudent[];
   onSendTestRecord: (courseName: string) => Promise<{ success: boolean; message: string }>;
@@ -59,15 +58,18 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [qrData, setQrData] = useState<string>('');
   const [courseName, setCourseName] = useState(() => localStorage.getItem('attendance-course-name') || '');
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
-  const [viewMode, setViewMode] = useState<'teacher' | 'classroom' | 'checklist'>('teacher');
+  const [viewMode, setViewMode] = useState<'teacher' | 'classroom'>('teacher');
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [scanResult, setScanResult] = useState<{ type: 'success' | 'error' | 'duplicate', message: string} | null>(null);
   const [isGeoEnabled, setIsGeoEnabled] = useState(false);
-  const [teacherLocation, setTeacherLocation] = useState<{lat: number, lng: number} | null>(null);
+  const [teacherLocation] = useState<{lat: number, lng: number} | null>(null);
   const [showManualModal, setShowManualModal] = useState(false);
   const [manualId, setManualId] = useState('');
   const [manualName, setManualName] = useState('');
+  const [manualStatus, setManualStatus] = useState('P');
+  const [manualMark, setManualMark] = useState<number>(10);
+  const [manualReason, setManualReason] = useState('');
   const [manualError, setManualError] = useState('');
   const [manualIsNew, setManualIsNew] = useState(false);
   const [isQrLoading, setIsQrLoading] = useState(true);
@@ -75,9 +77,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [qrMargin, setQrMargin] = useState<number>(() => parseInt(localStorage.getItem('qr-margin') || '2', 10));
   const [listSearchTerm, setListSearchTerm] = useState('');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [unlockMessage, setUnlockMessage] = useState('');
   const [currentTime, setCurrentTime] = useState(() => new Date());
-  const [confirmation, setConfirmation] = useState<{ action: 'P' | 'A' | null, count: number }>({ action: null, count: 0 });
+  const [confirmation, setConfirmation] = useState<{ action: 'P' | 'A' | null, count: number, reason?: string }>({ action: null, count: 0 });
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -147,14 +148,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           alert("No attendance data to export.");
           return;
       }
-      const headers = ["Student ID", "Name", "Status", "Timestamp", "Date", "Time"];
+      const headers = ["Student ID", "Name", "Status", "Mark", "Reason", "Timestamp", "Date", "Time"];
       const csvRows = [headers.join(',')];
       for (const student of filteredList) {
           const timestamp = new Date(student.timestamp);
           const date = timestamp.toLocaleDateString('en-CA');
           const time = timestamp.toLocaleTimeString('en-US', { hour12: false });
           const name = `"${student.name.replace(/"/g, '""')}"`;
-          const row = [student.studentId, name, student.status, student.timestamp, date, time];
+          const reason = `"${(student.absenceReason || '').replace(/"/g, '""')}"`;
+          const row = [student.studentId, name, student.status, student.mark || 0, reason, student.timestamp, date, time];
           csvRows.push(row.join(','));
       }
       const csvString = csvRows.join('\n');
@@ -173,7 +175,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   const handleMarkAll = (status: 'P' | 'A') => {
     if (filteredList.length === 0) return;
-    setConfirmation({ action: status, count: filteredList.length });
+    setConfirmation({ action: status, count: filteredList.length, reason: status === 'A' ? 'Bulk update: Absent' : '' });
   };
   
   const handleNewSession = () => {
@@ -184,7 +186,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   const submitManualAdd = async () => {
       if (!manualId || !manualName) { setManualError('Student ID and Name are required.'); return; }
-      const result = await onManualAdd(manualName, manualId, `${manualId}@STUDENT.UTS.EDU.MY`, 'P', courseName);
+      const result = await onManualAdd(manualName, manualId, `${manualId}@STUDENT.UTS.EDU.MY`, manualStatus, courseName, manualMark, manualReason);
       if (result.success) { setShowManualModal(false); setManualId(''); setManualName(''); setManualError(''); } 
       else { setManualError(result.message); }
   };
@@ -237,7 +239,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
          </div>
        </div>
 
-       {/* Statistics Summary Bar */}
        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
              <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Total</p>
@@ -307,20 +308,32 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 {filteredList.length > 0 ? (
                     <ul className="space-y-2">
                         {filteredList.map(s => (
-                            <li key={s.studentId} className="flex items-center gap-3 p-2 bg-gray-50 rounded-lg group">
-                                <input type="checkbox" checked={selectedIds.has(s.studentId)} onChange={(e) => {
-                                    const next = new Set(selectedIds);
-                                    if(e.target.checked) next.add(s.studentId); else next.delete(s.studentId);
-                                    setSelectedIds(next);
-                                }} className="rounded border-gray-300 text-brand-primary focus:ring-brand-primary" />
-                                <div className="flex-1 min-w-0">
-                                    <p className="font-bold text-sm text-gray-800 truncate">{s.name}</p>
-                                    <p className="text-xs font-mono text-gray-500">{s.studentId}</p>
+                            <li key={s.studentId} className="flex flex-col gap-1 p-3 bg-gray-50 rounded-lg group">
+                                <div className="flex items-center gap-3">
+                                    <input type="checkbox" checked={selectedIds.has(s.studentId)} onChange={(e) => {
+                                        const next = new Set(selectedIds);
+                                        if(e.target.checked) next.add(s.studentId); else next.delete(s.studentId);
+                                        setSelectedIds(next);
+                                    }} className="rounded border-gray-300 text-brand-primary focus:ring-brand-primary" />
+                                    <div className="flex-1 min-w-0">
+                                        <p className="font-bold text-sm text-gray-800 truncate">{s.name}</p>
+                                        <p className="text-xs font-mono text-gray-500">{s.studentId}</p>
+                                    </div>
+                                    <div className="flex items-center gap-3 shrink-0">
+                                        {getStatusBadge(s.status)}
+                                        <p className="text-xs text-gray-400 w-20 text-right">{new Date(s.timestamp).toLocaleTimeString()}</p>
+                                    </div>
                                 </div>
-                                <div className="flex items-center gap-3 shrink-0">
-                                    {getStatusBadge(s.status)}
-                                    <p className="text-xs text-gray-400 w-20 text-right">{new Date(s.timestamp).toLocaleTimeString()}</p>
-                                </div>
+                                {(s.mark !== undefined || s.absenceReason) && (
+                                    <div className="ml-7 flex flex-wrap gap-2 mt-1">
+                                        {s.mark !== undefined && (
+                                            <span className="text-[10px] bg-brand-primary/10 text-brand-primary px-2 py-0.5 rounded-md font-bold">Mark: {s.mark}</span>
+                                        )}
+                                        {s.absenceReason && (
+                                            <span className="text-[10px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-md font-medium truncate max-w-xs" title={s.absenceReason}>Note: {s.absenceReason}</span>
+                                        )}
+                                    </div>
+                                )}
                             </li>
                         ))}
                     </ul>
@@ -387,14 +400,30 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       
       {showManualModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-2xl shadow-xl p-6 relative">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-xl p-6 relative max-h-[90vh] overflow-y-auto">
             <button onClick={() => setShowManualModal(false)} className="absolute top-3 right-3 text-gray-400 hover:text-gray-600"><XCircleIcon className="w-6 h-6"/></button>
             <h2 className="text-xl font-bold text-gray-900 mb-4">Manual Entry</h2>
             <div className="space-y-4">
-               <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">ID</label><input type="text" value={manualId} onChange={handleManualIdChange} className="w-full border-2 border-gray-100 rounded-xl p-3 font-mono font-bold uppercase" /></div>
+               <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Student ID</label><input type="text" value={manualId} onChange={handleManualIdChange} className="w-full border-2 border-gray-100 rounded-xl p-3 font-mono font-bold uppercase" /></div>
                <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Name</label><input type="text" value={manualName} onChange={(e) => setManualName(e.target.value.toUpperCase())} className="w-full border-2 border-gray-100 rounded-xl p-3 font-bold uppercase" /></div>
+               <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Status</label>
+                    <select value={manualStatus} onChange={(e) => setManualStatus(e.target.value)} className="w-full border-2 border-gray-100 rounded-xl p-3 font-bold">
+                        <option value="P">Present</option>
+                        <option value="A">Absent</option>
+                        <option value="Medical">Medical</option>
+                        <option value="Exempt">Exempt</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Mark (0-10)</label>
+                    <input type="number" min="0" max="10" value={manualMark} onChange={(e) => setManualMark(parseInt(e.target.value))} className="w-full border-2 border-gray-100 rounded-xl p-3 font-bold" />
+                  </div>
+               </div>
+               <div><label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Note / Reason</label><textarea value={manualReason} onChange={(e) => setManualReason(e.target.value)} className="w-full border-2 border-gray-100 rounded-xl p-3 font-medium text-sm" placeholder="Optional notes..."></textarea></div>
                {manualError && <p className="text-xs text-red-500 font-bold">{manualError}</p>}
-               <button onClick={submitManualAdd} className="w-full bg-brand-primary text-white font-black py-3 rounded-xl hover:bg-brand-secondary transition-all">Add Student</button>
+               <button onClick={submitManualAdd} className="w-full bg-brand-primary text-white font-black py-3 rounded-xl hover:bg-brand-secondary transition-all">Record Student</button>
             </div>
           </div>
         </div>
@@ -415,14 +444,22 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       )}
 
       {confirmation.action && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
-            <div className="bg-white w-full max-w-md rounded-2xl shadow-xl p-6 text-center">
-                <ExclamationTriangleIcon className="h-12 w-12 text-yellow-500 mx-auto mb-4" />
-                <h2 className="text-xl font-bold text-gray-900 mb-2">Confirm Bulk Action</h2>
-                <p className="text-sm text-gray-500 mb-6">Mark all {confirmation.count} students as {confirmation.action === 'P' ? 'Present' : 'Absent'}?</p>
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 text-left">
+            <div className="bg-white w-full max-w-md rounded-2xl shadow-xl p-6">
+                <div className="text-center mb-6">
+                    <ExclamationTriangleIcon className="h-12 w-12 text-yellow-500 mx-auto mb-4" />
+                    <h2 className="text-xl font-bold text-gray-900 mb-2">Bulk Update</h2>
+                    <p className="text-sm text-gray-500">Mark {confirmation.count} students as {confirmation.action === 'P' ? 'Present' : 'Absent'}?</p>
+                </div>
+                {confirmation.action === 'A' && (
+                    <div className="mb-6">
+                        <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1">Reason for Absence</label>
+                        <input type="text" value={confirmation.reason} onChange={(e) => setConfirmation({...confirmation, reason: e.target.value})} className="w-full border-2 border-gray-100 rounded-xl p-3 text-sm" placeholder="e.g., Unexcused" />
+                    </div>
+                )}
                 <div className="flex gap-4">
-                    <button onClick={() => setConfirmation({action:null, count:0})} className="w-full px-4 py-2 font-bold text-gray-500 bg-gray-100 rounded-lg">Cancel</button>
-                    <button onClick={() => { onBulkStatusUpdate(filteredList.map(s=>s.studentId), confirmation.action!, courseName); setConfirmation({action:null, count:0}); }} className="w-full px-4 py-2 font-bold text-white bg-brand-primary rounded-lg">Confirm</button>
+                    <button onClick={() => setConfirmation({action:null, count:0})} className="w-full px-4 py-3 font-bold text-gray-500 bg-gray-100 rounded-lg">Cancel</button>
+                    <button onClick={() => { onBulkStatusUpdate(filteredList.map(s=>s.studentId), confirmation.action!, courseName, confirmation.reason); setConfirmation({action:null, count:0}); }} className="w-full px-4 py-3 font-bold text-white bg-brand-primary rounded-lg">Confirm</button>
                 </div>
             </div>
         </div>

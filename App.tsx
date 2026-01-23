@@ -9,14 +9,12 @@ import { FIREBASE_CONFIG } from './firebaseConfig';
 
 type View = 'teacher' | 'student';
 
-// Essential storage keys for UX and configuration
-const SCRIPT_URL_KEY = 'attendance-script-url-v54'; 
+const SCRIPT_URL_KEY = 'attendance-script-url-v55'; 
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const KNOWN_STUDENTS_KEY = 'attendance-known-students-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
 const LAST_SCAN_DATE_KEY = 'attendance-last-scan-date-v1';
 
-// Use today's date as a stable session ID for the live view
 const SESSION_ID = new Date().toISOString().slice(0, 10);
 
 const App: React.FC = () => {
@@ -130,14 +128,14 @@ const App: React.FC = () => {
     }
   };
 
-  const addStudent = async (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number) => {
+  const addStudent = async (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number, mark?: number, absenceReason?: string) => {
       if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) {
           return { success: false, message: "System error: Config missing." };
       }
       
       checkAndClearForNewDay();
       const timestamp = overrideTimestamp || Date.now();
-      const studentData = { name, studentId, email, status, timestamp, courseName };
+      const studentData: Student = { name, studentId, email, status, timestamp, courseName, mark, absenceReason };
       
       setAttendanceList(prev => [{ ...studentData }, ...prev.filter(s => s.studentId !== studentId)]);
 
@@ -183,13 +181,15 @@ const App: React.FC = () => {
       for (const id of ids) {
         const student = attendanceList.find(s => s.studentId === id) || knownStudents.find(k => k.id === id);
         const name = student ? student.name : 'Unknown';
-        const removalData = {
+        const removalData: Student = {
           studentId: id,
           name: name,
           email: `${id}@STUDENT.UTS.EDU.MY`,
           status: 'A',
           timestamp: now,
-          courseName
+          courseName,
+          mark: 0,
+          absenceReason: 'Lecturer Removed'
         };
         
         promises.push(
@@ -204,15 +204,15 @@ const App: React.FC = () => {
       await Promise.all(promises);
   };
 
-  const onBulkStatusUpdate = async (ids: string[], status: string, courseName: string) => {
-      setAttendanceList(prev => prev.map(s => ids.includes(s.studentId) ? { ...s, status } : s));
+  const onBulkStatusUpdate = async (ids: string[], status: string, courseName: string, absenceReason?: string) => {
+      setAttendanceList(prev => prev.map(s => ids.includes(s.studentId) ? { ...s, status, absenceReason } : s));
       const now = Date.now();
       const updatePayload: Record<string, Student> = {};
 
       for (const id of ids) {
         const student = attendanceList.find(s => s.studentId === id);
         if (student) {
-           const updateData = { ...student, status, timestamp: now, courseName };
+           const updateData: Student = { ...student, status, timestamp: now, courseName, absenceReason };
            updatePayload[id] = updateData;
            
            fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) });
@@ -229,13 +229,13 @@ const App: React.FC = () => {
     if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) {
       return { success: false, message: "Firebase missing." };
     }
-    const testRecord = { name: 'TEST STUDENT', studentId: 'TEST001', email: 'test@student.uts.edu.my', status: 'P', timestamp: Date.now(), courseName: courseName || 'Test Session' };
+    const testRecord: Student = { name: 'TEST STUDENT', studentId: 'TEST001', email: 'test@student.uts.edu.my', status: 'P', timestamp: Date.now(), courseName: courseName || 'Test Session', mark: 10, absenceReason: '' };
     try {
       await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/TEST001.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(testRecord) });
       if (scriptUrl) {
           await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ 'TEST001': testRecord }) });
       }
-      return { success: true, message: "Test record sent. Ensure you have deployed v25.0 of the script." };
+      return { success: true, message: "Test record sent. Ensure you have deployed v26.0 of the script." };
     } catch (e) { return { success: false, message: "Test failed." }; }
   };
 
@@ -269,7 +269,7 @@ const App: React.FC = () => {
                      scriptUrl={scriptUrl}
                      onScriptUrlChange={setScriptUrl}
                      onOpenKiosk={() => { setIsKioskMode(true); setView('student'); }}
-                     onManualAdd={(name, id, email, status, courseName) => addStudent(name, id, email, status, courseName)}
+                     onManualAdd={(name, id, email, status, courseName, mark, reason) => addStudent(name, id, email, status, courseName, undefined, mark, reason)}
                      addStudent={addStudent}
                      onLogout={handleLogout}
                      knownStudents={knownStudents}
