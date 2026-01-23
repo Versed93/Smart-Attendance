@@ -7,18 +7,14 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v11.0)
+ * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v12.0)
  * 
- * This version supports real-time direct recording from the student app.
- * It handles both individual record pings and bulk syncs.
- *
- * --- IMPORTANT: SHEET STRUCTURE ---
- * - Tabs for attendance (e.g., "W1-W5").
- * - Row 12 is for session dates/headers.
- * - Column B (2) contains Student IDs.
- * - Column D (4) contains Student Names.
- * - Student records start from Row 14.
- * - Attendance is written in Columns O (15) onwards.
+ * --- TARGET SHEET STRUCTURE ---
+ * 1. ID Column: B (Index 2)
+ * 2. Name Column: D (Index 4)
+ * 3. Attendance Starts: Column O (Index 15)
+ * 4. Header Row: 12 (Contains Dates)
+ * 5. Data Rows: Start from 14
  * ---
  */
 
@@ -29,15 +25,12 @@ var FIREBASE_SECRET = "${FIREBASE_CONFIG.DATABASE_SECRET || 'PASTE_YOUR_FIREBASE
 
 function getSheetConfigs() {
   return [
-    { name: "W1-W5", dateRow: 12, startCol: 15, endCol: 30 },
-    { name: "W6-W10", dateRow: 12, startCol: 15, endCol: 30 },
-    { name: "W11-W14", dateRow: 12, startCol: 15, endCol: 30 }
+    { name: "W1-W5", dateRow: 12, startCol: 15, endCol: 35 },
+    { name: "W6-W10", dateRow: 12, startCol: 15, endCol: 35 },
+    { name: "W11-W14", dateRow: 12, startCol: 15, endCol: 35 }
   ];
 }
 
-/**
- * Handles incoming data (Individual or Bulk)
- */
 function doPost(e) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) {
@@ -46,30 +39,23 @@ function doPost(e) {
 
   try {
     var data = JSON.parse(e.postData.contents);
-    handleBulkRecords(data, "doPost");
+    handleBulkRecords(data, "DirectPing");
     return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
-
   } catch (err) {
     console.error("doPost Error: " + err.toString());
-    return ContentService.createTextOutput(JSON.stringify({ success: false, message: err.toString() })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({ success: false, error: err.toString() })).setMimeType(ContentService.MimeType.JSON);
   } finally {
     lock.releaseLock();
   }
 }
 
-/**
- * Automatic trigger function for missed records.
- */
 function syncFromFirebase() {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(10000)) return;
-
   try {
-    var pendingDataUrl = FIREBASE_URL + '/pending.json?auth=' + FIREBASE_SECRET;
-    var response = UrlFetchApp.fetch(pendingDataUrl, { 'muteHttpExceptions': true });
+    var response = UrlFetchApp.fetch(FIREBASE_URL + '/pending.json?auth=' + FIREBASE_SECRET, { 'muteHttpExceptions': true });
     var data = JSON.parse(response.getContentText());
     handleBulkRecords(data, "AutoSync");
-    
   } catch (err) {
     console.error("Sync Error: " + err.toString());
   } finally {
@@ -77,47 +63,42 @@ function syncFromFirebase() {
   }
 }
 
-/**
- * Shared logic to process records and clear Firebase.
- */
 function handleBulkRecords(data, source) {
   if (!data || Object.keys(data).length === 0) return;
     
   var doc = SpreadsheetApp.getActiveSpreadsheet();
-  var studentIdsToProcess = Object.keys(data);
+  var studentIds = Object.keys(data);
   var processedKeys = {};
 
-  for (var i = 0; i < studentIdsToProcess.length; i++) {
-    var studentId = studentIdsToProcess[i];
-    var record = data[studentId];
-    
+  for (var i = 0; i < studentIds.length; i++) {
+    var id = studentIds[i];
+    var record = data[id];
     try {
       var date = new Date(record.timestamp);
       var dateStr = Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yyyy");
       var timeStr = Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm");
       
-      var sessionHeader = dateStr;
-      if (record.courseName && String(record.courseName).trim() !== "") {
-          sessionHeader = dateStr + " - " + String(record.courseName).trim();
+      // Build the header we are looking for in Row 12
+      var headerToFind = dateStr;
+      if (record.courseName && record.courseName !== 'General') {
+          headerToFind = dateStr + " - " + record.courseName;
       }
 
-      var statusStr = record.status === 'P' ? "P @ " + timeStr : record.status;
-
-      processSingleRecord({
-        studentId: record.studentId,
+      processSingleEntry({
+        id: record.studentId,
         name: record.name,
-        status: statusStr,
-        sessionHeader: sessionHeader
+        status: record.status === 'P' ? "P @ " + timeStr : record.status,
+        header: headerToFind
       }, doc);
       
-      processedKeys[studentId] = null; // Mark for Firebase cleanup
-
+      processedKeys[id] = null;
     } catch (e) {
-      console.error(source + ": Error for " + studentId + ": " + e.toString());
+      console.error(source + " Failed for " + id + ": " + e.toString());
     }
   }
   
-  if (Object.keys(processedKeys).length > 0) {
+  // Cleanup Firebase pending queue
+  if (Object.keys(processedKeys).length > 0 && source !== "DirectPing") {
     UrlFetchApp.fetch(FIREBASE_URL + '/pending.json?auth=' + FIREBASE_SECRET, {
       'method': 'PATCH',
       'payload': JSON.stringify(processedKeys),
@@ -126,70 +107,68 @@ function handleBulkRecords(data, source) {
   }
 }
 
-function processSingleRecord(record, doc) {
-    var studentId = String(record.studentId || "").toUpperCase().trim();
-    var studentName = String(record.name || "").toUpperCase().trim();
-    var sessionHeader = record.sessionHeader;
-
+function processSingleEntry(item, doc) {
+    var studentId = String(item.id || "").toUpperCase().trim();
+    var studentName = String(item.name || "").toUpperCase().trim();
     var configs = getSheetConfigs();
-    var targetSheet, targetCol;
+    
+    var sheet, targetCol;
 
+    // 1. Find the correct Sheet and Column (Row 12)
     for (var i = 0; i < configs.length; i++) {
       var conf = configs[i];
-      var sheet = doc.getSheetByName(conf.name);
-      if (!sheet) continue;
+      var s = doc.getSheetByName(conf.name);
+      if (!s) continue;
       
-      var headerRange = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1);
-      var headerValues = headerRange.getDisplayValues()[0];
-      var emptyCol = -1;
+      var headers = s.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1).getDisplayValues()[0];
+      var firstEmpty = -1;
 
-      for (var c = 0; c < headerValues.length; c++) {
-        if (headerValues[c].trim() === sessionHeader) {
+      for (var c = 0; c < headers.length; c++) {
+        if (headers[c].trim() === item.header) {
           targetCol = conf.startCol + c;
           break;
         }
-        if (emptyCol === -1 && headerValues[c].trim() === "") emptyCol = conf.startCol + c;
+        if (firstEmpty === -1 && headers[c].trim() === "") firstEmpty = conf.startCol + c;
       }
       
-      if (!targetCol && emptyCol !== -1) {
-        targetCol = emptyCol;
-        sheet.getRange(conf.dateRow, targetCol).setValue(sessionHeader);
+      if (!targetCol && firstEmpty !== -1) {
+        targetCol = firstEmpty;
+        s.getRange(conf.dateRow, targetCol).setValue(item.header);
       }
       
-      if(targetCol) {
-        targetSheet = sheet;
-        break;
-      }
+      if(targetCol) { sheet = s; break; }
     }
 
-    if (!targetSheet) throw "Sheet/Column not found";
+    if (!sheet) throw "Could not find target sheet or valid header column.";
     
+    // 2. Find Student Row (Search Column B starting row 14)
     var startRow = 14;
-    var lastRow = targetSheet.getLastRow();
+    var lastRow = sheet.getLastRow();
     var studentRow = -1;
 
     if (lastRow >= startRow) {
-      var idRange = targetSheet.getRange(startRow, 2, lastRow - startRow + 1, 1);
-      var ids = idRange.getDisplayValues();
-      for (var r = 0; r < ids.length; r++) {
-        if (String(ids[r][0]).toUpperCase().trim() === studentId) {
+      var idValues = sheet.getRange(startRow, 2, lastRow - startRow + 1, 1).getValues();
+      for (var r = 0; r < idValues.length; r++) {
+        if (String(idValues[r][0]).toUpperCase().trim() === studentId) {
           studentRow = startRow + r;
           break;
         }
       }
     }
 
+    // 3. Append if new student
     if (studentRow === -1) {
        studentRow = Math.max(lastRow + 1, startRow);
-       targetSheet.getRange(studentRow, 2).setValue(studentId);
-       targetSheet.getRange(studentRow, 4).setValue(studentName);
+       sheet.getRange(studentRow, 2).setValue(studentId); // Column B
+       sheet.getRange(studentRow, 4).setValue(studentName); // Column D
     }
 
-    targetSheet.getRange(studentRow, targetCol).setValue(record.status);
+    // 4. Set Attendance Status in target column (O onwards)
+    sheet.getRange(studentRow, targetCol).setValue(item.status);
 }
 
 function doGet(e) {
-    return ContentService.createTextOutput("Script Active").setMimeType(ContentService.MimeType.TEXT);
+  return ContentService.createTextOutput("UTS Script v12.0 Active").setMimeType(ContentService.MimeType.TEXT);
 }
 `;
 
@@ -202,13 +181,10 @@ interface GoogleSheetIntegrationInfoProps {
 
 export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProps> = ({ onSendTestRecord, onCheckPendingRecords, onForceSync }) => {
   const [copied, setCopied] = useState(false);
-  
   const [testStatus, setTestStatus] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
-  
   const [checkStatus, setCheckStatus] = useState<'idle' | 'checking' | 'checked'>('idle');
   const [checkResult, setCheckResult] = useState<{ message: string; count: number; isError: boolean } | null>(null);
-
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced'>('idle');
   const [syncResult, setSyncResult] = useState<{ message: string; success: boolean } | null>(null);
 
@@ -237,26 +213,18 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
     setSyncStatus('synced');
   };
 
-
   return (
     <div>
-      <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Google Sheets Sync</h3>
+      <h3 className="text-sm font-bold text-gray-700 uppercase tracking-wider">Google Sheets Sync (Direct)</h3>
       <div className="mt-2 space-y-4">
         <div className="bg-gray-50 p-4 rounded-lg border">
-          <h4 className="font-semibold text-gray-800">Step 1: Firebase Setup</h4>
-          <p className="text-xs text-gray-500 mt-1">
-            Follow instructions to create a free Realtime Database and get your <strong>URL</strong> and <strong>Secret Key</strong>.
-          </p>
-        </div>
-        
-        <div className="bg-gray-50 p-4 rounded-lg border">
-          <h4 className="font-semibold text-gray-800">Step 2: Deploy Apps Script</h4>
+          <h4 className="font-semibold text-gray-800">Step 1: Deploy Updated Script</h4>
           <p className="text-xs text-gray-500 mt-1 mb-3">
-            Copy the updated script below into your Google Sheet's Apps Script editor. After pasting, you must **re-deploy** your script (<code className="text-xs bg-gray-200 px-1 rounded">Deploy &gt; New deployment</code>). Set a 1-minute time-driven trigger for the <code className="text-xs bg-gray-200 px-1 rounded">syncFromFirebase</code> function.
+            Copy this <strong>v12.0</strong> script. In Google Sheets, go to Extensions > Apps Script, paste it, and <strong>IMPORTANT:</strong> Click "Deploy" > "New Deployment" > "Web App" > Set Access to "Anyone".
           </p>
           <div className="bg-gray-800 p-3 rounded-lg">
              <div className="flex justify-between items-center mb-2">
-              <span className="text-xs text-gray-400 font-mono">Firebase Sync Script v11.0</span>
+              <span className="text-xs text-gray-400 font-mono">UTS Script v12.0</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-3 py-1 rounded-md font-bold transition-colors ${copied ? 'bg-green-500 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
@@ -271,46 +239,22 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
         </div>
 
         <div className="bg-gray-50 p-4 rounded-lg border">
-          <h4 className="font-semibold text-gray-800">Step 3: Test Integration</h4>
+          <h4 className="font-semibold text-gray-800">Step 2: Verify Direct Recording</h4>
           <p className="text-xs text-gray-500 mt-1 mb-3">
-            Send a test record to Firebase. It should appear in your sheet **immediately**.
+            Use the test button. If successful, "TEST001" will appear in your sheet immediately.
           </p>
-          <button onClick={handleTestClick} disabled={testStatus === 'sending'} className="w-full bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm shadow-sm hover:bg-indigo-700 disabled:bg-indigo-300 disabled:cursor-wait">
-            {testStatus === 'sending' ? 'Sending...' : 'Send Test Record'}
+          <button onClick={handleTestClick} disabled={testStatus === 'sending'} className="w-full bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm shadow-sm hover:bg-indigo-700">
+            {testStatus === 'sending' ? 'Sending...' : 'Test Direct Sync'}
           </button>
-          {testMessage && (<p className={`text-xs mt-2 text-center font-semibold animate-in fade-in ${testStatus === 'success' ? 'text-green-700' : 'text-red-700'}`}>{testMessage}</p>)}
+          {testMessage && (<p className={`text-xs mt-2 text-center font-semibold ${testStatus === 'success' ? 'text-green-700' : 'text-red-700'}`}>{testMessage}</p>)}
         </div>
-
-        <div className="bg-gray-50 p-4 rounded-lg border">
-          <h4 className="font-semibold text-gray-800">Step 4: Check Sync Status</h4>
-          <p className="text-xs text-gray-500 mt-1 mb-3">
-            If records aren't appearing, use this to see if they are stuck in the queue.
-          </p>
-          <button onClick={handleCheckClick} disabled={checkStatus === 'checking'} className="w-full bg-gray-700 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm shadow-sm hover:bg-gray-800 disabled:bg-gray-400 disabled:cursor-wait">
-            {checkStatus === 'checking' ? 'Checking...' : 'Check Pending Records'}
-          </button>
-          {checkStatus === 'checked' && checkResult && (
-             <div className={`text-xs mt-2 text-center font-bold p-2 rounded-md animate-in fade-in ${checkResult.isError ? 'bg-red-100 text-red-700' : checkResult.count > 0 ? 'bg-yellow-100 text-yellow-800' : 'bg-green-100 text-green-800'}`}>
-              {checkResult.isError ? `Error: ${checkResult.message}` : checkResult.count > 0 ? `Warning: ${checkResult.message}` : 'Success! No pending records found.'}
-             </div>
-          )}
-        </div>
-
+        
         <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
-          <h4 className="font-semibold text-yellow-900">Step 5: Manual Sync</h4>
-          <p className="text-xs text-yellow-700 mt-1 mb-3">
-            If records are pending (from Step 4), use this to manually push all pending records to your Google Sheet.
+          <h4 className="font-semibold text-yellow-900">Step 3: Troubleshooting</h4>
+          <p className="text-xs text-yellow-700 mt-1">
+             The script searches Column B for IDs. Ensure your Sheet names match ("W1-W5", etc.) and Row 12 contains headers.
           </p>
-          <button onClick={handleForceSyncClick} disabled={syncStatus === 'syncing'} className="w-full bg-yellow-500 text-yellow-900 font-bold py-2 px-4 rounded-lg transition-colors text-sm shadow-sm hover:bg-yellow-600 disabled:bg-yellow-300 disabled:cursor-wait">
-            {syncStatus === 'syncing' ? 'Syncing...' : 'Force Sync Pending Records'}
-          </button>
-          {syncStatus === 'synced' && syncResult && (
-             <div className={`text-xs mt-2 text-center font-bold p-2 rounded-md animate-in fade-in ${!syncResult.success ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-800'}`}>
-              {syncResult.message}
-             </div>
-          )}
         </div>
-
       </div>
     </div>
   );

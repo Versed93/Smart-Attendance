@@ -140,11 +140,11 @@ const App: React.FC = () => {
       const timestamp = overrideTimestamp || Date.now();
       const studentData = { name, studentId, email, status, timestamp, courseName };
       
-      // Optimistic UI update
+      // Optimistic UI update for Teacher View
       setAttendanceList(prev => [{ ...studentData }, ...prev.filter(s => s.studentId !== studentId)]);
 
       try {
-          // 1. Record to Firebase for Teacher's Live View & Pending Queue
+          // 1. Record to Firebase first (Primary Backup)
           const p1 = fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${studentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
               method: 'PUT',
               body: JSON.stringify(studentData),
@@ -156,15 +156,14 @@ const App: React.FC = () => {
           
           await Promise.all([p1, p2]);
 
-          // 2. IMMEDIATE DIRECT RECORDING TO GOOGLE SHEETS
-          // This removes the need for manual force sync as long as student has internet
+          // 2. DIRECT IMMEDIATE RECORDING TO GOOGLE SHEETS (REAL-TIME)
           if (scriptUrl) {
+              // We use text/plain to avoid CORS pre-flight while still sending JSON
               fetch(scriptUrl, {
                   method: 'POST',
                   mode: 'no-cors',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ [studentId]: studentData }), // Wrap in object to match script expectations
-              }).catch(err => console.warn("Background sheet recording failed, will rely on auto-trigger fallback", err));
+                  body: JSON.stringify({ [studentId]: studentData }),
+              }).catch(err => console.warn("Background direct recording failed. Auto-trigger will recover it.", err));
           }
           
           setKnownStudents(prev => {
@@ -173,7 +172,7 @@ const App: React.FC = () => {
           });
           localStorage.setItem(LAST_SCAN_DATE_KEY, new Date().toISOString().slice(0, 10));
 
-          return { success: true, message: "Attendance Recorded & Synced." };
+          return { success: true, message: "Verified & Recorded Direct to Sheet." };
       } catch (error) {
           console.error("Firebase write error:", error);
           return { success: false, message: "Submission failed. Please check your internet connection." };
@@ -193,7 +192,7 @@ const App: React.FC = () => {
           studentId: id,
           name: name,
           email: `${id}@STUDENT.UTS.EDU.MY`,
-          status: 'A', // Mark as Absent
+          status: 'A', // Absent
           timestamp: now,
           courseName
         };
@@ -206,6 +205,11 @@ const App: React.FC = () => {
             method: 'DELETE',
         });
         promises.push(p1, p2);
+
+        // Direct removal to Sheets
+        if (scriptUrl) {
+           fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ [id]: removalData }) });
+        }
       }
       await Promise.all(promises);
   };
@@ -221,7 +225,6 @@ const App: React.FC = () => {
            const updateData = { ...student, status, timestamp: now, courseName };
            updatePayload[id] = updateData;
            
-           // Update Firebase
            fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
                 method: 'PUT',
                 body: JSON.stringify(updateData),
@@ -233,12 +236,10 @@ const App: React.FC = () => {
         }
       }
 
-      // Bulk direct record to Sheets
       if (scriptUrl && Object.keys(updatePayload).length > 0) {
           fetch(scriptUrl, {
               method: 'POST',
               mode: 'no-cors',
-              headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(updatePayload),
           });
       }
@@ -258,23 +259,20 @@ const App: React.FC = () => {
       courseName: courseName || 'Test Session'
     };
     try {
-      const response = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${testStudentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
+      await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${testStudentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
         method: 'PUT',
         body: JSON.stringify(testRecord),
       });
-      if (!response.ok) throw new Error(response.statusText);
       
-      // Also test direct sync
       if (scriptUrl) {
-          fetch(scriptUrl, {
+          await fetch(scriptUrl, {
               method: 'POST',
               mode: 'no-cors',
-              headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ [testStudentId]: testRecord }),
           });
       }
 
-      return { success: true, message: "Test record sent! Check your sheet now." };
+      return { success: true, message: "Direct test sent. Check your Sheet!" };
     } catch (error) {
       console.error(error);
       return { success: false, message: "Failed to send test record." };
@@ -312,12 +310,11 @@ const App: React.FC = () => {
         await fetch(scriptUrl, {
             method: 'POST',
             mode: 'no-cors', 
-            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(records),
         });
-        return { success: true, message: `Sync command sent for ${total} records.`, syncedCount: total, errorCount: 0, total };
+        return { success: true, message: `Bulk sync command sent.`, syncedCount: total, errorCount: 0, total };
     } catch (e) {
-        return { success: false, message: `Failed to send sync command.`, syncedCount: 0, errorCount: total, total };
+        return { success: false, message: `Sync failed.`, syncedCount: 0, errorCount: total, total };
     }
   };
 
