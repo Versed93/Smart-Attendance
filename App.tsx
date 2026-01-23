@@ -11,7 +11,7 @@ import { FIREBASE_CONFIG } from './firebaseConfig';
 type View = 'teacher' | 'student';
 
 // Essential storage keys for UX and configuration
-const SCRIPT_URL_KEY = 'attendance-script-url-v39'; 
+const SCRIPT_URL_KEY = 'attendance-script-url-v40'; // Incremented to force update
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const KNOWN_STUDENTS_KEY = 'attendance-known-students-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
@@ -55,7 +55,7 @@ const App: React.FC = () => {
   });
 
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbxXsSqu2_WPJqJC-QkKsZ9VUEFZLd0gJ95GQZmeUcTtmZcao4Q5LyZiI_c5r1JLbQVP/exec';
+    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbxUBqQPWhqxwDmRMXxM5Cx2GdqLUoI31IOI7tFlBuoMYESIxuicPKOYQaPNpUkv_1nK/exec';
   });
 
   const checkAndClearForNewDay = useCallback(() => {
