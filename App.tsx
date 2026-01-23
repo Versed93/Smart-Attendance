@@ -58,6 +58,8 @@ const App: React.FC = () => {
       return initial;
   });
 
+  const [isListLocallyCleared, setIsListLocallyCleared] = useState(false);
+
   useEffect(() => {
       localStorage.setItem(KNOWN_STUDENTS_KEY, JSON.stringify(knownStudents));
   }, [knownStudents]);
@@ -173,7 +175,7 @@ const App: React.FC = () => {
 
   // --- POLLING ENGINE ---
   const fetchRemoteAttendance = useCallback(async () => {
-    if (view !== 'teacher' || !isOnline || !scriptUrl) return;
+    if (view !== 'teacher' || !isOnline || !scriptUrl || isListLocallyCleared) return;
 
     try {
         const response = await fetch(scriptUrl);
@@ -252,7 +254,7 @@ const App: React.FC = () => {
     } catch (e) {
         console.warn("Polling failed (background)", e);
     }
-  }, [scriptUrl, isOnline, view, locallyDeletedIds]);
+  }, [scriptUrl, isOnline, view, locallyDeletedIds, isListLocallyCleared]);
 
   useEffect(() => {
     if (view === 'teacher') {
@@ -302,10 +304,6 @@ const App: React.FC = () => {
                 if (isMounted) setSyncStatus('Server taking too long...');
                 controller.abort();
             }, 45000); 
-
-            // ARTIFICIAL DELAY
-            if (isMounted) setSyncStatus('Keying in data...');
-            await new Promise(resolve => setTimeout(resolve, 3000)); // 3-second delay
 
             if (isMounted) setSyncStatus('Connecting to Google Server...');
 
@@ -417,6 +415,7 @@ const App: React.FC = () => {
   };
 
   const addStudent = (name: string, studentId: string, email: string, status: string, overrideTimestamp?: number) => {
+      setIsListLocallyCleared(false); // Resume polling when new activity occurs
       // Run the check before adding a student, in case the app was left open overnight
       checkAndClearForNewDay();
 
@@ -539,9 +538,11 @@ const App: React.FC = () => {
   };
 
   const onClearAttendance = () => {
-      if (window.confirm('Are you sure you want to clear the list? This only affects this device.')) {
-        setAttendanceList([]);
-      }
+    if (window.confirm('Are you sure you want to clear the list? This only affects this device for the current session.')) {
+      setAttendanceList([]);
+      setSyncQueue([]);
+      setIsListLocallyCleared(true);
+    }
   };
   
   const onTestAttendance = () => {
