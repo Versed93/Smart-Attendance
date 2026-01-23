@@ -54,7 +54,7 @@ const App: React.FC = () => {
   });
 
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbzSnAl4TjUN7giXG3X3v_T9e4KtrbnloeI4ur8J1D_Yy_JVHdCQQXAMtfMgK58cBUdP/exec';
+    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbx20edvx6USeT_N0NINZLt-PVUbVNv17tfWZJBo1JL_ExxQwXSFwSum_bOUxJ7xzMbl/exec';
   });
 
   const checkAndClearForNewDay = useCallback(() => {
@@ -304,48 +304,38 @@ const App: React.FC = () => {
     }
 
     // 1. Fetch pending records
-    const check = await handleCheckPendingRecords();
-    if (!check.success || check.count === 0) {
-        return { success: true, message: check.message, syncedCount: 0, errorCount: 0, total: 0 };
+    const checkResponse = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+    if (!checkResponse.ok) {
+        return { success: false, message: "Failed to fetch pending records from Firebase.", syncedCount: 0, errorCount: 0, total: 0 };
     }
+    const records = await checkResponse.json();
 
-    const response = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
-    const records = await response.json();
-    const studentIds = Object.keys(records);
-    
-    let syncedCount = 0;
-    let errorCount = 0;
+    if (!records) {
+        return { success: true, message: "No pending records to sync.", syncedCount: 0, errorCount: 0, total: 0 };
+    }
+    const total = Object.keys(records).length;
 
-    const syncPromises = studentIds.map(async (id) => {
-        const record = records[id];
-        try {
-            // 2. Send record to Google Apps Script
-            const postResponse = await fetch(scriptUrl, {
-                method: 'POST',
-                mode: 'no-cors', // Apps Script web apps often require no-cors for simple POSTs from web clients
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(record),
-            });
-            
-            // Due to 'no-cors', we can't inspect the response. We assume success and proceed to delete.
-            // This is a limitation of calling Apps Script from a web client. The script must be robust.
+    try {
+        // 2. Send all records to Google Apps Script in a single POST request.
+        // The script is now responsible for processing and deleting the records from Firebase.
+        await fetch(scriptUrl, {
+            method: 'POST',
+            mode: 'no-cors', // We "fire and forget" because we can't read the response from a cross-origin script.
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(records),
+        });
 
-            // 3. Delete from Firebase
-            await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
-                method: 'DELETE',
-            });
-            syncedCount++;
-        } catch (e) {
-            console.error(`Failed to sync student ${id}:`, e);
-            errorCount++;
-        }
-    });
+        // 3. Since we can't confirm success from the response, we provide an optimistic message.
+        const message = `Sync command sent for ${total} records. Please use "Check Pending Records" again in a minute to verify completion.`;
+        return { success: true, message, syncedCount: total, errorCount: 0, total };
 
-    await Promise.all(syncPromises);
-
-    const message = `Sync complete. Synced: ${syncedCount}, Failed: ${errorCount}.`;
-    return { success: errorCount === 0, message, syncedCount, errorCount, total: studentIds.length };
+    } catch (e) {
+        console.error(`Failed to post records to Google Apps Script:`, e);
+        const message = `Failed to send sync command. Check network connection and script URL.`;
+        return { success: false, message, syncedCount: 0, errorCount: total, total };
+    }
   };
+
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">

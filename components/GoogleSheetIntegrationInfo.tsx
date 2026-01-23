@@ -7,20 +7,19 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v9.0)
+ * FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v10.0)
  * 
- * This version updates the sheet layout to match user specifications.
- * - Dates are now written starting from Column O (O12, P12, etc.).
- * - If the initial range (O:T) is full, it will continue searching for an empty
- *   column up to column AD to write the new session.
+ * This version makes the manual sync (doPost) robust by handling a bulk payload,
+ * mirroring the logic of the automatic trigger. This prevents race conditions and
+ * ensures the script is responsible for clearing records from Firebase.
  *
  * --- IMPORTANT: SHEET STRUCTURE ---
- * - A tab for attendance (e.g., "W1-W5", "W6-W10", etc.).
- * - Row 12 is where session dates/headers are written.
- * - Column B (column 2) contains Student IDs.
- * - Column D (column 4) contains Student Names.
- * - Student records start from Row 14 downwards.
- * - Attendance status is written in Columns starting from O (column 15).
+ * - Tabs for attendance (e.g., "W1-W5").
+ * - Row 12 is for session dates/headers.
+ * - Column B (2) contains Student IDs.
+ * - Column D (4) contains Student Names.
+ * - Student records start from Row 14.
+ * - Attendance is written in Columns O (15) onwards.
  * ---
  */
 
@@ -30,10 +29,6 @@ var FIREBASE_SECRET = "${FIREBASE_CONFIG.DATABASE_SECRET || 'PASTE_YOUR_FIREBASE
 // --- END CONFIGURATION ---
 
 function getSheetConfigs() {
-  // Define your sheet names and the ranges for attendance.
-  // dateRow: The row number where session dates are written (e.g., 12).
-  // startCol: The starting column number for attendance (e.g., O is 15).
-  // endCol: The last column to check for an empty spot.
   return [
     { name: "W1-W5", dateRow: 12, startCol: 15, endCol: 30 },
     { name: "W6-W10", dateRow: 12, startCol: 15, endCol: 30 },
@@ -42,7 +37,7 @@ function getSheetConfigs() {
 }
 
 /**
- * NEW: Handles records pushed manually from the web app.
+ * Handles bulk records sent from the web app's "Force Sync" button.
  */
 function doPost(e) {
   var lock = LockService.getScriptLock();
@@ -51,44 +46,18 @@ function doPost(e) {
   }
 
   try {
-    var record = JSON.parse(e.postData.contents);
-    var doc = SpreadsheetApp.getActiveSpreadsheet();
-    
-    // Create session header and status with time, similar to the main sync function
-    var date = new Date(record.timestamp);
-    var dateStr = Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yyyy");
-    var timeStr = Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm");
-    
-    var sessionHeader = dateStr;
-    if (record.courseName && String(record.courseName).trim() !== "") {
-        sessionHeader = dateStr + " - " + String(record.courseName).trim();
-    }
-    
-    var statusWithTime = record.status;
-    if (record.status === 'P') {
-        statusWithTime = "P @ " + timeStr;
-    }
-
-    processSingleRecord({
-      studentId: record.studentId,
-      name: record.name,
-      status: statusWithTime,
-      sessionHeader: sessionHeader
-    }, doc);
-    
-    // The web app will handle deleting the record from Firebase after getting this success response.
-    // However, due to no-cors mode, this response might not be readable by the client.
-    // The client assumes success and deletes optimistically.
-    return ContentService.createTextOutput(JSON.stringify({ success: true, studentId: record.studentId })).setMimeType(ContentService.MimeType.JSON);
+    var data = JSON.parse(e.postData.contents);
+    handleBulkRecords(data, "doPost");
+    // The client can't read this response due to no-cors, but it's good practice.
+    return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
 
   } catch (err) {
     console.error("doPost Error: " + err.toString());
-    return ContentService.createTextOutput(JSON.stringify({ success: false, message: err.toString(), studentId: record.studentId })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({ success: false, message: err.toString() })).setMimeType(ContentService.MimeType.JSON);
   } finally {
     lock.releaseLock();
   }
 }
-
 
 /**
  * Main sync function for the time-driven trigger.
@@ -104,65 +73,72 @@ function syncFromFirebase() {
     var pendingDataUrl = FIREBASE_URL + '/pending.json?auth=' + FIREBASE_SECRET;
     var response = UrlFetchApp.fetch(pendingDataUrl, { 'muteHttpExceptions': true });
     var data = JSON.parse(response.getContentText());
-
-    if (!data) {
-      console.log("No new attendance data to sync.");
-      return;
-    }
-    
-    var doc = SpreadsheetApp.getActiveSpreadsheet();
-    var studentIdsToProcess = Object.keys(data);
-    var processedKeys = {};
-
-    console.log("Found " + studentIdsToProcess.length + " records to process.");
-
-    for (var i = 0; i < studentIdsToProcess.length; i++) {
-      var studentId = studentIdsToProcess[i];
-      var record = data[studentId];
-      
-      try {
-        var date = new Date(record.timestamp);
-        var dateStr = Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yyyy");
-        var timeStr = Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm");
-        
-        var sessionHeader = dateStr;
-        if (record.courseName && String(record.courseName).trim() !== "") {
-            sessionHeader = dateStr + " - " + String(record.courseName).trim();
-        }
-
-        var statusWithTime = record.status;
-        if (record.status === 'P') {
-            statusWithTime = "P @ " + timeStr;
-        }
-
-        processSingleRecord({
-          studentId: record.studentId,
-          name: record.name,
-          status: statusWithTime,
-          sessionHeader: sessionHeader
-        }, doc);
-        
-        processedKeys[studentId] = null;
-
-      } catch (e) {
-        console.error("Failed to process record for student " + studentId + ": " + e.toString() + " | Data: " + JSON.stringify(record));
-      }
-    }
-    
-    if (Object.keys(processedKeys).length > 0) {
-      var deleteOptions = {
-        'method': 'PATCH',
-        'payload': JSON.stringify(processedKeys),
-        'muteHttpExceptions': true
-      };
-      UrlFetchApp.fetch(pendingDataUrl, deleteOptions);
-      console.log("Successfully cleared " + Object.keys(processedKeys).length + " records from Firebase.");
-    }
+    handleBulkRecords(data, "syncFromFirebase");
     
   } catch (err) {
     console.error("An error occurred during sync: " + err.toString());
   } finally {
     lock.releaseLock();
+  }
+}
+
+/**
+ * Shared logic to process a batch of records, write to the sheet, and clear from Firebase.
+ */
+function handleBulkRecords(data, source) {
+  if (!data) {
+    console.log(source + ": No new attendance data to sync.");
+    return;
+  }
+    
+  var doc = SpreadsheetApp.getActiveSpreadsheet();
+  var studentIdsToProcess = Object.keys(data);
+  var processedKeys = {};
+
+  console.log(source + ": Found " + studentIdsToProcess.length + " records to process.");
+
+  for (var i = 0; i < studentIdsToProcess.length; i++) {
+    var studentId = studentIdsToProcess[i];
+    var record = data[studentId];
+    
+    try {
+      var date = new Date(record.timestamp);
+      var dateStr = Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yyyy");
+      var timeStr = Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm");
+      
+      var sessionHeader = dateStr;
+      if (record.courseName && String(record.courseName).trim() !== "") {
+          sessionHeader = dateStr + " - " + String(record.courseName).trim();
+      }
+
+      var statusWithTime = record.status;
+      if (record.status === 'P') {
+          statusWithTime = "P @ " + timeStr;
+      }
+
+      processSingleRecord({
+        studentId: record.studentId,
+        name: record.name,
+        status: statusWithTime,
+        sessionHeader: sessionHeader
+      }, doc);
+      
+      processedKeys[studentId] = null; // Mark for deletion
+
+    } catch (e) {
+      console.error(source + ": Failed to process record for student " + studentId + ": " + e.toString());
+    }
+  }
+  
+  if (Object.keys(processedKeys).length > 0) {
+    var pendingDataUrl = FIREBASE_URL + '/pending.json?auth=' + FIREBASE_SECRET;
+    var deleteOptions = {
+      'method': 'PATCH',
+      'payload': JSON.stringify(processedKeys),
+      'muteHttpExceptions': true
+    };
+    UrlFetchApp.fetch(pendingDataUrl, deleteOptions);
+    console.log(source + ": Successfully cleared " + Object.keys(processedKeys).length + " records from Firebase.");
   }
 }
 
@@ -302,7 +278,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
           </p>
           <div className="bg-gray-800 p-3 rounded-lg">
              <div className="flex justify-between items-center mb-2">
-              <span className="text-xs text-gray-400 font-mono">Firebase Sync Script v9.0</span>
+              <span className="text-xs text-gray-400 font-mono">Firebase Sync Script v10.0</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-3 py-1 rounded-md font-bold transition-colors ${copied ? 'bg-green-500 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
