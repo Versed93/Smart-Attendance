@@ -243,6 +243,38 @@ const App: React.FC = () => {
       await Promise.all(promises);
   };
 
+  const handleSendTestRecord = async (courseName: string): Promise<{ success: boolean; message: string }> => {
+    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) {
+      return { success: false, message: "Firebase is not configured in firebaseConfig.ts." };
+    }
+
+    const testStudentId = 'TEST001';
+    const testRecord = {
+      name: 'TEST STUDENT',
+      studentId: testStudentId,
+      email: 'test@student.uts.edu.my',
+      status: 'P',
+      timestamp: Date.now(),
+      courseName: courseName || 'Test Session'
+    };
+
+    try {
+      const response = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${testStudentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
+        method: 'PUT',
+        body: JSON.stringify(testRecord),
+      });
+
+      if (!response.ok) {
+        throw new Error('Firebase returned an error: ' + response.statusText);
+      }
+
+      return { success: true, message: "Test record sent! Check your sheet in ~1 minute." };
+    } catch (error) {
+      console.error("Firebase test write error:", error);
+      return { success: false, message: "Failed to send. Check Firebase config & network." };
+    }
+  };
+
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col">
        {view === 'teacher' ? (
@@ -260,6 +292,7 @@ const App: React.FC = () => {
                      addStudent={addStudent}
                      onLogout={handleLogout}
                      knownStudents={knownStudents}
+                     onSendTestRecord={handleSendTestRecord}
                  />
              </div>
            ) : <LoginView onLogin={handleLogin} />

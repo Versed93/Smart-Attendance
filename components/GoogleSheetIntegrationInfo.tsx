@@ -231,8 +231,29 @@ function doGet(e) {
 }
 `;
 
-export const GoogleSheetIntegrationInfo: React.FC = () => {
+interface GoogleSheetIntegrationInfoProps {
+  onSendTestRecord: () => Promise<{ success: boolean; message: string }>;
+}
+
+
+export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProps> = ({ onSendTestRecord }) => {
   const [copied, setCopied] = useState(false);
+  const [testStatus, setTestStatus] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
+  const [testMessage, setTestMessage] = useState('');
+
+  const handleTestClick = async () => {
+    setTestStatus('sending');
+    setTestMessage('');
+    const result = await onSendTestRecord();
+    setTestMessage(result.message);
+    setTestStatus(result.success ? 'success' : 'error');
+
+    setTimeout(() => {
+        setTestStatus('idle');
+        setTestMessage('');
+    }, 5000);
+  };
+
 
   return (
     <div>
@@ -265,6 +286,26 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
             </pre>
           </div>
         </div>
+
+        <div className="bg-gray-50 p-4 rounded-lg border">
+          <h4 className="font-semibold text-gray-800">Step 3: Test Integration</h4>
+          <p className="text-xs text-gray-500 mt-1 mb-3">
+            After deploying your script and setting the trigger, click this button to send a test record to Firebase. If your setup is correct, a "TEST STUDENT" entry will appear in your Google Sheet within a minute.
+          </p>
+          <button
+            onClick={handleTestClick}
+            disabled={testStatus === 'sending'}
+            className="w-full bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm shadow-sm hover:bg-indigo-700 disabled:bg-indigo-300 disabled:cursor-wait"
+          >
+            {testStatus === 'sending' ? 'Sending...' : 'Send Test Record'}
+          </button>
+          {testMessage && (
+            <p className={`text-xs mt-2 text-center font-semibold animate-in fade-in ${testStatus === 'success' ? 'text-green-700' : 'text-red-700'}`}>
+              {testMessage}
+            </p>
+          )}
+        </div>
+
       </div>
     </div>
   );

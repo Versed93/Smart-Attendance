@@ -36,6 +36,7 @@ interface TeacherViewProps {
   addStudent: (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number) => Promise<{ success: boolean, message: string }>;
   onLogout: () => void;
   knownStudents: PreRegisteredStudent[];
+  onSendTestRecord: (courseName: string) => Promise<{ success: boolean; message: string }>;
 }
 
 export const TeacherView: React.FC<TeacherViewProps> = ({ 
@@ -50,6 +51,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   addStudent,
   onLogout,
   knownStudents,
+  onSendTestRecord,
 }) => {
   const [baseUrl] = useState<string>(() => window.location.origin + window.location.pathname);
   const [qrData, setQrData] = useState<string>('');
@@ -403,7 +405,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             {unlockMessage && <p className="text-green-700 text-xs mt-2 text-center font-semibold animate-in fade-in">{unlockMessage}</p>}
                         </div>
                     </div>
-                    <GoogleSheetIntegrationInfo />
+                    <GoogleSheetIntegrationInfo onSendTestRecord={() => onSendTestRecord(courseName)} />
                 </div>
             </div>
         </div>
