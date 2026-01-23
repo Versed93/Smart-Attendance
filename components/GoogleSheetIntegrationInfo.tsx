@@ -4,7 +4,7 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v19.0)
+ * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v20.0)
  * Priority Tab: W6-W10
  * Column B: ID | Column D: Name | O+: Attendance
  */
@@ -32,7 +32,7 @@ function doPost(e) {
     
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   } catch(err) {
-    console.error("UTS Script v19 Error: " + err.toString());
+    console.error("UTS Script v20 Error: " + err.toString());
     return ContentService.createTextOutput(JSON.stringify({error:err.toString()})).setMimeType(ContentService.MimeType.JSON);
   } finally {
     lock.releaseLock();
@@ -115,7 +115,7 @@ function processEntry(item, doc) {
     }
   }
 
-  // FALLBACK: Newest sheet with "W" in name
+  // FALLBACK: Newest sheet with "W" or "WEEK" in name
   if (!targetSheet) {
     for (var i = sheets.length - 1; i >= 0; i--) {
       var sName = sheets[i].getName().toUpperCase();
@@ -127,7 +127,7 @@ function processEntry(item, doc) {
   }
 
   sheet = targetSheet || sheets[0];
-  console.log("Writing to sheet: " + sheet.getName());
+  console.log("Using sheet: " + sheet.getName());
 
   // Search Row 12 for header starting from Column O (15)
   var headers = sheet.getRange(12, 15, 1, 150).getDisplayValues()[0];
@@ -164,7 +164,7 @@ function processEntry(item, doc) {
 }
 
 function doGet(e) {
-  return ContentService.createTextOutput("UTS Script v19.0 ACTIVE - Target: W6-W10 Priority").setMimeType(ContentService.MimeType.TEXT);
+  return ContentService.createTextOutput("UTS Script v20.0 ACTIVE - Target: W6-W10 Priority").setMimeType(ContentService.MimeType.TEXT);
 }
 `;
 
@@ -201,7 +201,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
     <div className="space-y-4">
       <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
         <div className="flex justify-between items-center mb-2">
-          <h4 className="text-sm font-black text-gray-800 uppercase tracking-tight">Sync Panel v19.0</h4>
+          <h4 className="text-sm font-black text-gray-800 uppercase tracking-tight">Sync Panel v20.0</h4>
           <button 
             onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
             className={`text-[10px] px-3 py-1 rounded-full font-black transition-all ${copied ? 'bg-green-500 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
@@ -211,10 +211,10 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
         </div>
         
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
-          <p className="text-[10px] font-bold text-amber-800 uppercase mb-1">Sheet Selection v19.0</p>
-          <p className="text-[10px] text-amber-700 mb-2 leading-relaxed">Prioritizing <strong>W6-W10</strong>. If deployment failed, ensure you are using a new deployment ID.</p>
+          <p className="text-[10px] font-bold text-amber-800 uppercase mb-1">Sheet Selection v20.0</p>
+          <p className="text-[10px] text-amber-700 mb-2 leading-relaxed">Prioritizing <strong>W6-W10</strong>. If deployment failed, ensure you are using a new deployment ID and set "Access" to "Anyone".</p>
           <ol className="text-[10px] text-amber-700 space-y-1 list-decimal ml-3">
-            <li>Update your Google Apps Script to <strong>v19.0</strong>.</li>
+            <li>Update your Google Apps Script to <strong>v20.0</strong>.</li>
             <li>Click <strong>Deploy > New Deployment</strong>.</li>
             <li>Set "Access" to <strong>Anyone</strong>.</li>
             <li>Ensure <strong>syncFromFirebase</strong> trigger is set to 1-minute intervals.</li>
