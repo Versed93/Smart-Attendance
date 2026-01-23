@@ -11,7 +11,7 @@ import { FIREBASE_CONFIG } from './firebaseConfig';
 type View = 'teacher' | 'student';
 
 // Essential storage keys for UX and configuration
-const SCRIPT_URL_KEY = 'attendance-script-url-v40'; // Incremented to force update
+const SCRIPT_URL_KEY = 'attendance-script-url-v44'; 
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const KNOWN_STUDENTS_KEY = 'attendance-known-students-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
@@ -55,7 +55,7 @@ const App: React.FC = () => {
   });
 
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbxUBqQPWhqxwDmRMXxM5Cx2GdqLUoI31IOI7tFlBuoMYESIxuicPKOYQaPNpUkv_1nK/exec';
+    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbxMS-GjIJEoAgKTlMUtBcGKOU7A_yCv7Bf8KnsyUPbcjgg5EASr29E-FNuwZxRxUxF-/exec';
   });
 
   const checkAndClearForNewDay = useCallback(() => {
@@ -234,9 +234,9 @@ const App: React.FC = () => {
     try {
       await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/TEST001.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(testRecord) });
       if (scriptUrl) {
-          fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ 'TEST001': testRecord }) });
+          await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ 'TEST001': testRecord }) });
       }
-      return { success: true, message: "Test sent. Check your sheet!" };
+      return { success: true, message: "Test record sent. Ensure you have deployed the latest version of the script." };
     } catch (e) { return { success: false, message: "Test failed." }; }
   };
 
@@ -251,14 +251,10 @@ const App: React.FC = () => {
   
   const handleForceSync = async (): Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number }> => {
     if (!scriptUrl) return { success: false, message: "Script URL missing.", syncedCount: 0, errorCount: 0, total: 0 };
-    const checkRes = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
-    const records = await checkRes.json();
-    if (!records) return { success: true, message: "No records to sync.", syncedCount: 0, errorCount: 0, total: 0 };
-    const total = Object.keys(records).length;
     try {
-        fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(records) });
-        return { success: true, message: "Sync triggered.", syncedCount: total, errorCount: 0, total };
-    } catch (e) { return { success: false, message: "Sync failed.", syncedCount: 0, errorCount: total, total }; }
+        const res = await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ "action": "SYNC_QUEUE" }) });
+        return { success: true, message: "Sync command sent. Script will process pending records.", syncedCount: 0, errorCount: 0, total: 0 };
+    } catch (e) { return { success: false, message: "Sync failed.", syncedCount: 0, errorCount: 0, total: 0 }; }
   };
 
   return (

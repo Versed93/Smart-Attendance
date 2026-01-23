@@ -4,19 +4,30 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v15.0)
+ * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v18.0)
+ * Target: W6-W10 tab priority
  * Column B: ID | Column D: Name | O+: Attendance
  */
 
-var FIREBASE_URL = "${FIREBASE_CONFIG.DATABASE_URL || 'PASTE_URL'}";
+// --- CONFIG ---
+var FIREBASE_URL = "${(FIREBASE_CONFIG.DATABASE_URL || 'PASTE_URL').replace(/\/+$/, '')}";
 var FIREBASE_SECRET = "${FIREBASE_CONFIG.DATABASE_SECRET || 'PASTE_SECRET'}";
+// --- END CONFIG ---
 
 function doPost(e) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) return ContentService.createTextOutput(JSON.stringify({success:false})).setMimeType(ContentService.MimeType.JSON);
   try {
-    var data = JSON.parse(e.postData.contents);
-    handleBulkRecords(data, "DirectPing");
+    var contents = e.postData.contents;
+    if (!contents) throw "Empty Payload";
+    var data = JSON.parse(contents);
+    
+    if (data.action === "SYNC_QUEUE") {
+      syncFromFirebase();
+    } else {
+      handleBulkRecords(data, "DirectPing");
+    }
+    
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   } catch(err) {
     console.error("UTS Script Error: " + err.toString());
@@ -24,13 +35,30 @@ function doPost(e) {
   } finally { lock.releaseLock(); }
 }
 
+function syncFromFirebase() {
+  try {
+    var response = UrlFetchApp.fetch(FIREBASE_URL + '/pending.json?auth=' + FIREBASE_SECRET, { 'muteHttpExceptions': true });
+    var data = JSON.parse(response.getContentText());
+    if (data && Object.keys(data).length > 0) {
+      handleBulkRecords(data, "AutoSync");
+    }
+  } catch (err) {
+    console.error("Sync Error: " + err.toString());
+  }
+}
+
 function handleBulkRecords(data, source) {
-  if (!data) return;
+  if (!data || Object.keys(data).length === 0) return;
+  
   var doc = SpreadsheetApp.getActiveSpreadsheet();
   var ids = Object.keys(data);
+  var processedKeys = {};
+
   for (var i = 0; i < ids.length; i++) {
-    var record = data[ids[i]];
-    if (!record) continue;
+    var id = ids[i];
+    var record = data[id];
+    if (!record || !record.studentId) continue;
+    
     try {
       var date = new Date(record.timestamp);
       var header = Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yyyy");
@@ -42,8 +70,22 @@ function handleBulkRecords(data, source) {
         status: record.status === 'P' ? "P @ " + Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm") : record.status,
         header: header
       }, doc);
+      
+      processedKeys[id] = null; 
     } catch(e) {
-      console.warn("Entry Processing Failed: " + e.toString());
+      console.warn("Processing failed for " + id + ": " + e.toString());
+    }
+  }
+
+  if (Object.keys(processedKeys).length > 0 && source !== "DirectPing") {
+    try {
+      UrlFetchApp.fetch(FIREBASE_URL + '/pending.json?auth=' + FIREBASE_SECRET, {
+        'method': 'PATCH',
+        'payload': JSON.stringify(processedKeys),
+        'muteHttpExceptions': true
+      });
+    } catch (e) {
+      console.error("Firebase Cleanup Failed: " + e.toString());
     }
   }
 }
@@ -53,19 +95,32 @@ function processEntry(item, doc) {
   var name = String(item.name || "").toUpperCase().trim();
   var sheet, col;
   
-  // Try to find the right sheet (fuzzy match W1-W5, W6-W10, etc)
   var sheets = doc.getSheets();
+  var targetSheet;
+
+  // PRIORITY 1: Look for current block W6-W10 specifically as requested
   for (var i = 0; i < sheets.length; i++) {
     var n = sheets[i].getName().toUpperCase();
-    if (n.indexOf("W") !== -1 || n.indexOf("WEEK") !== -1 || n.indexOf("ATTENDANCE") !== -1) {
-      sheet = sheets[i];
+    if (n.indexOf("W6-W10") !== -1) {
+      targetSheet = sheets[i];
       break;
     }
   }
-  if (!sheet) sheet = sheets[0];
 
-  // Header Search in Row 12 (Start O=15)
-  // Search up to 100 columns for safety
+  // PRIORITY 2: If W6-W10 not found, look for newest "W" sheet
+  if (!targetSheet) {
+    for (var i = sheets.length - 1; i >= 0; i--) {
+      var n = sheets[i].getName().toUpperCase();
+      if (n.indexOf("W") !== -1 || n.indexOf("WEEK") !== -1) {
+        targetSheet = sheets[i];
+        break;
+      }
+    }
+  }
+
+  sheet = targetSheet || sheets[0];
+
+  // Search Row 12 for header starting from Column O (15)
   var headers = sheet.getRange(12, 15, 1, 100).getDisplayValues()[0];
   for (var c = 0; c < headers.length; c++) {
     if (headers[c].trim() === item.header) { col = 15 + c; break; }
@@ -76,14 +131,14 @@ function processEntry(item, doc) {
     }
   }
 
-  if (!col) col = 15; // Safe fallback
+  if (!col) col = 15;
 
-  // Row Search in Col B (Start 14)
+  // Find Student in Column B (2) starting from Row 14
   var lastRow = Math.max(sheet.getLastRow(), 14);
-  var data = sheet.getRange(14, 2, Math.max(lastRow - 13, 1), 1).getValues();
+  var dataRows = sheet.getRange(14, 2, Math.max(lastRow - 13, 1), 1).getValues();
   var row = -1;
-  for (var r = 0; r < data.length; r++) {
-    if (String(data[r][0]).toUpperCase().trim() === id) { row = 14 + r; break; }
+  for (var r = 0; r < dataRows.length; r++) {
+    if (String(dataRows[r][0]).toUpperCase().trim() === id) { row = 14 + r; break; }
   }
 
   if (row === -1) {
@@ -96,7 +151,7 @@ function processEntry(item, doc) {
 }
 
 function doGet(e) {
-  return ContentService.createTextOutput("UTS Script v15.0 Active").setMimeType(ContentService.MimeType.TEXT);
+  return ContentService.createTextOutput("UTS Script v18.0 Active").setMimeType(ContentService.MimeType.TEXT);
 }
 `;
 
@@ -110,6 +165,8 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
   const [copied, setCopied] = useState(false);
   const [testStatus, setTestStatus] = useState<'idle' | 'sending' | 'success' | 'error'>('idle');
   const [testMessage, setTestMessage] = useState('');
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'synced'>('idle');
+  const [syncMessage, setSyncMessage] = useState('');
 
   const handleTestClick = async () => {
     setTestStatus('sending');
@@ -119,11 +176,19 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
     setTimeout(() => { setTestStatus('idle'); setTestMessage(''); }, 5000);
   };
 
+  const handleSyncClick = async () => {
+    setSyncStatus('syncing');
+    const result = await onForceSync();
+    setSyncMessage(result.message);
+    setSyncStatus('synced');
+    setTimeout(() => { setSyncStatus('idle'); setSyncMessage(''); }, 5000);
+  };
+
   return (
     <div className="space-y-4">
       <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
         <div className="flex justify-between items-center mb-2">
-          <h4 className="text-sm font-black text-gray-800 uppercase tracking-tight">Sheet Script v15.0</h4>
+          <h4 className="text-sm font-black text-gray-800 uppercase tracking-tight">Sync Panel v18.0</h4>
           <button 
             onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
             className={`text-[10px] px-3 py-1 rounded-full font-black transition-all ${copied ? 'bg-green-500 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
@@ -131,11 +196,28 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
             {copied ? 'COPIED!' : 'COPY CODE'}
           </button>
         </div>
-        <p className="text-[10px] text-gray-500 mb-3 leading-relaxed font-medium">Update your Apps Script to v15.0 and deploy as "Web App" for "Anyone" to ensure Column B/D/O mapping is active.</p>
-        <button onClick={handleTestClick} disabled={testStatus === 'sending'} className="w-full bg-white border-2 border-brand-primary/20 text-brand-primary font-black py-2 rounded-lg text-xs hover:bg-brand-primary/5 transition-all">
-          {testStatus === 'sending' ? 'SENDING TEST...' : 'RUN SYNC TEST'}
-        </button>
-        {testMessage && (<p className={`text-[10px] mt-2 text-center font-bold ${testStatus === 'success' ? 'text-green-600' : 'text-red-600'}`}>{testMessage}</p>)}
+        
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+          <p className="text-[10px] font-bold text-amber-800 uppercase mb-1">Sheet Selection Priority</p>
+          <p className="text-[10px] text-amber-700 mb-2 leading-relaxed">The script now specifically targets the <strong>W6-W10</strong> tab.</p>
+          <ol className="text-[10px] text-amber-700 space-y-1 list-decimal ml-3">
+            <li>Update your Google Apps Script to <strong>v18.0</strong> (above).</li>
+            <li>Click <strong>Deploy > New Deployment</strong> in Apps Script editor.</li>
+            <li>Set the <strong>syncFromFirebase</strong> trigger to run every minute.</li>
+          </ol>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+           <button onClick={handleSyncClick} disabled={syncStatus === 'syncing'} className="bg-brand-primary text-white font-black py-2 rounded-lg text-xs hover:bg-brand-secondary transition-all">
+            {syncStatus === 'syncing' ? 'SYNCING...' : 'FORCE SYNC'}
+          </button>
+          <button onClick={handleTestClick} disabled={testStatus === 'sending'} className="bg-white border-2 border-brand-primary/20 text-brand-primary font-black py-2 rounded-lg text-xs hover:bg-brand-primary/5 transition-all">
+            {testStatus === 'sending' ? 'TESTING...' : 'SEND TEST'}
+          </button>
+        </div>
+        
+        {syncMessage && <p className="text-[10px] mt-2 text-center font-bold text-brand-primary">{syncMessage}</p>}
+        {testMessage && (<p className={`text-[10px] mt-1 text-center font-bold ${testStatus === 'success' ? 'text-green-600' : 'text-red-600'}`}>{testMessage}</p>)}
       </div>
     </div>
   );
