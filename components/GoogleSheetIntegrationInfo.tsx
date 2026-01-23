@@ -4,8 +4,9 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v24.0)
+ * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v25.0)
  * Layout: ID Col B(2) | Name Col D(4) | Headers Row 12, Col O+(15+)
+ * Note: Removed timestamp from status string.
  */
 
 // --- CONFIG ---
@@ -31,7 +32,7 @@ function doPost(e) {
     
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   } catch(err) {
-    console.error("UTS v24 Error: " + err.toString());
+    console.error("UTS v25 Error: " + err.toString());
     return ContentService.createTextOutput(JSON.stringify({error:err.toString()})).setMimeType(ContentService.MimeType.JSON);
   } finally {
     lock.releaseLock();
@@ -71,7 +72,7 @@ function handleBulkRecords(data, source) {
       processEntry({
         id: record.studentId,
         name: record.name,
-        status: record.status === 'P' ? "P @ " + Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm") : record.status,
+        status: record.status, // Timestamp removed as requested
         header: headerText
       }, doc);
       processedKeys[id] = null; 
@@ -148,7 +149,7 @@ function processEntry(item, doc) {
 }
 
 function doGet(e) {
-  return ContentService.createTextOutput("UTS Sync v24.0 READY.").setMimeType(ContentService.MimeType.TEXT);
+  return ContentService.createTextOutput("UTS Sync v25.0 READY (No Timestamps).").setMimeType(ContentService.MimeType.TEXT);
 }
 `;
 
@@ -185,7 +186,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
     <div className="space-y-4">
       <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
         <div className="flex justify-between items-center mb-2">
-          <h4 className="text-sm font-black text-gray-800 uppercase tracking-tight">Sync Panel v24.0</h4>
+          <h4 className="text-sm font-black text-gray-800 uppercase tracking-tight">Sync Panel v25.0</h4>
           <button 
             onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
             className={`text-[10px] px-3 py-1 rounded-full font-black transition-all ${copied ? 'bg-green-500 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
@@ -195,8 +196,8 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
         </div>
         
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
-          <p className="text-[10px] font-bold text-amber-800 uppercase mb-1">Sheet Setup v24.0</p>
-          <p className="text-[10px] text-amber-700 leading-relaxed font-medium">Use v24.0 for better tab handling. Deployment access must be <strong>"Anyone"</strong>.</p>
+          <p className="text-[10px] font-bold text-amber-800 uppercase mb-1">Sheet Setup v25.0</p>
+          <p className="text-[10px] text-amber-700 leading-relaxed font-medium">v25.0: Timestamps removed from cell output. Deployment access must be <strong>"Anyone"</strong>.</p>
         </div>
 
         <div className="grid grid-cols-2 gap-2">

@@ -3,7 +3,6 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { TeacherView } from './components/TeacherView';
 import { StudentView } from './components/StudentView';
 import { LoginView } from './components/LoginView';
-import { InstallPwaPrompt } from './components/InstallPwaPrompt';
 import type { Student } from './types';
 import { PRE_REGISTERED_STUDENTS, PreRegisteredStudent } from './studentList';
 import { FIREBASE_CONFIG } from './firebaseConfig';
@@ -11,7 +10,7 @@ import { FIREBASE_CONFIG } from './firebaseConfig';
 type View = 'teacher' | 'student';
 
 // Essential storage keys for UX and configuration
-const SCRIPT_URL_KEY = 'attendance-script-url-v51'; 
+const SCRIPT_URL_KEY = 'attendance-script-url-v54'; 
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const KNOWN_STUDENTS_KEY = 'attendance-known-students-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
@@ -236,7 +235,7 @@ const App: React.FC = () => {
       if (scriptUrl) {
           await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ 'TEST001': testRecord }) });
       }
-      return { success: true, message: "Test record sent. Ensure you have deployed v24.0 of the script." };
+      return { success: true, message: "Test record sent. Ensure you have deployed v25.0 of the script." };
     } catch (e) { return { success: false, message: "Test failed." }; }
   };
 
@@ -296,7 +295,6 @@ const App: React.FC = () => {
                </div>
            </div>
        )}
-       <InstallPwaPrompt />
     </div>
   );
 };

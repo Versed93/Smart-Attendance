@@ -97,7 +97,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         const studentData = JSON.parse(data);
         addStudent(studentData.name, studentData.studentId, studentData.email, 'P', courseName, studentData.timestamp)
             .then(result => {
-                if (result.success) setScanResult({ type: 'success', message: `${studentData.name} checked in!` });
+                if (result.success) setScanResult({ type: 'success', message: `${studentData.name} checked-in! Thank you.` });
                 else setScanResult({ type: 'duplicate', message: result.message });
             });
       } catch (e) { setScanResult({ type: 'error', message: 'Invalid QR code format.' }); }
@@ -331,7 +331,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         </div>
       </div>
        
-      {/* Modals remain same, omitted for brevity but they are in full content below */}
       {showSettingsModal && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-2xl rounded-2xl shadow-xl max-h-[90vh] overflow-y-auto">
@@ -373,6 +372,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     </div>
                     <GoogleSheetIntegrationInfo onSendTestRecord={() => onSendTestRecord(courseName)} onCheckPendingRecords={onCheckPendingRecords} onForceSync={onForceSync} />
                 </div>
+            </div>
+        </div>
+      )}
+
+      {scanResult && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[200] animate-in slide-in-from-top-4 duration-300">
+            <div className={`px-6 py-3 rounded-full shadow-2xl flex items-center gap-3 border ${scanResult.type === 'success' ? 'bg-green-600 border-green-500 text-white' : 'bg-red-600 border-red-500 text-white'}`}>
+                {scanResult.type === 'success' ? <CheckIcon className="w-5 h-5" /> : <XMarkIcon className="w-5 h-5" />}
+                <p className="font-black text-sm uppercase tracking-tight">{scanResult.message}</p>
             </div>
         </div>
       )}
