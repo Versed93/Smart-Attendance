@@ -11,7 +11,7 @@ import { FIREBASE_CONFIG } from './firebaseConfig';
 type View = 'teacher' | 'student';
 
 // Essential storage keys for UX and configuration
-const SCRIPT_URL_KEY = 'attendance-script-url-v44'; 
+const SCRIPT_URL_KEY = 'attendance-script-url-v46'; 
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const KNOWN_STUDENTS_KEY = 'attendance-known-students-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
@@ -55,7 +55,7 @@ const App: React.FC = () => {
   });
 
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbxMS-GjIJEoAgKTlMUtBcGKOU7A_yCv7Bf8KnsyUPbcjgg5EASr29E-FNuwZxRxUxF-/exec';
+    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbwVKn1d99fxOfwpAHCNvnAttmMXsM6RLf6AiQDrBcR1zB0WlHcNH9CrAZm_5dCs1kDT/exec';
   });
 
   const checkAndClearForNewDay = useCallback(() => {
@@ -236,7 +236,7 @@ const App: React.FC = () => {
       if (scriptUrl) {
           await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ 'TEST001': testRecord }) });
       }
-      return { success: true, message: "Test record sent. Ensure you have deployed the latest version of the script." };
+      return { success: true, message: "Test record sent. Ensure you have deployed v19.0 of the script." };
     } catch (e) { return { success: false, message: "Test failed." }; }
   };
 
