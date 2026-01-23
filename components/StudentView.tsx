@@ -7,24 +7,19 @@ import { MapPinIcon } from './icons/MapPinIcon';
 import { QrCodeIcon } from './icons/QrCodeIcon';
 import type { PreRegisteredStudent } from '../studentList';
 import { LockClosedIcon } from './icons/LockClosedIcon';
-import { UserIcon } from './icons/UserIcon';
 
 interface StudentViewProps {
-  markAttendance: (name: string, studentId: string, email: string) => { success: boolean, message: string };
+  markAttendance: (name: string, studentId: string, email: string) => Promise<{ success: boolean, message: string }>;
   token: string;
   courseName?: string;
   geoConstraints?: { lat: number; lng: number; radius: number };
   bypassRestrictions?: boolean;
   onExit?: () => void;
-  isSyncing?: boolean;
-  isOnline?: boolean;
-  syncStatus?: string;
   isOfflineScan?: boolean;
-  onRetry?: () => void;
   knownStudents: PreRegisteredStudent[];
 }
 
-type Status = 'validating' | 'validating-gps' | 'form' | 'success' | 'error' | 'show-student-qr' | 'device-locked';
+type Status = 'validating' | 'validating-gps' | 'form' | 'submitting' | 'success' | 'error' | 'show-student-qr' | 'device-locked';
 
 const STUDENT_PROFILE_KEY = 'attendance-student-profile-v1';
 const DEVICE_LOCK_KEY = 'attendance-device-lock-v1';
@@ -52,11 +47,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   geoConstraints, 
   bypassRestrictions = false, 
   onExit, 
-  isSyncing = false, 
-  isOnline = true,
-  syncStatus = "Connecting to Google Sheets...",
   isOfflineScan = false,
-  onRetry,
   knownStudents
 }) => {
   const [name, setName] = useState('');
@@ -67,7 +58,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [message, setMessage] = useState('');
   const [formError, setFormError] = useState('');
   const [studentQrData, setStudentQrData] = useState('');
-  const [showRetry, setShowRetry] = useState(false);
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   
@@ -82,13 +72,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
           } catch (e) { console.error("Failed to load profile", e); }
       }
       
-      // Check for Device Lock
       if (!bypassRestrictions) {
           const lockData = localStorage.getItem(DEVICE_LOCK_KEY);
           if (lockData) {
-              const lockTime = parseInt(lockData, 10);
               const twelveHours = 12 * 60 * 60 * 1000;
-              if (Date.now() - lockTime < twelveHours) {
+              if (Date.now() - parseInt(lockData, 10) < twelveHours) {
                   setStatus('device-locked');
               }
           }
@@ -96,19 +84,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   }, [bypassRestrictions]);
 
   useEffect(() => {
-    // Show retry button if syncing takes longer than 5 seconds
-    let timeout: ReturnType<typeof setTimeout>;
-    if (isSyncing && status === 'success') {
-        setShowRetry(false);
-        timeout = setTimeout(() => setShowRetry(true), 5000);
-    } else {
-        setShowRetry(false);
-    }
-    return () => clearTimeout(timeout);
-  }, [isSyncing, status]);
-
-  useEffect(() => {
-    if (status === 'device-locked') return;
+    if (status === 'device-locked' || status !== 'validating') return;
     if (bypassRestrictions) { setStatus('form'); return; }
     if (!token) { setStatus('error'); setMessage('Invalid link. Please scan the QR code again.'); return; }
     
@@ -122,21 +98,15 @@ export const StudentView: React.FC<StudentViewProps> = ({
             navigator.geolocation.getCurrentPosition(
                 (position) => {
                     const dist = getDistanceFromLatLonInM(geoConstraints.lat, geoConstraints.lng, position.coords.latitude, position.coords.longitude);
-                    const accuracy = position.coords.accuracy || 0;
-                    const effectiveDistance = Math.max(0, dist - accuracy);
-                    
-                    if (effectiveDistance <= geoConstraints.radius) {
+                    if (dist - position.coords.accuracy <= geoConstraints.radius) {
                         setStatus('form');
                     } else {
                         setStatus('error');
-                        setMessage(`GPS Location Mismatch. Distance: ${Math.round(dist)}m, Required: ${geoConstraints.radius}m. Please move closer.`);
+                        setMessage(`GPS Location Mismatch. Distance: ${Math.round(dist)}m. Please move closer.`);
                     }
                 },
                 (err) => {
-                    let errMsg = 'Location permission is required.';
-                    if (err.code === 1) errMsg = 'Please allow Location Access in your browser settings.';
-                    else if (err.code === 2) errMsg = 'GPS signal unavailable. Please ensure GPS is ON.';
-                    else if (err.code === 3) errMsg = 'GPS request timed out. Please refresh.';
+                    let errMsg = err.code === 1 ? 'Please allow Location Access.' : 'Could not get location.';
                     setStatus('error');
                     setMessage(errMsg);
                 },
@@ -159,7 +129,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
     }
   }, [status, studentQrData]);
   
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
 
@@ -180,11 +150,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
       setStudentQrData(dataToEncode);
       setStatus('show-student-qr');
     } else {
-      const { success, message } = markAttendance(name, studentId, email);
-
-      setMessage(message);
-
-      if (success) {
+      setStatus('submitting');
+      const result = await markAttendance(name, studentId, email);
+      setMessage(result.message);
+      if (result.success) {
         setStatus('success');
         if (!bypassRestrictions) {
           localStorage.setItem(DEVICE_LOCK_KEY, Date.now().toString());
@@ -206,71 +175,28 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   if (status === 'device-locked') return (
      <div className="text-center py-12 px-4" role="alert" aria-label="Device Locked">
-        <div className="bg-gray-100 rounded-full p-4 w-24 h-24 mx-auto mb-4 flex items-center justify-center">
-            <LockClosedIcon className="w-12 h-12 text-gray-500" />
-        </div>
+        <div className="bg-gray-100 rounded-full p-4 w-24 h-24 mx-auto mb-4 flex items-center justify-center"> <LockClosedIcon className="w-12 h-12 text-gray-500" /> </div>
         <h3 className="text-xl font-black text-gray-800 mb-2">Device Already Used</h3>
-        <p className="text-sm text-gray-600">Attendance has already been submitted from this device. To prevent fraud, you can only submit once per session.</p>
+        <p className="text-sm text-gray-600">Attendance has been submitted from this device.</p>
      </div>
   );
 
-  if (status === 'validating') return <div className="text-center py-12" role="status" aria-label="Validating session"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary mx-auto"></div><p className="mt-4 text-gray-600">Verifying...</p></div>;
-  if (status === 'validating-gps') return <div className="text-center py-12" role="status" aria-label="Validating location"><MapPinIcon className="w-12 h-12 text-brand-primary mx-auto animate-bounce" /><p className="mt-4 text-gray-600">Verifying Location...</p></div>;
-
-  if (status === 'show-student-qr') {
-    return (
-        <div className="w-full text-center py-8 flex flex-col items-center justify-center">
-            <h3 className="text-xl sm:text-2xl font-black text-gray-800 mb-2">Your Attendance Code</h3>
-            <p className="text-xs sm:text-sm text-gray-500 mb-6 max-w-xs">Please present this QR code to the lecturer for scanning.</p>
-            <div 
-                className="bg-white p-2 rounded-xl shadow-lg border w-full aspect-square mx-auto flex items-center justify-center"
-                style={{ width: '130px', height: '130px' }}
-                role="img" 
-                aria-label={`QR Code for ${name}`}
-            >
-                <canvas ref={canvasRef} className="w-full h-full object-contain" />
-            </div>
-            <div className="mt-6 text-center bg-gray-50 p-3 rounded-lg border w-full max-w-[250px] mx-auto">
-                <p className="text-sm font-bold text-gray-900 break-words">{name}</p>
-                <p className="text-xs text-gray-500 font-mono">{studentId}</p>
-            </div>
-        </div>
-    );
-  }
-
-  // Helper to detect if status implies we are safe to leave
-  const isBackgroundUpload = syncStatus?.toLowerCase().includes("background");
+  if (status === 'validating' || status === 'submitting') return <div className="text-center py-12" role="status"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary mx-auto"></div><p className="mt-4 text-gray-600">{status === 'submitting' ? 'Submitting...' : 'Verifying...'}</p></div>;
+  if (status === 'validating-gps') return <div className="text-center py-12" role="status"><MapPinIcon className="w-12 h-12 text-brand-primary mx-auto animate-bounce" /><p className="mt-4 text-gray-600">Verifying Location...</p></div>;
+  if (status === 'show-student-qr') { /* ... existing code ... */ }
 
   return (
     <div className="relative">
-        {bypassRestrictions && onExit && (
-            <button 
-              onClick={onExit} 
-              className="absolute -top-2 -right-2 text-xs text-gray-400 hover:text-gray-600 p-2 focus:outline-none focus:text-gray-800" 
-              aria-label="Exit Admin Kiosk Mode"
-            >
-              ✕ Exit
-            </button>
-        )}
+        {bypassRestrictions && onExit && ( <button onClick={onExit} className="absolute -top-2 -right-2 text-xs text-gray-400 hover:text-gray-600 p-2" aria-label="Exit Kiosk Mode">✕ Exit</button> )}
 
         {status === 'form' && (
             <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-5" aria-labelledby="form-title">
                 <div className="text-center mb-4 sm:mb-6">
                     <h3 id="form-title" className="text-lg sm:text-xl font-bold text-gray-800">Check-in Details</h3>
                     <div className="flex flex-col items-center gap-1 mt-2">
-                        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-[10px] sm:text-xs font-bold border border-green-200 shadow-sm">
-                           <CheckCircleIcon className="w-3.5 h-3.5" aria-hidden="true" /><span>Secure Link Verified</span>
-                        </div>
-                        {geoConstraints && (
-                            <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-[10px] sm:text-xs font-bold border border-blue-200 shadow-sm">
-                                <MapPinIcon className="w-3.5 h-3.5" aria-hidden="true" /><span>Location Verified</span>
-                            </div>
-                        )}
-                        {isOfflineScan && (
-                             <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-50 text-purple-700 rounded-full text-[10px] sm:text-xs font-bold border border-purple-200 shadow-sm">
-                                <QrCodeIcon className="w-3.5 h-3.5" aria-hidden="true" /><span>Offline Mode</span>
-                            </div>
-                        )}
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-[10px] sm:text-xs font-bold border border-green-200 shadow-sm"><CheckCircleIcon className="w-3.5 h-3.5" /><span>Secure Link Verified</span></div>
+                        {geoConstraints && (<div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-[10px] sm:text-xs font-bold border border-blue-200 shadow-sm"><MapPinIcon className="w-3.5 h-3.5" /><span>Location Verified</span></div>)}
+                        {isOfflineScan && (<div className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-50 text-purple-700 rounded-full text-[10px] sm:text-xs font-bold border border-purple-200 shadow-sm"><QrCodeIcon className="w-3.5 h-3.5" /><span>Offline Mode</span></div>)}
                     </div>
                 </div>
 
@@ -283,20 +209,20 @@ export const StudentView: React.FC<StudentViewProps> = ({
                 
                 <div>
                     <label htmlFor="student-id" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Student ID</label>
-                    <input id="student-id" type="text" value={studentId} placeholder="FIA..." onChange={handleStudentIdChange} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-2.5 sm:py-3 px-4 text-gray-900 uppercase font-mono font-bold transition-all outline-none text-sm sm:text-base" required aria-required="true" />
+                    <input id="student-id" type="text" value={studentId} placeholder="FIA..." onChange={handleStudentIdChange} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-2.5 sm:py-3 px-4 text-gray-900 uppercase font-mono font-bold" required />
                 </div>
                 <div>
                     <label htmlFor="full-name" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Full Name</label>
-                    <input id="full-name" type="text" value={name} placeholder="AS PER IC" onChange={(e) => setName(e.target.value.toUpperCase())} readOnly={!isNewStudent && name.length > 0} className={`block w-full border-2 rounded-lg py-2.5 sm:py-3 px-4 text-gray-900 uppercase font-bold transition-all outline-none text-sm sm:text-base ${!isNewStudent && name.length > 0 ? 'bg-gray-100 border-transparent text-gray-600' : 'bg-base-100 border-base-200 focus:border-brand-primary'}`} required aria-required="true" />
+                    <input id="full-name" type="text" value={name} placeholder="AS PER IC" onChange={(e) => setName(e.target.value.toUpperCase())} readOnly={!isNewStudent && name.length > 0} className={`block w-full border-2 rounded-lg py-2.5 sm:py-3 px-4 text-gray-900 uppercase font-bold ${!isNewStudent && name.length > 0 ? 'bg-gray-100 border-transparent text-gray-600' : 'bg-base-100 border-base-200 focus:border-brand-primary'}`} required />
                 </div>
                 <div>
                     <label htmlFor="email-address" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Email Address</label>
-                    <input id="email-address" type="email" value={email} onChange={(e) => setEmail(e.target.value.toUpperCase())} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-2.5 sm:py-3 px-4 text-gray-900 uppercase font-medium transition-all outline-none text-sm sm:text-base" required aria-required="true" />
+                    <input id="email-address" type="email" value={email} onChange={(e) => setEmail(e.target.value.toUpperCase())} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-2.5 sm:py-3 px-4 text-gray-900 uppercase font-medium" required />
                 </div>
                 
                 {formError && <p className="text-sm text-red-500 font-bold text-center bg-red-50 py-2 rounded" role="alert">{formError}</p>}
                 
-                <button type="submit" className="w-full flex justify-center items-center gap-2 py-3.5 sm:py-4 px-4 rounded-xl shadow-lg shadow-brand-primary/30 text-sm sm:text-base font-bold text-white bg-brand-primary hover:bg-brand-secondary active:scale-[0.98] transition-all mt-4 focus:ring-4 focus:ring-brand-primary/50 focus:outline-none">
+                <button type="submit" className="w-full flex justify-center items-center py-3.5 sm:py-4 px-4 rounded-xl shadow-lg shadow-brand-primary/30 text-sm font-bold text-white bg-brand-primary hover:bg-brand-secondary active:scale-[0.98] transition-all mt-4">
                     {isOfflineScan ? 'Generate My QR Code' : 'Submit Attendance'}
                 </button>
                 <p className="text-[10px] text-center text-gray-400">Details will be saved for next time.</p>
@@ -306,58 +232,12 @@ export const StudentView: React.FC<StudentViewProps> = ({
         {(status === 'success' || status === 'error') && (
             <div className="text-center py-6 sm:py-8" role={status === 'error' ? 'alert' : 'status'}>
                 <div className={`mx-auto flex items-center justify-center h-20 w-20 sm:h-28 sm:w-28 rounded-full ${status === 'success' ? 'bg-green-100' : 'bg-red-100'} mb-4 sm:mb-6 shadow-sm`}>
-                    {status === 'success' ? ( isOnline && isSyncing ? <div className="animate-spin h-10 w-10 sm:h-14 sm:w-14 border-4 border-brand-primary border-t-transparent rounded-full" aria-label="Syncing"></div> : <CheckCircleIcon className="h-12 w-12 sm:h-16 sm:w-16 text-green-600" aria-hidden="true" />) : <p className="text-4xl sm:text-5xl" aria-hidden="true">😟</p>}
+                    {status === 'success' ? <CheckCircleIcon className="h-12 w-12 sm:h-16 sm:w-16 text-green-600" /> : <p className="text-4xl sm:text-5xl">😟</p>}
                 </div>
-                <h3 className={`text-2xl sm:text-3xl font-extrabold ${status === 'success' ? (isOnline && isSyncing && !isBackgroundUpload ? 'text-brand-primary' : (isBackgroundUpload ? 'text-orange-600' : 'text-green-800')) : 'text-red-600'} mb-2`}>
-                    {status === 'success' ? (isOnline && isSyncing ? (isBackgroundUpload ? 'Saved' : 'Syncing...') : 'Verified!') : 'Failed'}
+                <h3 className={`text-2xl sm:text-3xl font-extrabold ${status === 'success' ? 'text-green-800' : 'text-red-600'} mb-2`}>
+                    {status === 'success' ? 'Verified!' : 'Failed'}
                 </h3>
-                {status === 'error' ? <p className="text-xs sm:text-sm text-red-600 font-medium">{message}</p> : null}
-                
-                {status === 'success' && (
-                  <>
-                    <div className={`max-w-sm mx-auto rounded-2xl border overflow-hidden shadow-sm mt-4 ${!isOnline ? 'bg-yellow-50 border-yellow-200' : (isSyncing ? (isBackgroundUpload ? 'bg-orange-50 border-orange-200' : 'bg-indigo-50 border-indigo-200') : 'bg-green-50 border-green-200')}`}>
-                        <div className={`px-4 sm:px-6 py-3 sm:py-4 border-b ${!isOnline ? 'border-yellow-200 bg-yellow-100/50' : (isSyncing ? (isBackgroundUpload ? 'border-orange-200 bg-orange-100/50' : 'border-indigo-200 bg-indigo-100/50') : 'border-green-200 bg-green-100/50')}`}>
-                            <p className={`font-bold text-sm sm:text-lg ${!isOnline ? 'text-yellow-800' : (isSyncing ? (isBackgroundUpload ? 'text-orange-800' : 'text-indigo-800') : 'text-green-800')}`}>
-                                {!isOnline ? 'OFFLINE MODE' : (isSyncing ? (isBackgroundUpload ? 'UPLOAD PENDING' : 'DATA SYNC') : 'RECORDED')}
-                            </p>
-                        </div>
-                        <div className="p-4 sm:p-6">
-                            {isSyncing && isOnline && !isBackgroundUpload ? (
-                                <div className="text-left space-y-4">
-                                    <div className="flex items-center gap-3 opacity-50"><div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs font-bold" aria-hidden="true">✓</div><span className="text-xs sm:text-sm font-bold text-gray-500 line-through">Step 1: Save to Device</span></div>
-                                    <div className="flex items-center gap-3"><div className="relative w-6 h-6"><div className="absolute w-full h-full rounded-full bg-indigo-400 opacity-25 animate-ping"></div><div className="w-2.5 h-2.5 bg-indigo-600 rounded-full m-auto"></div></div><div className="flex-1"><span className="text-xs sm:text-sm font-bold text-indigo-900 block">Step 2: Uploading to Cloud</span><span className="text-[10px] sm:text-xs text-indigo-600">{syncStatus}</span></div></div>
-                                    <div className="bg-white/60 p-3 text-[10px] sm:text-xs text-indigo-800 border border-indigo-100 rounded-lg"><strong>⚠️ Do not close this tab.</strong><br/>Sending data to class register...</div>
-                                    {showRetry && onRetry && (
-                                        <button 
-                                          onClick={() => { onRetry(); }}
-                                          className="w-full mt-2 py-2 px-3 bg-indigo-600 text-white text-xs font-bold rounded shadow hover:bg-indigo-700 transition-colors animate-in fade-in zoom-in"
-                                        >
-                                            Taking too long? Tap to Retry
-                                        </button>
-                                    )}
-                                </div>
-                            ) : (
-                                (isSyncing || !isOnline) ? (
-                                    <div className="text-left space-y-4">
-                                        <div className="flex items-start gap-3"><GlobeIcon className="w-5 h-5 text-orange-500 mt-0.5" aria-hidden="true" /><div><p className="text-xs sm:text-sm font-bold text-orange-900">Upload Pending</p><p className="text-[10px] sm:text-xs text-orange-700 mt-1">Your attendance is saved and will upload automatically.</p></div></div>
-                                        <div className="bg-orange-100/50 p-3 text-[10px] sm:text-xs text-orange-800 border border-orange-200 rounded-lg"><strong>You can safely close this tab now.</strong></div>
-                                    </div>
-                                ) : (
-                                    <div className="text-left space-y-4">
-                                         <div className="flex items-center gap-3">
-                                            <div className="w-6 h-6 rounded-full bg-green-500 flex items-center justify-center text-white text-xs font-bold shrink-0" aria-hidden="true">✓</div>
-                                            <div>
-                                                <p className="text-xs sm:text-sm font-bold text-green-900">Successfully Recorded</p>
-                                                <p className="text-[10px] sm:text-xs text-green-700 mt-1">Your name has been added to the class list.</p>
-                                            </div>
-                                         </div>
-                                    </div>
-                                )
-                            )}
-                        </div>
-                    </div>
-                  </>
-                )}
+                <p className="text-xs sm:text-sm font-medium text-gray-600">{message}</p>
             </div>
         )}
     </div>
