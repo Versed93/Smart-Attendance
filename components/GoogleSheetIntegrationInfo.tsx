@@ -7,17 +7,29 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v6.0)
+ * FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v7.0)
+ * 
+ * This version adds more detail to the attendance log (includes timestamp)
+ * and supports multiple sheet tabs for different weeks of the semester.
+ * 
+ * --- IMPORTANT: SHEET STRUCTURE ---
+ * This script assumes your Google Sheet has a specific layout:
+ * - A tab for attendance (e.g., "W1-W5", "W6-W10", etc. as defined in getSheetConfigs).
+ * - Row 12 is where the session dates/headers are written.
+ * - Column B (column 2) contains Student IDs.
+ * - Column D (column 4) contains Student Names.
+ * - Student records start from Row 14 downwards.
+ * - Attendance status is written in Columns M through T (13-20).
+ * 
+ * Please verify this structure matches your sheet or adjust the getSheetConfigs() function below.
+ * --- END: SHEET STRUCTURE ---
  * 
  * SETUP INSTRUCTIONS:
  * 1. Paste this code into Extensions > Apps Script.
  * 2. Fill in your Firebase URL and Secret Key below.
- * 3. Save the script.
- * 4. In the Apps Script editor, go to Triggers (clock icon on the left).
- * 5. Click "Add Trigger".
- * 6. Choose function "syncFromFirebase", deployment "Head", event source "Time-driven", type "Minutes timer", every "1 minute".
- * 7. Click Save. The script will now automatically sync data every minute.
- * 8. For one-time sync, you can run the syncFromFirebase function manually from the editor.
+ * 3. Review and adjust getSheetConfigs() to match your sheet names.
+ * 4. Save the script.
+ * 5. Set up a time-driven trigger to run syncFromFirebase every 1 minute.
  */
 
 // --- CONFIGURATION ---
@@ -26,7 +38,13 @@ var FIREBASE_SECRET = "${FIREBASE_CONFIG.DATABASE_SECRET || 'PASTE_YOUR_FIREBASE
 // --- END CONFIGURATION ---
 
 function getSheetConfigs() {
-  return [{ name: "W6-W10", dateRow: 12, startCol: 13, endCol: 20 }];
+  // Add or edit sheet names to match your Google Sheets document.
+  // The script will search these sheets in order to find where to log attendance.
+  return [
+    { name: "W1-W5", dateRow: 12, startCol: 13, endCol: 20 },
+    { name: "W6-W10", dateRow: 12, startCol: 13, endCol: 20 },
+    { name: "W11-W14", dateRow: 12, startCol: 13, endCol: 20 }
+  ];
 }
 
 function syncFromFirebase() {
@@ -59,29 +77,33 @@ function syncFromFirebase() {
       try {
         var date = new Date(record.timestamp);
         var dateStr = Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yyyy");
+        var timeStr = Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm");
         
-        // Create a unique header using date and course name if available
         var sessionHeader = dateStr;
         if (record.courseName && String(record.courseName).trim() !== "") {
             sessionHeader = dateStr + " - " + String(record.courseName).trim();
         }
 
+        // Add timestamp to the status for more detailed logging
+        var statusWithTime = record.status;
+        if (record.status === 'P') {
+            statusWithTime = "P @ " + timeStr;
+        }
+
         processSingleRecord({
           studentId: record.studentId,
           name: record.name,
-          status: record.status,
+          status: statusWithTime, // Pass status with time
           sessionHeader: sessionHeader
         }, doc);
         
-        // Mark as processed for deletion
         processedKeys[studentId] = null;
 
       } catch (e) {
-        console.error("Failed to process record for student " + studentId + ": " + e.toString());
+        console.error("Failed to process record for student " + studentId + ": " + e.toString() + " | Data: " + JSON.stringify(record));
       }
     }
     
-    // Clear processed records from Firebase
     if (Object.keys(processedKeys).length > 0) {
       var deleteOptions = {
         'method': 'PATCH',
@@ -111,10 +133,11 @@ function processSingleRecord(record, doc) {
     var configs = getSheetConfigs();
     var targetSheet, targetCol;
 
+    // Find the correct sheet and column for the current session
     for (var i = 0; i < configs.length; i++) {
       var conf = configs[i];
       var sheet = doc.getSheetByName(conf.name);
-      if (!sheet) sheet = doc.insertSheet(conf.name);
+      if (!sheet) continue; // Skip if sheet doesn't exist
       
       var headerValues = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1).getDisplayValues()[0];
       var emptyCol = -1;
@@ -129,6 +152,7 @@ function processSingleRecord(record, doc) {
         }
       }
       
+      // If header not found, create it in the first empty column
       if (!targetCol && emptyCol !== -1) {
         targetCol = emptyCol;
         sheet.getRange(conf.dateRow, targetCol).setValue(sessionHeader);
@@ -136,16 +160,20 @@ function processSingleRecord(record, doc) {
       
       if(targetCol) {
         targetSheet = sheet;
-        break;
+        break; // Found our target, exit loop
       }
     }
 
-    if (!targetSheet) throw "Week range (M-T) is full.";
-
+    if (!targetSheet) {
+      // If no sheet was found after checking all configs, stop to avoid errors.
+      throw "Could not find a suitable sheet to write to based on getSheetConfigs(). Please check your sheet names.";
+    }
+    
     var startRow = 14;
     var lastRow = targetSheet.getLastRow();
     var studentRow = -1;
 
+    // Find student row by ID for efficiency
     if (lastRow >= startRow) {
       var idRange = targetSheet.getRange(startRow, 2, lastRow - startRow + 1, 1);
       var ids = idRange.getDisplayValues();
@@ -157,12 +185,14 @@ function processSingleRecord(record, doc) {
       }
     }
 
+    // If student not found, add a new row
     if (studentRow === -1) {
        studentRow = Math.max(lastRow + 1, startRow);
        targetSheet.getRange(studentRow, 2).setValue(studentId); // Col B
        targetSheet.getRange(studentRow, 4).setValue(studentName); // Col D
     }
 
+    // Write the attendance status
     targetSheet.getRange(studentRow, targetCol).setValue(status);
 }
 
@@ -170,7 +200,9 @@ function processSingleRecord(record, doc) {
 function doGet(e) {
   try {
     var doc = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = doc.getSheetByName("W6-W10");
+    // This part is for fetching data for other purposes and might not be used by the main app.
+    // It is kept for compatibility.
+    var sheet = doc.getSheetByName("W6-W10"); // Checks a default sheet
     if (!sheet) return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
     
     var lastRow = sheet.getLastRow();
@@ -220,7 +252,7 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
           </p>
           <div className="bg-gray-800 p-3 rounded-lg">
              <div className="flex justify-between items-center mb-2">
-              <span className="text-xs text-gray-400 font-mono">Firebase Sync Script v6.0</span>
+              <span className="text-xs text-gray-400 font-mono">Firebase Sync Script v7.0</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-3 py-1 rounded-md font-bold transition-colors ${copied ? 'bg-green-500 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}

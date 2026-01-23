@@ -54,7 +54,7 @@ const App: React.FC = () => {
   });
 
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbzDUCgVLQefbF7pqCnFHAWZaxi9KnJYBzfqrST9nibnGASeDqqlRuFLWm6O4gu0d-kc/exec';
+    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbw4IJRZ0NZuV0nygMcozlxQQt-SCRa5rrKF1W13m_wkNfjLPbFd0cnsGDBUKbyvngb0/exec';
   });
 
   const checkAndClearForNewDay = useCallback(() => {
@@ -193,7 +193,8 @@ const App: React.FC = () => {
 
       for (const id of ids) {
         const student = attendanceList.find(s => s.studentId === id) || knownStudents.find(k => k.id === id);
-        const name = student ? ('name' in student ? student.name : student.name) : 'Unknown';
+        // FIX: The original check `('name' in student ? student.name : student.name)` caused a type error. In the 'else' branch, TypeScript inferred student as type 'never' and then tried to access '.name', leading to the error. Simplified to a direct property access which is safe as both potential object types for `student` contain a `name` property.
+        const name = student ? student.name : 'Unknown';
         const removalData = {
           studentId: id,
           name: name,
