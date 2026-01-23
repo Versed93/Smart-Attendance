@@ -161,28 +161,37 @@ export const StudentView: React.FC<StudentViewProps> = ({
   
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim() || !studentId.trim() || !email.trim()) { setFormError('All fields required.'); return; }
+    setFormError('');
+
+    if (!name.trim() || !studentId.trim() || !email.trim()) {
+      setFormError('All fields are required.');
+      return;
+    }
     const studentIdRegex = /^[A-Z]{3}\d{8}$/;
-    if (!studentIdRegex.test(studentId)) { setFormError('Invalid ID (e.g. FIA24001006).'); return; }
-    
+    if (!studentIdRegex.test(studentId)) {
+      setFormError('Invalid Student ID format (e.g., FIA24001006).');
+      return;
+    }
+
     localStorage.setItem(STUDENT_PROFILE_KEY, JSON.stringify({ name, studentId, email }));
 
     if (isOfflineScan) {
-        const dataToEncode = JSON.stringify({ name, studentId, email, timestamp: Date.now(), status: 'P' });
-        setStudentQrData(dataToEncode);
-        setStatus('show-student-qr');
+      const dataToEncode = JSON.stringify({ name, studentId, email, timestamp: Date.now(), status: 'P' });
+      setStudentQrData(dataToEncode);
+      setStatus('show-student-qr');
     } else {
-        const result = markAttendance(name, studentId, email);
-        if (result.success) {
-          setStatus('success');
-          // Set Device Lock
-          if (!bypassRestrictions) {
-             localStorage.setItem(DEVICE_LOCK_KEY, Date.now().toString());
-          }
-        } else {
-          setStatus('error');
+      const { success, message } = markAttendance(name, studentId, email);
+
+      setMessage(message);
+
+      if (success) {
+        setStatus('success');
+        if (!bypassRestrictions) {
+          localStorage.setItem(DEVICE_LOCK_KEY, Date.now().toString());
         }
-        setMessage(result.message);
+      } else {
+        setStatus('error');
+      }
     }
   };
 
