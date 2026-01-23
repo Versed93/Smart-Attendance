@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { CheckCircleIcon } from './icons/CheckCircleIcon';
@@ -6,6 +7,7 @@ import { MapPinIcon } from './icons/MapPinIcon';
 import { QrCodeIcon } from './icons/QrCodeIcon';
 import type { PreRegisteredStudent } from '../studentList';
 import { LockClosedIcon } from './icons/LockClosedIcon';
+import { UserIcon } from './icons/UserIcon';
 
 interface StudentViewProps {
   markAttendance: (name: string, studentId: string, email: string) => { success: boolean, message: string };
@@ -68,6 +70,18 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [showRetry, setShowRetry] = useState(false);
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  
+  const resetForNextStudent = () => {
+      setName('');
+      setStudentId('');
+      setEmail('');
+      setIsNewStudent(false);
+      setFormError('');
+      setMessage('');
+      setStudentQrData('');
+      localStorage.removeItem(STUDENT_PROFILE_KEY); // Clear saved details for the next person
+      setStatus('form');
+  };
 
   useEffect(() => {
       const savedProfile = localStorage.getItem(STUDENT_PROFILE_KEY);
@@ -104,6 +118,21 @@ export const StudentView: React.FC<StudentViewProps> = ({
     }
     return () => clearTimeout(timeout);
   }, [isSyncing, status]);
+
+  useEffect(() => {
+    let timer: number | undefined;
+    // Auto-reset after successful, non-syncing submission to allow next student.
+    if (status === 'success' && !isSyncing && !isOfflineScan) {
+        timer = window.setTimeout(() => {
+            resetForNextStudent();
+        }, 8000); // 8 second delay before auto-reset
+    }
+    return () => {
+        if (timer) {
+            clearTimeout(timer);
+        }
+    };
+  }, [status, isSyncing, isOfflineScan]);
 
   useEffect(() => {
     if (status === 'device-locked') return;
@@ -300,8 +329,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
                 <h3 className={`text-2xl sm:text-3xl font-extrabold ${status === 'success' ? (isOnline && isSyncing && !isBackgroundUpload ? 'text-brand-primary' : (isBackgroundUpload ? 'text-orange-600' : 'text-green-800')) : 'text-red-600'} mb-2`}>
                     {status === 'success' ? (isOnline && isSyncing ? (isBackgroundUpload ? 'Saved' : 'Syncing...') : 'Verified!') : 'Failed'}
                 </h3>
-                {status === 'error' && <p className="text-xs sm:text-sm text-red-600 font-medium">{message}</p>}
+                {status === 'error' ? <p className="text-xs sm:text-sm text-red-600 font-medium">{message}</p> : null}
+                
                 {status === 'success' && (
+                  <>
                     <div className={`max-w-sm mx-auto rounded-2xl border overflow-hidden shadow-sm mt-4 ${!isOnline ? 'bg-yellow-50 border-yellow-200' : (isSyncing ? (isBackgroundUpload ? 'bg-orange-50 border-orange-200' : 'bg-indigo-50 border-indigo-200') : 'bg-green-50 border-green-200')}`}>
                         <div className={`px-4 sm:px-6 py-3 sm:py-4 border-b ${!isOnline ? 'border-yellow-200 bg-yellow-100/50' : (isSyncing ? (isBackgroundUpload ? 'border-orange-200 bg-orange-100/50' : 'border-indigo-200 bg-indigo-100/50') : 'border-green-200 bg-green-100/50')}`}>
                             <p className={`font-bold text-sm sm:text-lg ${!isOnline ? 'text-yellow-800' : (isSyncing ? (isBackgroundUpload ? 'text-orange-800' : 'text-indigo-800') : 'text-green-800')}`}>
@@ -343,6 +374,19 @@ export const StudentView: React.FC<StudentViewProps> = ({
                             )}
                         </div>
                     </div>
+                    {!isSyncing && !isOfflineScan && (
+                      <div className="mt-6 animate-in fade-in duration-300 delay-1000 fill-mode-backwards">
+                          <p className="text-sm text-gray-500 mb-4">You can now pass the device to the next student.</p>
+                          <button 
+                              onClick={resetForNextStudent}
+                              className="w-full max-w-xs mx-auto flex justify-center items-center gap-3 py-3 px-4 rounded-xl shadow-md text-sm font-bold text-white bg-gray-700 hover:bg-black active:scale-[0.98] transition-all focus:ring-4 focus:ring-gray-500/50 focus:outline-none"
+                          >
+                            <UserIcon className="w-5 h-5" />
+                            Register Next Student
+                          </button>
+                      </div>
+                    )}
+                  </>
                 )}
             </div>
         )}
