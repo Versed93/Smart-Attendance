@@ -94,12 +94,8 @@ const App: React.FC = () => {
         
         if (data) {
             const firebaseStudents: Student[] = Object.values(data);
-             setAttendanceList(prev => {
-                const combined = new Map<string, Student>();
-                // Prioritize Firebase data, then merge any local-only students (e.g. from intermittent network)
-                [...firebaseStudents, ...prev].forEach(s => combined.set(s.studentId, s));
-                return Array.from(combined.values()).sort((a,b) => b.timestamp - a.timestamp);
-            });
+            // Replace local state with Firebase state to ensure consistency and prevent deleted students from reappearing.
+            setAttendanceList(firebaseStudents.sort((a, b) => b.timestamp - a.timestamp));
         } else {
             // If firebase is empty (e.g. after a deletion or new day), clear the list
             setAttendanceList([]);
@@ -129,6 +125,22 @@ const App: React.FC = () => {
   const handleLogout = () => {
     setIsAuthenticated(false);
     localStorage.removeItem(AUTH_KEY);
+  };
+  
+  const handleNewSession = async () => {
+    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
+
+    // Clear local state
+    setAttendanceList([]);
+
+    // Clear remote live session state
+    try {
+        await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
+            method: 'DELETE',
+        });
+    } catch (e) {
+        console.error("Failed to clear live session in Firebase", e);
+    }
   };
 
   const addStudent = async (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number) => {
@@ -239,6 +251,7 @@ const App: React.FC = () => {
                      attendanceList={attendanceList}
                      onRemoveStudents={onRemoveStudents}
                      onBulkStatusUpdate={onBulkStatusUpdate}
+                     onNewSession={handleNewSession}
                      scriptUrl={scriptUrl}
                      onScriptUrlChange={setScriptUrl}
                      onOpenKiosk={() => { setIsKioskMode(true); setView('student'); }}

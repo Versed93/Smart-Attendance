@@ -22,11 +22,13 @@ import { ArrowDownTrayIcon } from './icons/ArrowDownTrayIcon';
 import { CheckIcon } from './icons/CheckIcon';
 import { XMarkIcon } from './icons/XMarkIcon';
 import { ExclamationTriangleIcon } from './icons/ExclamationTriangleIcon';
+import { PlusIcon } from './icons/PlusIcon';
 
 interface TeacherViewProps {
   attendanceList: Student[];
   onRemoveStudents: (studentIds: string[], courseName: string) => void;
   onBulkStatusUpdate: (studentIds:string[], status: string, courseName: string) => void;
+  onNewSession: () => void;
   scriptUrl: string;
   onScriptUrlChange: (url: string) => void;
   onOpenKiosk: () => void;
@@ -40,6 +42,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   attendanceList, 
   onRemoveStudents,
   onBulkStatusUpdate,
+  onNewSession,
   scriptUrl, 
   onScriptUrlChange, 
   onOpenKiosk, 
@@ -71,6 +74,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [unlockMessage, setUnlockMessage] = useState('');
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [confirmation, setConfirmation] = useState<{ action: 'P' | 'A' | null, count: number }>({ action: null, count: 0 });
+  const [showNewSessionModal, setShowNewSessionModal] = useState(false);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   
@@ -186,6 +190,12 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     if (filteredList.length === 0) return;
     setConfirmation({ action: status, count: filteredList.length });
   };
+  
+  const handleNewSession = () => {
+    onNewSession();
+    setCourseName(''); // Clear course name to ensure a new column is created
+    setShowNewSessionModal(false);
+  };
 
   const executeConfirmation = () => {
     if (!confirmation.action || confirmation.count === 0) return;
@@ -237,6 +247,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
        <div className="relative z-10 flex flex-col xl:flex-row justify-between items-stretch xl:items-center bg-white p-3 sm:p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
          <div className="flex items-center gap-3 sm:gap-4"><div className="flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-xl shadow-lg shrink-0"><ShieldCheckIcon className="w-6 h-6 sm:w-7 sm:h-7" /></div><div className="min-w-0"><h1 className="text-lg sm:text-2xl font-black text-gray-900 tracking-tight truncate">UTS ATTENDANCE</h1><p className="text-[10px] sm:text-xs text-gray-500 font-bold tracking-[0.2em] mt-0.5 sm:mt-1">SECURE CHECK-IN</p></div></div>
          <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0 no-scrollbar w-full xl:w-auto mask-fade-right" role="toolbar">
+            <button onClick={() => setShowNewSessionModal(true)} className="flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 bg-gray-800 text-white rounded-xl border border-gray-700 hover:bg-black transition-colors shrink-0" title="New Session"><PlusIcon className="w-5 h-5" /></button>
             <button onClick={() => { setShowManualModal(true); setManualId(''); setManualName(''); setManualError(''); }} className="flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 bg-indigo-50 text-indigo-600 rounded-xl border hover:bg-indigo-100 transition-colors shrink-0" title="Manual Entry"><PencilSquareIcon className="w-5 h-5" /></button>
             <button onClick={() => setShowSettingsModal(true)} className="flex items-center justify-center w-10 h-10 sm:w-12 sm:h-12 rounded-xl border bg-gray-50 text-gray-600 hover:bg-gray-100 transition-colors shadow-sm shrink-0" title="Settings"><AdjustmentsHorizontalIcon className="w-5 h-5" /></button>
             <button onClick={() => setViewMode('classroom')} className={`flex group items-center gap-3 px-3 sm:px-5 py-2 sm:py-3 rounded-xl font-bold transition-all shrink-0 bg-gray-50 text-gray-700`} title="Switch to Classroom View"><div className="text-right hidden sm:block"><span className="text-[10px] uppercase opacity-60">View</span><span className="block text-xs uppercase tracking-wider">Classroom</span></div><EyeIcon className="w-5 h-5" /></button>
@@ -447,6 +458,36 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         className={`w-full px-5 py-2.5 text-sm font-bold text-white rounded-lg shadow-sm ${confirmation.action === 'P' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}
                     >
                         Confirm
+                    </button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {showNewSessionModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200" role="dialog" aria-modal="true" aria-labelledby="new-session-title">
+            <div className="bg-white w-full max-w-md rounded-2xl shadow-xl p-6 text-center">
+                <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full mb-4 bg-indigo-100">
+                    <PlusIcon className="h-8 w-8 text-indigo-600" />
+                </div>
+                <h2 id="new-session-title" className="text-xl font-bold text-gray-900 mb-2">Start New Session?</h2>
+                <p className="text-sm text-gray-600 mb-6">
+                    This will clear the current list and session name, allowing you to start fresh. A new column will be created in Google Sheets for the next scan.
+                </p>
+                <div className="flex justify-center gap-4">
+                    <button 
+                        onClick={() => setShowNewSessionModal(false)} 
+                        type="button" 
+                        className="w-full px-4 py-2.5 text-sm font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg"
+                    >
+                        Cancel
+                    </button>
+                    <button 
+                        onClick={handleNewSession} 
+                        type="button" 
+                        className="w-full px-5 py-2.5 text-sm font-bold text-white bg-brand-primary hover:bg-brand-secondary rounded-lg shadow-sm"
+                    >
+                        Yes, Start New
                     </button>
                 </div>
             </div>
