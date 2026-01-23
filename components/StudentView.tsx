@@ -71,18 +71,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   
-  const resetForNextStudent = () => {
-      setName('');
-      setStudentId('');
-      setEmail('');
-      setIsNewStudent(false);
-      setFormError('');
-      setMessage('');
-      setStudentQrData('');
-      localStorage.removeItem(STUDENT_PROFILE_KEY); // Clear saved details for the next person
-      setStatus('form');
-  };
-
   useEffect(() => {
       const savedProfile = localStorage.getItem(STUDENT_PROFILE_KEY);
       if (savedProfile) {
@@ -118,21 +106,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
     }
     return () => clearTimeout(timeout);
   }, [isSyncing, status]);
-
-  useEffect(() => {
-    let timer: number | undefined;
-    // Auto-reset after successful, non-syncing submission to allow next student.
-    if (status === 'success' && !isSyncing && !isOfflineScan) {
-        timer = window.setTimeout(() => {
-            resetForNextStudent();
-        }, 8000); // 8 second delay before auto-reset
-    }
-    return () => {
-        if (timer) {
-            clearTimeout(timer);
-        }
-    };
-  }, [status, isSyncing, isOfflineScan]);
 
   useEffect(() => {
     if (status === 'device-locked') return;
@@ -374,18 +347,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
                             )}
                         </div>
                     </div>
-                    {!isSyncing && !isOfflineScan && (
-                      <div className="mt-6 animate-in fade-in duration-300 delay-1000 fill-mode-backwards">
-                          <p className="text-sm text-gray-500 mb-4">You can now pass the device to the next student.</p>
-                          <button 
-                              onClick={resetForNextStudent}
-                              className="w-full max-w-xs mx-auto flex justify-center items-center gap-3 py-3 px-4 rounded-xl shadow-md text-sm font-bold text-white bg-gray-700 hover:bg-black active:scale-[0.98] transition-all focus:ring-4 focus:ring-gray-500/50 focus:outline-none"
-                          >
-                            <UserIcon className="w-5 h-5" />
-                            Register Next Student
-                          </button>
-                      </div>
-                    )}
                   </>
                 )}
             </div>
