@@ -102,13 +102,12 @@ export const StudentView: React.FC<StudentViewProps> = ({
                         setStatus('form');
                     } else {
                         setStatus('error');
-                        setMessage(`GPS Location Mismatch. Distance: ${Math.round(dist)}m. Please move closer.`);
+                        setMessage(`GPS Mismatch. Dist: ${Math.round(dist)}m. Please move closer.`);
                     }
                 },
                 (err) => {
-                    let errMsg = err.code === 1 ? 'Please allow Location Access.' : 'Could not get location.';
                     setStatus('error');
-                    setMessage(errMsg);
+                    setMessage(err.code === 1 ? 'Location Access Denied.' : 'Location Error.');
                 },
                 { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
             );
@@ -117,14 +116,14 @@ export const StudentView: React.FC<StudentViewProps> = ({
         }
     } else {
         setStatus('error');
-        setMessage('This QR code has expired. Please scan the new code.');
+        setMessage('QR Code has expired.');
     }
   }, [token, bypassRestrictions, geoConstraints, status]);
 
   useEffect(() => {
     if (status === 'show-student-qr' && canvasRef.current && studentQrData) {
-        QRCode.toCanvas(canvasRef.current, studentQrData, { width: 400, margin: 1 }, (err) => {
-            if (err) console.error("Could not generate student QR", err);
+        QRCode.toCanvas(canvasRef.current, studentQrData, { width: 350, margin: 2, errorCorrectionLevel: 'H' }, (err) => {
+            if (err) console.error("QR Error", err);
         });
     }
   }, [status, studentQrData]);
@@ -134,20 +133,19 @@ export const StudentView: React.FC<StudentViewProps> = ({
     setFormError('');
 
     if (!name.trim() || !studentId.trim() || !email.trim()) {
-      setFormError('All fields are required.');
+      setFormError('All fields required.');
       return;
     }
     const studentIdRegex = /^[A-Z]{3}\d{8}$/;
     if (!studentIdRegex.test(studentId)) {
-      setFormError('Invalid Student ID format (e.g., FIA24001006).');
+      setFormError('ID Format: FIA24001006');
       return;
     }
 
     localStorage.setItem(STUDENT_PROFILE_KEY, JSON.stringify({ name, studentId, email }));
 
     if (isOfflineScan) {
-      const dataToEncode = JSON.stringify({ name, studentId, email, timestamp: Date.now(), status: 'P' });
-      setStudentQrData(dataToEncode);
+      setStudentQrData(JSON.stringify({ name, studentId, email, timestamp: Date.now(), status: 'P' }));
       setStatus('show-student-qr');
     } else {
       setStatus('submitting');
@@ -155,9 +153,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
       setMessage(result.message);
       if (result.success) {
         setStatus('success');
-        if (!bypassRestrictions) {
-          localStorage.setItem(DEVICE_LOCK_KEY, Date.now().toString());
-        }
+        if (!bypassRestrictions) localStorage.setItem(DEVICE_LOCK_KEY, Date.now().toString());
       } else {
         setStatus('error');
       }
@@ -174,70 +170,87 @@ export const StudentView: React.FC<StudentViewProps> = ({
   };
 
   if (status === 'device-locked') return (
-     <div className="text-center py-12 px-4" role="alert" aria-label="Device Locked">
-        <div className="bg-gray-100 rounded-full p-4 w-24 h-24 mx-auto mb-4 flex items-center justify-center"> <LockClosedIcon className="w-12 h-12 text-gray-500" /> </div>
+     <div className="text-center py-12 px-4 animate-in fade-in">
+        <div className="bg-gray-100 rounded-full p-4 w-20 h-20 mx-auto mb-4 flex items-center justify-center"> <LockClosedIcon className="w-10 h-10 text-gray-400" /> </div>
         <h3 className="text-xl font-black text-gray-800 mb-2">Device Already Used</h3>
-        <p className="text-sm text-gray-600">Attendance has been submitted from this device.</p>
+        <p className="text-sm text-gray-600">Attendance submitted from this device.</p>
      </div>
   );
 
-  if (status === 'validating' || status === 'submitting') return <div className="text-center py-12" role="status"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary mx-auto"></div><p className="mt-4 text-gray-600">{status === 'submitting' ? 'Submitting...' : 'Verifying...'}</p></div>;
-  if (status === 'validating-gps') return <div className="text-center py-12" role="status"><MapPinIcon className="w-12 h-12 text-brand-primary mx-auto animate-bounce" /><p className="mt-4 text-gray-600">Verifying Location...</p></div>;
-  if (status === 'show-student-qr') { /* ... existing code ... */ }
+  if (status === 'validating' || status === 'submitting') return <div className="text-center py-12"><div className="animate-spin rounded-full h-12 w-12 border-b-2 border-brand-primary mx-auto"></div><p className="mt-4 text-gray-500 font-bold tracking-tight">{status === 'submitting' ? 'RECORDING...' : 'VERIFYING...'}</p></div>;
+  if (status === 'validating-gps') return <div className="text-center py-12"><MapPinIcon className="w-12 h-12 text-brand-primary mx-auto animate-bounce" /><p className="mt-4 text-gray-500 font-bold">CHECKING GPS...</p></div>;
 
   return (
     <div className="relative">
-        {bypassRestrictions && onExit && ( <button onClick={onExit} className="absolute -top-2 -right-2 text-xs text-gray-400 hover:text-gray-600 p-2" aria-label="Exit Kiosk Mode">✕ Exit</button> )}
+        {bypassRestrictions && onExit && ( <button onClick={onExit} className="absolute -top-2 -right-2 text-xs text-gray-400 hover:text-gray-600 p-2">✕ Exit</button> )}
 
         {status === 'form' && (
-            <form onSubmit={handleSubmit} className="space-y-4 sm:space-y-5" aria-labelledby="form-title">
-                <div className="text-center mb-4 sm:mb-6">
-                    <h3 id="form-title" className="text-lg sm:text-xl font-bold text-gray-800">Check-in Details</h3>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div className="text-center mb-4">
+                    <h3 className="text-xl font-black text-gray-800 tracking-tight">Student Details</h3>
                     <div className="flex flex-col items-center gap-1 mt-2">
-                        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-[10px] sm:text-xs font-bold border border-green-200 shadow-sm"><CheckCircleIcon className="w-3.5 h-3.5" /><span>Secure Link Verified</span></div>
-                        {geoConstraints && (<div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-[10px] sm:text-xs font-bold border border-blue-200 shadow-sm"><MapPinIcon className="w-3.5 h-3.5" /><span>Location Verified</span></div>)}
-                        {isOfflineScan && (<div className="inline-flex items-center gap-1.5 px-3 py-1 bg-purple-50 text-purple-700 rounded-full text-[10px] sm:text-xs font-bold border border-purple-200 shadow-sm"><QrCodeIcon className="w-3.5 h-3.5" /><span>Offline Mode</span></div>)}
+                        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-[10px] font-bold border border-green-200"><CheckCircleIcon className="w-3.5 h-3.5" /><span>Secure Link Verified</span></div>
+                        {geoConstraints && (<div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-[10px] font-bold border border-blue-200"><MapPinIcon className="w-3.5 h-3.5" /><span>Location Verified</span></div>)}
                     </div>
                 </div>
 
                 {courseName && (
-                    <div className="bg-brand-primary/5 border border-brand-primary/10 rounded-lg p-3 text-center mb-4">
-                        <p className="text-[10px] sm:text-xs font-bold text-brand-primary uppercase tracking-wider mb-1">Session</p>
-                        <p className="text-sm sm:text-base text-gray-900 font-bold">{decodeURIComponent(courseName)}</p>
+                    <div className="bg-brand-primary/5 border border-brand-primary/10 rounded-lg p-3 text-center">
+                        <p className="text-[10px] font-bold text-brand-primary uppercase tracking-widest mb-0.5">Session</p>
+                        <p className="text-sm text-gray-900 font-bold truncate">{decodeURIComponent(courseName)}</p>
                     </div>
                 )}
                 
-                <div>
-                    <label htmlFor="student-id" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Student ID</label>
-                    <input id="student-id" type="text" value={studentId} placeholder="FIA..." onChange={handleStudentIdChange} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-2.5 sm:py-3 px-4 text-gray-900 uppercase font-mono font-bold" required />
-                </div>
-                <div>
-                    <label htmlFor="full-name" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Full Name</label>
-                    <input id="full-name" type="text" value={name} placeholder="AS PER IC" onChange={(e) => setName(e.target.value.toUpperCase())} readOnly={!isNewStudent && name.length > 0} className={`block w-full border-2 rounded-lg py-2.5 sm:py-3 px-4 text-gray-900 uppercase font-bold ${!isNewStudent && name.length > 0 ? 'bg-gray-100 border-transparent text-gray-600' : 'bg-base-100 border-base-200 focus:border-brand-primary'}`} required />
-                </div>
-                <div>
-                    <label htmlFor="email-address" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1">Email Address</label>
-                    <input id="email-address" type="email" value={email} onChange={(e) => setEmail(e.target.value.toUpperCase())} className="block w-full bg-base-100 border-2 border-base-200 focus:border-brand-primary rounded-lg py-2.5 sm:py-3 px-4 text-gray-900 uppercase font-medium" required />
+                <div className="space-y-3">
+                    <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Student ID</label>
+                        <input type="text" value={studentId} placeholder="FIA..." onChange={handleStudentIdChange} className="block w-full bg-gray-50 border-2 border-gray-100 focus:border-brand-primary rounded-xl py-3 px-4 text-gray-900 uppercase font-mono font-black transition-all" required />
+                    </div>
+                    <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Full Name</label>
+                        <input type="text" value={name} placeholder="NAME ON IC" onChange={(e) => setName(e.target.value.toUpperCase())} readOnly={!isNewStudent && name.length > 0} className={`block w-full border-2 rounded-xl py-3 px-4 text-gray-900 uppercase font-bold transition-all ${!isNewStudent && name.length > 0 ? 'bg-gray-100 border-transparent text-gray-500' : 'bg-gray-50 border-gray-100 focus:border-brand-primary'}`} required />
+                    </div>
+                    <div>
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">University Email</label>
+                        <input type="email" value={email} readOnly className="block w-full bg-gray-100 border-transparent rounded-xl py-3 px-4 text-gray-400 uppercase font-medium" />
+                    </div>
                 </div>
                 
-                {formError && <p className="text-sm text-red-500 font-bold text-center bg-red-50 py-2 rounded" role="alert">{formError}</p>}
+                {formError && <p className="text-xs text-red-500 font-bold text-center bg-red-50 py-2 rounded-lg">{formError}</p>}
                 
-                <button type="submit" className="w-full flex justify-center items-center py-3.5 sm:py-4 px-4 rounded-xl shadow-lg shadow-brand-primary/30 text-sm font-bold text-white bg-brand-primary hover:bg-brand-secondary active:scale-[0.98] transition-all mt-4">
-                    {isOfflineScan ? 'Generate My QR Code' : 'Submit Attendance'}
+                <button type="submit" className="w-full py-4 px-4 rounded-xl shadow-lg shadow-brand-primary/20 text-sm font-black text-white bg-brand-primary hover:bg-brand-secondary active:scale-[0.98] transition-all mt-2">
+                    {isOfflineScan ? 'GENERATE MY QR' : 'SUBMIT ATTENDANCE'}
                 </button>
-                <p className="text-[10px] text-center text-gray-400">Details will be saved for next time.</p>
             </form>
         )}
 
-        {(status === 'success' || status === 'error') && (
-            <div className="text-center py-6 sm:py-8" role={status === 'error' ? 'alert' : 'status'}>
-                <div className={`mx-auto flex items-center justify-center h-20 w-20 sm:h-28 sm:w-28 rounded-full ${status === 'success' ? 'bg-green-100' : 'bg-red-100'} mb-4 sm:mb-6 shadow-sm`}>
-                    {status === 'success' ? <CheckCircleIcon className="h-12 w-12 sm:h-16 sm:w-16 text-green-600" /> : <p className="text-4xl sm:text-5xl">😟</p>}
+        {status === 'show-student-qr' && (
+            <div className="text-center py-4 animate-in zoom-in duration-300">
+                <h3 className="text-lg font-black text-gray-800 mb-2">Your Personal QR</h3>
+                <p className="text-xs text-gray-500 mb-4">Show this to the lecturer for scanning.</p>
+                <div className="bg-white p-4 rounded-2xl shadow-inner border-2 border-dashed border-brand-primary/20 flex items-center justify-center mx-auto">
+                    <canvas ref={canvasRef} className="max-w-full" />
                 </div>
-                <h3 className={`text-2xl sm:text-3xl font-extrabold ${status === 'success' ? 'text-green-800' : 'text-red-600'} mb-2`}>
+                <div className="mt-6 p-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                    <p className="font-bold text-indigo-900">{name}</p>
+                    <p className="text-xs font-mono text-indigo-600 mt-1">{studentId}</p>
+                </div>
+                <button onClick={() => setStatus('form')} className="mt-6 text-sm font-bold text-brand-primary hover:underline">Edit Details</button>
+            </div>
+        )}
+
+        {(status === 'success' || status === 'error') && (
+            <div className="text-center py-10 animate-in fade-in">
+                <div className={`mx-auto flex items-center justify-center h-24 w-24 rounded-full ${status === 'success' ? 'bg-green-100' : 'bg-red-100'} mb-6 shadow-sm`}>
+                    {status === 'success' ? <CheckCircleIcon className="h-14 w-14 text-green-600" /> : <p className="text-5xl">😟</p>}
+                </div>
+                <h3 className={`text-3xl font-black ${status === 'success' ? 'text-green-800' : 'text-red-600'} mb-2`}>
                     {status === 'success' ? 'Verified!' : 'Failed'}
                 </h3>
-                <p className="text-xs sm:text-sm font-medium text-gray-600">{message}</p>
+                <p className="text-sm font-bold text-gray-500 mb-4">{message}</p>
+                {status === 'success' && courseName && (
+                   <p className="text-xs text-gray-400 font-medium">Session: {decodeURIComponent(courseName)}</p>
+                )}
             </div>
         )}
     </div>
