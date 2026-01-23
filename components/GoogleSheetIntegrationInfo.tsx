@@ -4,9 +4,8 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v20.0)
- * Priority Tab: W6-W10
- * Column B: ID | Column D: Name | O+: Attendance
+ * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v24.0)
+ * Layout: ID Col B(2) | Name Col D(4) | Headers Row 12, Col O+(15+)
  */
 
 // --- CONFIG ---
@@ -16,12 +15,12 @@ var FIREBASE_SECRET = "${FIREBASE_CONFIG.DATABASE_SECRET || 'PASTE_SECRET'}";
 
 function doPost(e) {
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(30000)) {
-    return ContentService.createTextOutput(JSON.stringify({success:false, error:"Locked"})).setMimeType(ContentService.MimeType.JSON);
+  if (!lock.tryLock(60000)) {
+    return ContentService.createTextOutput(JSON.stringify({success:false, error:"Timeout lock"})).setMimeType(ContentService.MimeType.JSON);
   }
   try {
     var contents = e.postData.contents;
-    if (!contents) throw "Empty Payload";
+    if (!contents) throw "No Payload";
     var data = JSON.parse(contents);
     
     if (data.action === "SYNC_QUEUE") {
@@ -32,7 +31,7 @@ function doPost(e) {
     
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   } catch(err) {
-    console.error("UTS Script v20 Error: " + err.toString());
+    console.error("UTS v24 Error: " + err.toString());
     return ContentService.createTextOutput(JSON.stringify({error:err.toString()})).setMimeType(ContentService.MimeType.JSON);
   } finally {
     lock.releaseLock();
@@ -45,17 +44,14 @@ function syncFromFirebase() {
     var data = JSON.parse(response.getContentText());
     if (data && Object.keys(data).length > 0) {
       handleBulkRecords(data, "AutoSync");
-    } else {
-      console.log("No pending records in Firebase.");
     }
   } catch (err) {
-    console.error("Sync Error: " + err.toString());
+    console.error("Firebase Sync Fail: " + err.toString());
   }
 }
 
 function handleBulkRecords(data, source) {
   if (!data || Object.keys(data).length === 0) return;
-  
   var doc = SpreadsheetApp.getActiveSpreadsheet();
   var ids = Object.keys(data);
   var processedKeys = {};
@@ -67,23 +63,23 @@ function handleBulkRecords(data, source) {
     
     try {
       var date = new Date(record.timestamp);
-      var header = Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yyyy");
-      if (record.courseName && record.courseName !== 'General') header += " - " + record.courseName;
+      var headerText = Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yyyy");
+      if (record.courseName && record.courseName !== 'General') {
+        headerText += " - " + record.courseName;
+      }
       
       processEntry({
         id: record.studentId,
         name: record.name,
         status: record.status === 'P' ? "P @ " + Utilities.formatDate(date, Session.getScriptTimeZone(), "HH:mm") : record.status,
-        header: header
+        header: headerText
       }, doc);
-      
       processedKeys[id] = null; 
     } catch(e) {
-      console.warn("Processing failed for " + id + ": " + e.toString());
+      console.warn("Entry skip for " + id + ": " + e.toString());
     }
   }
 
-  // Cleanup Firebase if processed from AutoSync
   if (Object.keys(processedKeys).length > 0 && source !== "DirectPing") {
     try {
       UrlFetchApp.fetch(FIREBASE_URL + '/pending.json?auth=' + FIREBASE_SECRET, {
@@ -91,9 +87,8 @@ function handleBulkRecords(data, source) {
         'payload': JSON.stringify(processedKeys),
         'muteHttpExceptions': true
       });
-      console.log("Firebase cleared for " + Object.keys(processedKeys).length + " keys.");
     } catch (e) {
-      console.error("Firebase Cleanup Failed: " + e.toString());
+      console.error("Queue Clear Fail: " + e.toString());
     }
   }
 }
@@ -102,35 +97,28 @@ function processEntry(item, doc) {
   var id = String(item.id || "").toUpperCase().trim();
   var name = String(item.name || "").toUpperCase().trim();
   var sheet, col;
-  
   var sheets = doc.getSheets();
   var targetSheet;
 
-  // PRIORITY: Find "W6-W10" tab
+  // PRIORITY SEARCH: W6-W10
   for (var i = 0; i < sheets.length; i++) {
-    var sName = sheets[i].getName();
-    if (sName.toUpperCase().indexOf("W6-W10") !== -1) {
-      targetSheet = sheets[i];
-      break;
-    }
+    var n = sheets[i].getName().toUpperCase();
+    if (n.indexOf("W6-W10") !== -1) { targetSheet = sheets[i]; break; }
   }
 
-  // FALLBACK: Newest sheet with "W" or "WEEK" in name
+  // FALLBACK: ANY WEEK
   if (!targetSheet) {
     for (var i = sheets.length - 1; i >= 0; i--) {
-      var sName = sheets[i].getName().toUpperCase();
-      if (sName.indexOf("W") !== -1 || sName.indexOf("WEEK") !== -1) {
-        targetSheet = sheets[i];
-        break;
-      }
+      var n = sheets[i].getName().toUpperCase();
+      if (n.indexOf("W") !== -1 || n.indexOf("WEEK") !== -1) { targetSheet = sheets[i]; break; }
     }
   }
 
   sheet = targetSheet || sheets[0];
-  console.log("Using sheet: " + sheet.getName());
 
-  // Search Row 12 for header starting from Column O (15)
-  var headers = sheet.getRange(12, 15, 1, 150).getDisplayValues()[0];
+  // Headers (Row 12, Column O+)
+  var headersRange = sheet.getRange(12, 15, 1, 400);
+  var headers = headersRange.getDisplayValues()[0];
   for (var c = 0; c < headers.length; c++) {
     if (headers[c].trim() === item.header) { col = 15 + c; break; }
     if (!col && headers[c].trim() === "") {
@@ -139,18 +127,14 @@ function processEntry(item, doc) {
       break;
     }
   }
-
   if (!col) col = 15;
 
-  // Find Student in Column B (2) starting from Row 14
-  var lastRow = Math.max(sheet.getLastRow(), 14);
-  var dataRows = sheet.getRange(14, 2, Math.max(lastRow - 13, 1), 1).getValues();
+  // Students (Column B, Row 14+)
+  var rowsToSearch = Math.max(sheet.getLastRow(), 500);
+  var dataRows = sheet.getRange(14, 2, Math.max(rowsToSearch - 13, 1), 1).getValues();
   var row = -1;
   for (var r = 0; r < dataRows.length; r++) {
-    if (String(dataRows[r][0]).toUpperCase().trim() === id) {
-      row = 14 + r;
-      break;
-    }
+    if (String(dataRows[r][0]).toUpperCase().trim() === id) { row = 14 + r; break; }
   }
 
   if (row === -1) {
@@ -164,7 +148,7 @@ function processEntry(item, doc) {
 }
 
 function doGet(e) {
-  return ContentService.createTextOutput("UTS Script v20.0 ACTIVE - Target: W6-W10 Priority").setMimeType(ContentService.MimeType.TEXT);
+  return ContentService.createTextOutput("UTS Sync v24.0 READY.").setMimeType(ContentService.MimeType.TEXT);
 }
 `;
 
@@ -201,7 +185,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
     <div className="space-y-4">
       <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
         <div className="flex justify-between items-center mb-2">
-          <h4 className="text-sm font-black text-gray-800 uppercase tracking-tight">Sync Panel v20.0</h4>
+          <h4 className="text-sm font-black text-gray-800 uppercase tracking-tight">Sync Panel v24.0</h4>
           <button 
             onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
             className={`text-[10px] px-3 py-1 rounded-full font-black transition-all ${copied ? 'bg-green-500 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
@@ -211,14 +195,8 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
         </div>
         
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
-          <p className="text-[10px] font-bold text-amber-800 uppercase mb-1">Sheet Selection v20.0</p>
-          <p className="text-[10px] text-amber-700 mb-2 leading-relaxed">Prioritizing <strong>W6-W10</strong>. If deployment failed, ensure you are using a new deployment ID and set "Access" to "Anyone".</p>
-          <ol className="text-[10px] text-amber-700 space-y-1 list-decimal ml-3">
-            <li>Update your Google Apps Script to <strong>v20.0</strong>.</li>
-            <li>Click <strong>Deploy > New Deployment</strong>.</li>
-            <li>Set "Access" to <strong>Anyone</strong>.</li>
-            <li>Ensure <strong>syncFromFirebase</strong> trigger is set to 1-minute intervals.</li>
-          </ol>
+          <p className="text-[10px] font-bold text-amber-800 uppercase mb-1">Sheet Setup v24.0</p>
+          <p className="text-[10px] text-amber-700 leading-relaxed font-medium">Use v24.0 for better tab handling. Deployment access must be <strong>"Anyone"</strong>.</p>
         </div>
 
         <div className="grid grid-cols-2 gap-2">
