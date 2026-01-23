@@ -54,7 +54,7 @@ const App: React.FC = () => {
   });
 
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbx20edvx6USeT_N0NINZLt-PVUbVNv17tfWZJBo1JL_ExxQwXSFwSum_bOUxJ7xzMbl/exec';
+    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbwj-23rrLPnzKQlnjT-KL-Aeno1JakDQxBPUQFBH5ugIkU5BIM7IYxF3y1usPcZB9Mo/exec';
   });
 
   const checkAndClearForNewDay = useCallback(() => {
