@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { TeacherView } from './components/TeacherView';
 import { StudentView } from './components/StudentView';
@@ -16,6 +17,7 @@ const SYNC_QUEUE_KEY = 'attendance-sync-queue-v3';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const KNOWN_STUDENTS_KEY = 'attendance-known-students-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
+const LAST_SCAN_DATE_KEY = 'attendance-last-scan-date-v1';
 
 const App: React.FC = () => {
   const urlParams = new URLSearchParams(window.location.search);
@@ -92,6 +94,22 @@ const App: React.FC = () => {
   // Retry Trigger Mechanism
   const [retryTrigger, setRetryTrigger] = useState(0);
   const isSyncingRef = useRef(false); // Prevents dependency loops
+
+  const checkAndClearForNewDay = useCallback(() => {
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD format
+    const lastScanDate = localStorage.getItem(LAST_SCAN_DATE_KEY);
+
+    if (lastScanDate && lastScanDate !== today) {
+      console.log("New day detected. Clearing local data for a fresh start.");
+      setAttendanceList([]);
+      setLocallyDeletedIds(new Set());
+      setSyncQueue([]); // Also clear pending sync tasks from the previous day.
+    }
+  }, []);
+
+  useEffect(() => {
+    checkAndClearForNewDay();
+  }, [checkAndClearForNewDay]);
 
   // Network Listener
   useEffect(() => {
@@ -285,6 +303,10 @@ const App: React.FC = () => {
                 controller.abort();
             }, 45000); 
 
+            // ARTIFICIAL DELAY
+            if (isMounted) setSyncStatus('Keying in data...');
+            await new Promise(resolve => setTimeout(resolve, 3000)); // 3-second delay
+
             if (isMounted) setSyncStatus('Connecting to Google Server...');
 
             const response = await fetch(scriptUrl.trim(), {
@@ -395,6 +417,9 @@ const App: React.FC = () => {
   };
 
   const addStudent = (name: string, studentId: string, email: string, status: string, overrideTimestamp?: number) => {
+      // Run the check before adding a student, in case the app was left open overnight
+      checkAndClearForNewDay();
+
       const timestamp = overrideTimestamp || Date.now();
       
       // Update Registry
@@ -436,6 +461,10 @@ const App: React.FC = () => {
           timestamp
       };
       setSyncQueue(prev => [...prev, task]);
+      
+      // After successfully queueing the task, update the last scan date
+      localStorage.setItem(LAST_SCAN_DATE_KEY, new Date().toISOString().slice(0, 10));
+      
       return { success: true, message: "Recorded" };
   };
 

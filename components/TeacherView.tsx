@@ -97,7 +97,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   // QR Customization State
   const [qrErrorCorrection, setQrErrorCorrection] = useState<'L' | 'M' | 'Q' | 'H'>(() => (localStorage.getItem('qr-error-correction') as any) || 'M');
   const [qrMargin, setQrMargin] = useState<number>(() => parseInt(localStorage.getItem('qr-margin') || '2', 10));
-  const [qrDisplaySize, setQrDisplaySize] = useState<number>(() => parseInt(localStorage.getItem('qr-display-size') || '55', 10)); // Default 55vmin
+  const [qrDisplaySize, setQrDisplaySize] = useState<number>(() => parseInt(localStorage.getItem('qr-display-size') || '50', 10)); // Default 50vmin
 
   // Checklist Mode State
   const [checklistSearchTerm, setChecklistSearchTerm] = useState('');
@@ -289,9 +289,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   if (viewMode === 'classroom') {
     return (
-      <div className="fixed inset-0 bg-gray-900 z-[200] flex flex-col items-center justify-center p-6 animate-in fade-in duration-300">
+      <div className="fixed inset-0 bg-gray-900 z-[200] flex flex-col items-center justify-between p-6 animate-in fade-in duration-300">
         
-        <div className="text-center mb-6 max-w-4xl shrink-0">
+        <div className="text-center max-w-4xl shrink-0">
             {courseName ? (
                 <>
                     <h1 className="text-3xl sm:text-5xl font-black text-white tracking-tight drop-shadow-xl mb-2">{courseName}</h1>
@@ -312,8 +312,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             <div 
               className="bg-white p-8 rounded-[2.5rem] shadow-[0_0_50px_-12px_rgba(0,0,0,0.5)] relative flex items-center justify-center transition-all duration-300"
               style={{ 
-                width: `${qrDisplaySize}vmin`, 
-                height: `${qrDisplaySize}vmin`,
+                width: `${qrDisplaySize}vmin`,
                 maxWidth: '100%',
                 maxHeight: '100%', 
                 aspectRatio: '1/1'
@@ -331,13 +330,33 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               <div className="absolute bottom-0 right-0 w-12 h-12 border-b-[6px] border-r-[6px] border-brand-primary rounded-br-3xl -mb-1 -mr-1"></div>
             </div>
         </div>
+        
+        <div className="flex-shrink-0 flex items-center gap-4">
+            <button
+              onClick={() => setQrDisplaySize(s => Math.max(20, s - 5))}
+              className="w-12 h-12 flex items-center justify-center bg-white/10 backdrop-blur-md text-white/90 rounded-full text-3xl font-light hover:bg-white/20 transition-all shadow-xl border border-white/20 disabled:opacity-50"
+              disabled={qrDisplaySize <= 20}
+              aria-label="Decrease QR Code Size"
+            >
+              -
+            </button>
+            
+            <button 
+              onClick={() => setViewMode('teacher')}
+              className="flex items-center gap-2 bg-white/10 backdrop-blur-md text-white/90 px-6 py-3 rounded-full text-sm font-bold hover:bg-white/20 hover:text-white transition-all shadow-xl border border-white/20 group whitespace-nowrap"
+            >
+              <EyeIcon className="w-5 h-5 group-hover:scale-110 transition-transform" /> Exit Classroom View
+            </button>
 
-        <button 
-          onClick={() => setViewMode('teacher')}
-          className="mt-8 flex-shrink-0 flex items-center gap-2 bg-white/10 backdrop-blur-md text-white/90 px-6 py-3 rounded-full text-sm font-bold hover:bg-white/20 hover:text-white transition-all shadow-xl border border-white/20 group whitespace-nowrap"
-        >
-          <EyeIcon className="w-5 h-5 group-hover:scale-110 transition-transform" /> Exit Classroom View
-        </button>
+            <button
+              onClick={() => setQrDisplaySize(s => Math.min(100, s + 5))}
+              className="w-12 h-12 flex items-center justify-center bg-white/10 backdrop-blur-md text-white/90 rounded-full text-3xl font-light hover:bg-white/20 transition-all shadow-xl border border-white/20 disabled:opacity-50"
+              disabled={qrDisplaySize >= 100}
+              aria-label="Increase QR Code Size"
+            >
+              +
+            </button>
+        </div>
       </div>
     );
   }
