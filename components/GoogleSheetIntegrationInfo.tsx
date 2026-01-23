@@ -7,7 +7,7 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v5.0)
+ * FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v6.0)
  * 
  * SETUP INSTRUCTIONS:
  * 1. Paste this code into Extensions > Apps Script.
@@ -60,11 +60,17 @@ function syncFromFirebase() {
         var date = new Date(record.timestamp);
         var dateStr = Utilities.formatDate(date, Session.getScriptTimeZone(), "dd/MM/yyyy");
         
+        // Create a unique header using date and course name if available
+        var sessionHeader = dateStr;
+        if (record.courseName && String(record.courseName).trim() !== "") {
+            sessionHeader = dateStr + " - " + String(record.courseName).trim();
+        }
+
         processSingleRecord({
           studentId: record.studentId,
           name: record.name,
           status: record.status,
-          dateStr: dateStr
+          sessionHeader: sessionHeader
         }, doc);
         
         // Mark as processed for deletion
@@ -98,7 +104,7 @@ function processSingleRecord(record, doc) {
     var studentId = String(record.studentId || "").toUpperCase().trim();
     var studentName = String(record.name || "").toUpperCase().trim();
     var status = record.status || 'P';
-    var dateStr = record.dateStr;
+    var sessionHeader = record.sessionHeader;
 
     if (!studentId) throw "Missing Student ID";
 
@@ -114,7 +120,7 @@ function processSingleRecord(record, doc) {
       var emptyCol = -1;
 
       for (var c = 0; c < headerValues.length; c++) {
-        if (headerValues[c].trim() === dateStr) {
+        if (headerValues[c].trim() === sessionHeader) {
           targetCol = conf.startCol + c;
           break;
         }
@@ -125,7 +131,7 @@ function processSingleRecord(record, doc) {
       
       if (!targetCol && emptyCol !== -1) {
         targetCol = emptyCol;
-        sheet.getRange(conf.dateRow, targetCol).setValue(dateStr);
+        sheet.getRange(conf.dateRow, targetCol).setValue(sessionHeader);
       }
       
       if(targetCol) {
@@ -214,7 +220,7 @@ export const GoogleSheetIntegrationInfo: React.FC = () => {
           </p>
           <div className="bg-gray-800 p-3 rounded-lg">
              <div className="flex justify-between items-center mb-2">
-              <span className="text-xs text-gray-400 font-mono">Firebase Sync Script v5.0</span>
+              <span className="text-xs text-gray-400 font-mono">Firebase Sync Script v6.0</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-3 py-1 rounded-md font-bold transition-colors ${copied ? 'bg-green-500 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}

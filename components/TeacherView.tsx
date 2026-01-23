@@ -19,16 +19,19 @@ import { XCircleIcon } from './icons/XCircleIcon';
 import { GoogleSheetIntegrationInfo } from './GoogleSheetIntegrationInfo';
 import { DevicePhoneMobileIcon } from './icons/DevicePhoneMobileIcon';
 import { ArrowDownTrayIcon } from './icons/ArrowDownTrayIcon';
+import { CheckIcon } from './icons/CheckIcon';
+import { XMarkIcon } from './icons/XMarkIcon';
+import { ExclamationTriangleIcon } from './icons/ExclamationTriangleIcon';
 
 interface TeacherViewProps {
   attendanceList: Student[];
-  onRemoveStudents: (studentIds: string[]) => void;
-  onBulkStatusUpdate: (studentIds:string[], status: string) => void;
+  onRemoveStudents: (studentIds: string[], courseName: string) => void;
+  onBulkStatusUpdate: (studentIds:string[], status: string, courseName: string) => void;
   scriptUrl: string;
   onScriptUrlChange: (url: string) => void;
   onOpenKiosk: () => void;
-  onManualAdd: (name: string, id: string, email: string, status: string) => Promise<{success: boolean, message: string}>;
-  addStudent: (name: string, studentId: string, email: string, status: string, overrideTimestamp?: number) => Promise<{ success: boolean, message: string }>;
+  onManualAdd: (name: string, id: string, email: string, status: string, courseName: string) => Promise<{success: boolean, message: string}>;
+  addStudent: (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number) => Promise<{ success: boolean, message: string }>;
   onLogout: () => void;
   knownStudents: PreRegisteredStudent[];
 }
@@ -67,6 +70,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [unlockMessage, setUnlockMessage] = useState('');
   const [currentTime, setCurrentTime] = useState(() => new Date());
+  const [confirmation, setConfirmation] = useState<{ action: 'P' | 'A' | null, count: number }>({ action: null, count: 0 });
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   
@@ -84,7 +88,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       setShowScanner(false);
       try {
         const studentData = JSON.parse(data);
-        addStudent(studentData.name, studentData.studentId, studentData.email, 'P', studentData.timestamp)
+        addStudent(studentData.name, studentData.studentId, studentData.email, 'P', courseName, studentData.timestamp)
             .then(result => {
                 if (result.success) setScanResult({ type: 'success', message: `${studentData.name} checked in!` });
                 else setScanResult({ type: 'duplicate', message: result.message });
@@ -129,7 +133,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   const submitManualAdd = async () => {
       if (!manualId || !manualName) { setManualError('Student ID and Name are required.'); return; }
-      const result = await onManualAdd(manualName, manualId, `${manualId}@STUDENT.UTS.EDU.MY`, 'P');
+      const result = await onManualAdd(manualName, manualId, `${manualId}@STUDENT.UTS.EDU.MY`, 'P', courseName);
       if (result.success) { setShowManualModal(false); setManualId(''); setManualName(''); setManualError(''); } 
       else { setManualError(result.message); }
   };
@@ -178,6 +182,34 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       document.body.removeChild(link);
   };
 
+  const handleMarkAll = (status: 'P' | 'A') => {
+    if (filteredList.length === 0) return;
+    setConfirmation({ action: status, count: filteredList.length });
+  };
+
+  const executeConfirmation = () => {
+    if (!confirmation.action || confirmation.count === 0) return;
+    
+    const idsToUpdate = filteredList.map(s => s.studentId);
+    onBulkStatusUpdate(idsToUpdate, confirmation.action, courseName);
+    setConfirmation({ action: null, count: 0 });
+  };
+
+  const cancelConfirmation = () => {
+    setConfirmation({ action: null, count: 0 });
+  };
+
+
+  const getStatusBadge = (status: string) => {
+    switch (status.toUpperCase()) {
+        case 'P':
+            return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-green-100 text-green-800 border border-green-200">PRESENT</span>;
+        case 'A':
+            return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-red-100 text-red-800 border border-red-200">ABSENT</span>;
+        default:
+            return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-yellow-100 text-yellow-800 border border-yellow-200">{status.toUpperCase()}</span>;
+    }
+  };
 
   if (viewMode === 'classroom') {
     return (
@@ -234,7 +266,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </div>
         </div>
 
-        <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-gray-100">
+        <div className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-gray-100 flex flex-col">
             <div className="flex justify-between items-center mb-4 gap-2">
                 <h2 className="text-xl font-bold text-gray-800 shrink-0">List ({filteredList.length})</h2>
                 <div className="flex items-center gap-2 w-full">
@@ -245,13 +277,34 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     <button onClick={handleExportCSV} className="flex items-center justify-center w-10 h-9 bg-gray-100 text-gray-600 rounded-lg border hover:bg-gray-200 transition-colors shrink-0" title="Export CSV"><ArrowDownTrayIcon className="w-4 h-4" /></button>
                 </div>
             </div>
+             <div className="flex items-center justify-between gap-2 mb-4 bg-gray-50 p-2 rounded-lg border">
+                <p className="text-xs font-bold text-gray-600">Bulk Actions (for {filteredList.length} visible)</p>
+                <div className="flex items-center gap-2">
+                    <button 
+                        onClick={() => handleMarkAll('P')} 
+                        className="flex items-center gap-1.5 bg-green-100 text-green-700 text-xs font-bold px-3 py-1.5 rounded-md hover:bg-green-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={filteredList.length === 0}
+                    >
+                        <CheckIcon className="w-4 h-4" />
+                        Present
+                    </button>
+                    <button 
+                        onClick={() => handleMarkAll('A')} 
+                        className="flex items-center gap-1.5 bg-red-100 text-red-700 text-xs font-bold px-3 py-1.5 rounded-md hover:bg-red-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={filteredList.length === 0}
+                    >
+                        <XMarkIcon className="w-4 h-4" />
+                        Absent
+                    </button>
+                </div>
+            </div>
             {selectedIds.size > 0 && (
                 <div className="bg-gray-50 p-2 rounded-lg mb-2 flex items-center justify-between gap-2">
                     <p className="text-xs font-bold text-gray-600">{selectedIds.size} selected</p>
-                    <button onClick={() => onRemoveStudents(Array.from(selectedIds))} className="text-xs text-red-600 font-bold p-1 hover:bg-red-100 rounded"><TrashIcon className="w-4 h-4" /></button>
+                    <button onClick={() => onRemoveStudents(Array.from(selectedIds), courseName)} className="text-xs text-red-600 font-bold p-1 hover:bg-red-100 rounded"><TrashIcon className="w-4 h-4" /></button>
                 </div>
             )}
-            <div className="overflow-y-auto h-96 pr-2">
+            <div className="overflow-y-auto h-80 pr-2">
                 {filteredList.length > 0 ? (
                     <ul className="space-y-2">
                         {filteredList.map(s => (
@@ -261,11 +314,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                     if(e.target.checked) next.add(s.studentId); else next.delete(s.studentId);
                                     setSelectedIds(next);
                                 }} className="rounded border-gray-300 text-brand-primary focus:ring-brand-primary" />
-                                <div className="flex-1">
-                                    <p className="font-bold text-sm text-gray-800">{s.name}</p>
+                                <div className="flex-1 min-w-0">
+                                    <p className="font-bold text-sm text-gray-800 truncate">{s.name}</p>
                                     <p className="text-xs font-mono text-gray-500">{s.studentId}</p>
                                 </div>
-                                <p className="text-xs text-gray-400">{new Date(s.timestamp).toLocaleTimeString()}</p>
+                                <div className="flex items-center gap-3 shrink-0">
+                                    {getStatusBadge(s.status)}
+                                    <p className="text-xs text-gray-400 w-20 text-right">{new Date(s.timestamp).toLocaleTimeString()}</p>
+                                </div>
                             </li>
                         ))}
                     </ul>
@@ -364,6 +420,36 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {confirmation.action && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+            <div className="bg-white w-full max-w-md rounded-2xl shadow-xl p-6 text-center">
+                <div className={`mx-auto flex items-center justify-center h-16 w-16 rounded-full mb-4 ${confirmation.action === 'P' ? 'bg-green-100' : 'bg-red-100'}`}>
+                    <ExclamationTriangleIcon className={`h-8 w-8 ${confirmation.action === 'P' ? 'text-green-600' : 'text-red-600'}`} />
+                </div>
+                <h2 id="confirm-title" className="text-xl font-bold text-gray-900 mb-2">Confirm Bulk Action</h2>
+                <p className="text-sm text-gray-600 mb-6">
+                    Are you sure you want to mark all <strong>{confirmation.count}</strong> visible students as <strong>{confirmation.action === 'P' ? 'Present' : 'Absent'}</strong>? This action will be synced.
+                </p>
+                <div className="flex justify-center gap-4">
+                    <button 
+                        onClick={cancelConfirmation} 
+                        type="button" 
+                        className="w-full px-4 py-2.5 text-sm font-bold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-lg"
+                    >
+                        Cancel
+                    </button>
+                    <button 
+                        onClick={executeConfirmation} 
+                        type="button" 
+                        className={`w-full px-5 py-2.5 text-sm font-bold text-white rounded-lg shadow-sm ${confirmation.action === 'P' ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'}`}
+                    >
+                        Confirm
+                    </button>
+                </div>
+            </div>
         </div>
       )}
 

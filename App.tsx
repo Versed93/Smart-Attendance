@@ -22,7 +22,7 @@ const SESSION_ID = new Date().toISOString().slice(0, 10);
 const App: React.FC = () => {
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('t');
-  const courseName = urlParams.get('c');
+  const courseNameParam = urlParams.get('c');
   const isOfflineScan = urlParams.get('offline') === 'true';
   
   const latParam = urlParams.get('lat');
@@ -100,6 +100,9 @@ const App: React.FC = () => {
                 [...firebaseStudents, ...prev].forEach(s => combined.set(s.studentId, s));
                 return Array.from(combined.values()).sort((a,b) => b.timestamp - a.timestamp);
             });
+        } else {
+            // If firebase is empty (e.g. after a deletion or new day), clear the list
+            setAttendanceList([]);
         }
     } catch (e) {
         console.warn("Polling from Firebase live session failed", e);
@@ -128,14 +131,14 @@ const App: React.FC = () => {
     localStorage.removeItem(AUTH_KEY);
   };
 
-  const addStudent = async (name: string, studentId: string, email: string, status: string, overrideTimestamp?: number) => {
+  const addStudent = async (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number) => {
       if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) {
           return { success: false, message: "Firebase is not configured." };
       }
       
       checkAndClearForNewDay();
       const timestamp = overrideTimestamp || Date.now();
-      const studentData = { name, studentId, email, status, timestamp };
+      const studentData = { name, studentId, email, status, timestamp, courseName };
       
       // Optimistically update UI
       setAttendanceList(prev => [{ ...studentData }, ...prev.filter(s => s.studentId !== studentId)]);
@@ -168,7 +171,7 @@ const App: React.FC = () => {
       }
   };
 
-  const onRemoveStudents = async (ids: string[]) => {
+  const onRemoveStudents = async (ids: string[], courseName: string) => {
       if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
 
       setAttendanceList(prev => prev.filter(s => !ids.includes(s.studentId)));
@@ -184,23 +187,26 @@ const App: React.FC = () => {
           name: name,
           email: `${id}@STUDENT.UTS.EDU.MY`,
           status: 'A', // Mark as Absent
-          timestamp: now
+          timestamp: now,
+          courseName
         };
         
+        // Update pending for Apps Script to sync 'Absent' status
         const p1 = fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
             method: 'PUT',
             body: JSON.stringify(removalData),
         });
+        
+        // DELETE from live session so it doesn't reappear in UI
         const p2 = fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
-            method: 'PUT',
-            body: JSON.stringify(removalData),
+            method: 'DELETE',
         });
         promises.push(p1, p2);
       }
       await Promise.all(promises);
   };
 
-  const onBulkStatusUpdate = async (ids: string[], status: string) => {
+  const onBulkStatusUpdate = async (ids: string[], status: string, courseName: string) => {
       setAttendanceList(prev => prev.map(s => ids.includes(s.studentId) ? { ...s, status } : s));
       
       const now = Date.now();
@@ -209,7 +215,7 @@ const App: React.FC = () => {
       for (const id of ids) {
         const student = attendanceList.find(s => s.studentId === id);
         if (student) {
-           const updateData = { ...student, status, timestamp: now };
+           const updateData = { ...student, status, timestamp: now, courseName };
            const p1 = fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
                 method: 'PUT',
                 body: JSON.stringify(updateData),
@@ -236,7 +242,7 @@ const App: React.FC = () => {
                      scriptUrl={scriptUrl}
                      onScriptUrlChange={setScriptUrl}
                      onOpenKiosk={() => { setIsKioskMode(true); setView('student'); }}
-                     onManualAdd={(name, id, email, status) => addStudent(name, id, email, status)}
+                     onManualAdd={(name, id, email, status, courseName) => addStudent(name, id, email, status, courseName)}
                      addStudent={addStudent}
                      onLogout={handleLogout}
                      knownStudents={knownStudents}
@@ -247,9 +253,9 @@ const App: React.FC = () => {
            <div className="flex-1 flex flex-col items-center justify-center p-4 bg-gray-50">
                <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-6">
                    <StudentView 
-                       markAttendance={(name, id, email) => addStudent(name, id, email, 'P')}
+                       markAttendance={(name, id, email) => addStudent(name, id, email, 'P', courseNameParam || 'General')}
                        token={token || (isKioskMode ? Date.now().toString() : '')}
-                       courseName={courseName || undefined}
+                       courseName={courseNameParam || undefined}
                        geoConstraints={latParam && lngParam ? { lat: parseFloat(latParam), lng: parseFloat(lngParam), radius: radParam ? parseFloat(radParam) : 150 } : undefined}
                        bypassRestrictions={isKioskMode}
                        onExit={() => { setIsKioskMode(false); setView('teacher'); }}
