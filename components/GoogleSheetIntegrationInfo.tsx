@@ -7,11 +7,10 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v10.0)
+ * FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v11.0)
  * 
- * This version makes the manual sync (doPost) robust by handling a bulk payload,
- * mirroring the logic of the automatic trigger. This prevents race conditions and
- * ensures the script is responsible for clearing records from Firebase.
+ * This version supports real-time direct recording from the student app.
+ * It handles both individual record pings and bulk syncs.
  *
  * --- IMPORTANT: SHEET STRUCTURE ---
  * - Tabs for attendance (e.g., "W1-W5").
@@ -37,18 +36,17 @@ function getSheetConfigs() {
 }
 
 /**
- * Handles bulk records sent from the web app's "Force Sync" button.
+ * Handles incoming data (Individual or Bulk)
  */
 function doPost(e) {
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) {
-    return ContentService.createTextOutput(JSON.stringify({ success: false, message: "Could not obtain lock." })).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput(JSON.stringify({ success: false, message: "Server Busy" })).setMimeType(ContentService.MimeType.JSON);
   }
 
   try {
     var data = JSON.parse(e.postData.contents);
     handleBulkRecords(data, "doPost");
-    // The client can't read this response due to no-cors, but it's good practice.
     return ContentService.createTextOutput(JSON.stringify({ success: true })).setMimeType(ContentService.MimeType.JSON);
 
   } catch (err) {
@@ -60,42 +58,34 @@ function doPost(e) {
 }
 
 /**
- * Main sync function for the time-driven trigger.
+ * Automatic trigger function for missed records.
  */
 function syncFromFirebase() {
   var lock = LockService.getScriptLock();
-  if (!lock.tryLock(30000)) {
-    console.log("Could not obtain lock. Another sync may be in progress.");
-    return;
-  }
+  if (!lock.tryLock(10000)) return;
 
   try {
     var pendingDataUrl = FIREBASE_URL + '/pending.json?auth=' + FIREBASE_SECRET;
     var response = UrlFetchApp.fetch(pendingDataUrl, { 'muteHttpExceptions': true });
     var data = JSON.parse(response.getContentText());
-    handleBulkRecords(data, "syncFromFirebase");
+    handleBulkRecords(data, "AutoSync");
     
   } catch (err) {
-    console.error("An error occurred during sync: " + err.toString());
+    console.error("Sync Error: " + err.toString());
   } finally {
     lock.releaseLock();
   }
 }
 
 /**
- * Shared logic to process a batch of records, write to the sheet, and clear from Firebase.
+ * Shared logic to process records and clear Firebase.
  */
 function handleBulkRecords(data, source) {
-  if (!data) {
-    console.log(source + ": No new attendance data to sync.");
-    return;
-  }
+  if (!data || Object.keys(data).length === 0) return;
     
   var doc = SpreadsheetApp.getActiveSpreadsheet();
   var studentIdsToProcess = Object.keys(data);
   var processedKeys = {};
-
-  console.log(source + ": Found " + studentIdsToProcess.length + " records to process.");
 
   for (var i = 0; i < studentIdsToProcess.length; i++) {
     var studentId = studentIdsToProcess[i];
@@ -111,44 +101,35 @@ function handleBulkRecords(data, source) {
           sessionHeader = dateStr + " - " + String(record.courseName).trim();
       }
 
-      var statusWithTime = record.status;
-      if (record.status === 'P') {
-          statusWithTime = "P @ " + timeStr;
-      }
+      var statusStr = record.status === 'P' ? "P @ " + timeStr : record.status;
 
       processSingleRecord({
         studentId: record.studentId,
         name: record.name,
-        status: statusWithTime,
+        status: statusStr,
         sessionHeader: sessionHeader
       }, doc);
       
-      processedKeys[studentId] = null; // Mark for deletion
+      processedKeys[studentId] = null; // Mark for Firebase cleanup
 
     } catch (e) {
-      console.error(source + ": Failed to process record for student " + studentId + ": " + e.toString());
+      console.error(source + ": Error for " + studentId + ": " + e.toString());
     }
   }
   
   if (Object.keys(processedKeys).length > 0) {
-    var pendingDataUrl = FIREBASE_URL + '/pending.json?auth=' + FIREBASE_SECRET;
-    var deleteOptions = {
+    UrlFetchApp.fetch(FIREBASE_URL + '/pending.json?auth=' + FIREBASE_SECRET, {
       'method': 'PATCH',
       'payload': JSON.stringify(processedKeys),
       'muteHttpExceptions': true
-    };
-    UrlFetchApp.fetch(pendingDataUrl, deleteOptions);
-    console.log(source + ": Successfully cleared " + Object.keys(processedKeys).length + " records from Firebase.");
+    });
   }
 }
 
 function processSingleRecord(record, doc) {
     var studentId = String(record.studentId || "").toUpperCase().trim();
     var studentName = String(record.name || "").toUpperCase().trim();
-    var status = record.status || 'P';
     var sessionHeader = record.sessionHeader;
-
-    if (!studentId) throw "Missing Student ID";
 
     var configs = getSheetConfigs();
     var targetSheet, targetCol;
@@ -158,7 +139,8 @@ function processSingleRecord(record, doc) {
       var sheet = doc.getSheetByName(conf.name);
       if (!sheet) continue;
       
-      var headerValues = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1).getDisplayValues()[0];
+      var headerRange = sheet.getRange(conf.dateRow, conf.startCol, 1, conf.endCol - conf.startCol + 1);
+      var headerValues = headerRange.getDisplayValues()[0];
       var emptyCol = -1;
 
       for (var c = 0; c < headerValues.length; c++) {
@@ -166,9 +148,7 @@ function processSingleRecord(record, doc) {
           targetCol = conf.startCol + c;
           break;
         }
-        if (emptyCol === -1 && headerValues[c].trim() === "") {
-          emptyCol = conf.startCol + c;
-        }
+        if (emptyCol === -1 && headerValues[c].trim() === "") emptyCol = conf.startCol + c;
       }
       
       if (!targetCol && emptyCol !== -1) {
@@ -182,9 +162,7 @@ function processSingleRecord(record, doc) {
       }
     }
 
-    if (!targetSheet) {
-      throw "Could not find a suitable sheet to write to based on getSheetConfigs(). Please check your sheet names.";
-    }
+    if (!targetSheet) throw "Sheet/Column not found";
     
     var startRow = 14;
     var lastRow = targetSheet.getLastRow();
@@ -207,11 +185,11 @@ function processSingleRecord(record, doc) {
        targetSheet.getRange(studentRow, 4).setValue(studentName);
     }
 
-    targetSheet.getRange(studentRow, targetCol).setValue(status);
+    targetSheet.getRange(studentRow, targetCol).setValue(record.status);
 }
 
 function doGet(e) {
-    return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
+    return ContentService.createTextOutput("Script Active").setMimeType(ContentService.MimeType.TEXT);
 }
 `;
 
@@ -278,7 +256,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
           </p>
           <div className="bg-gray-800 p-3 rounded-lg">
              <div className="flex justify-between items-center mb-2">
-              <span className="text-xs text-gray-400 font-mono">Firebase Sync Script v10.0</span>
+              <span className="text-xs text-gray-400 font-mono">Firebase Sync Script v11.0</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-3 py-1 rounded-md font-bold transition-colors ${copied ? 'bg-green-500 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
@@ -295,7 +273,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
         <div className="bg-gray-50 p-4 rounded-lg border">
           <h4 className="font-semibold text-gray-800">Step 3: Test Integration</h4>
           <p className="text-xs text-gray-500 mt-1 mb-3">
-            Send a test record to Firebase. It should appear in your sheet within a minute.
+            Send a test record to Firebase. It should appear in your sheet **immediately**.
           </p>
           <button onClick={handleTestClick} disabled={testStatus === 'sending'} className="w-full bg-indigo-600 text-white font-bold py-2 px-4 rounded-lg transition-colors text-sm shadow-sm hover:bg-indigo-700 disabled:bg-indigo-300 disabled:cursor-wait">
             {testStatus === 'sending' ? 'Sending...' : 'Send Test Record'}
@@ -321,7 +299,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
         <div className="bg-yellow-50 p-4 rounded-lg border border-yellow-200">
           <h4 className="font-semibold text-yellow-900">Step 5: Manual Sync</h4>
           <p className="text-xs text-yellow-700 mt-1 mb-3">
-            If records are pending (from Step 4), and your script trigger seems broken, use this to manually push all pending records to your Google Sheet.
+            If records are pending (from Step 4), use this to manually push all pending records to your Google Sheet.
           </p>
           <button onClick={handleForceSyncClick} disabled={syncStatus === 'syncing'} className="w-full bg-yellow-500 text-yellow-900 font-bold py-2 px-4 rounded-lg transition-colors text-sm shadow-sm hover:bg-yellow-600 disabled:bg-yellow-300 disabled:cursor-wait">
             {syncStatus === 'syncing' ? 'Syncing...' : 'Force Sync Pending Records'}
