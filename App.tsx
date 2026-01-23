@@ -415,6 +415,11 @@ const App: React.FC = () => {
   };
 
   const addStudent = (name: string, studentId: string, email: string, status: string, overrideTimestamp?: number) => {
+      // CRITICAL FIX: Check for duplicates before proceeding.
+      if (attendanceList.some(s => s.studentId === studentId)) {
+        return { success: false, message: "This student has already been marked present." };
+      }
+
       setIsListLocallyCleared(false); // Resume polling when new activity occurs
       // Run the check before adding a student, in case the app was left open overnight
       checkAndClearForNewDay();
@@ -431,11 +436,7 @@ const App: React.FC = () => {
 
       // Update Attendance List locally
       setAttendanceList(prev => {
-        // If student exists, update status
-        if (prev.some(s => s.studentId === studentId)) {
-            return prev.map(s => s.studentId === studentId ? { ...s, status, timestamp } : s);
-        }
-        // Else add new
+        // This logic is now safe because we've already checked for duplicates
         return [{ name, studentId, email, timestamp, status }, ...prev];
       });
 
