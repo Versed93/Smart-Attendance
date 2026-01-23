@@ -146,20 +146,28 @@ const App: React.FC = () => {
   }, [syncQueue]);
 
   useEffect(() => {
-    const savedData = localStorage.getItem(STORAGE_KEY);
-    if (savedData) {
-      try {
-        const parsed = JSON.parse(savedData);
-        if (Array.isArray(parsed)) setAttendanceList(parsed);
-      } catch (e) {
-        console.error('Failed to parse attendance data', e);
+    // CRITICAL FIX: Only load the persisted attendance list for the teacher view.
+    // The student view should always start with a clean slate to prevent a shared-state
+    // conflict where a student is incorrectly flagged as a duplicate.
+    if (initialView === 'teacher') {
+      const savedData = localStorage.getItem(STORAGE_KEY);
+      if (savedData) {
+        try {
+          const parsed = JSON.parse(savedData);
+          if (Array.isArray(parsed)) setAttendanceList(parsed);
+        } catch (e) {
+          console.error('Failed to parse attendance data', e);
+        }
       }
     }
-  }, []);
+  }, [initialView]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(attendanceList));
-  }, [attendanceList]);
+    // Only save the list to storage from the teacher view to avoid overwriting.
+    if (view === 'teacher') {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(attendanceList));
+    }
+  }, [attendanceList, view]);
 
   useEffect(() => {
     localStorage.setItem(DELETED_IDS_KEY, JSON.stringify(Array.from(locallyDeletedIds)));
