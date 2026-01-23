@@ -7,17 +7,20 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v8.0)
+ * FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v9.0)
  * 
- * This version adds a doPost(e) function to allow manual syncing from the web app.
- * The web app can now push records directly to this script, which then deletes them from Firebase.
- * This is a fallback for when the time-driven trigger fails.
+ * This version updates the sheet layout to match user specifications.
+ * - Dates are now written starting from Column O (O12, P12, etc.).
+ * - If the initial range (O:T) is full, it will continue searching for an empty
+ *   column up to column AD to write the new session.
  *
- * --- IMPORTANT: RE-DEPLOY YOUR SCRIPT ---
- * After pasting this new code, you MUST re-deploy your script.
- * Go to Deploy > New Deployment. Select "Web app" and ensure "Execute as" is "Me" and
- * "Who has access" is "Anyone". You do NOT need to give this new URL to the app.
- * The app will use the URL from your initial deployment.
+ * --- IMPORTANT: SHEET STRUCTURE ---
+ * - A tab for attendance (e.g., "W1-W5", "W6-W10", etc.).
+ * - Row 12 is where session dates/headers are written.
+ * - Column B (column 2) contains Student IDs.
+ * - Column D (column 4) contains Student Names.
+ * - Student records start from Row 14 downwards.
+ * - Attendance status is written in Columns starting from O (column 15).
  * ---
  */
 
@@ -27,10 +30,14 @@ var FIREBASE_SECRET = "${FIREBASE_CONFIG.DATABASE_SECRET || 'PASTE_YOUR_FIREBASE
 // --- END CONFIGURATION ---
 
 function getSheetConfigs() {
+  // Define your sheet names and the ranges for attendance.
+  // dateRow: The row number where session dates are written (e.g., 12).
+  // startCol: The starting column number for attendance (e.g., O is 15).
+  // endCol: The last column to check for an empty spot.
   return [
-    { name: "W1-W5", dateRow: 12, startCol: 13, endCol: 20 },
-    { name: "W6-W10", dateRow: 12, startCol: 13, endCol: 20 },
-    { name: "W11-W14", dateRow: 12, startCol: 13, endCol: 20 }
+    { name: "W1-W5", dateRow: 12, startCol: 15, endCol: 30 },
+    { name: "W6-W10", dateRow: 12, startCol: 15, endCol: 30 },
+    { name: "W11-W14", dateRow: 12, startCol: 15, endCol: 30 }
   ];
 }
 
@@ -295,7 +302,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
           </p>
           <div className="bg-gray-800 p-3 rounded-lg">
              <div className="flex justify-between items-center mb-2">
-              <span className="text-xs text-gray-400 font-mono">Firebase Sync Script v8.0</span>
+              <span className="text-xs text-gray-400 font-mono">Firebase Sync Script v9.0</span>
               <button 
                 onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
                 className={`text-xs px-3 py-1 rounded-md font-bold transition-colors ${copied ? 'bg-green-500 text-white' : 'bg-brand-primary text-white hover:bg-brand-secondary'}`}
