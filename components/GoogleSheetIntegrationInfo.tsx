@@ -4,7 +4,7 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v31.1)
+ * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v31.2)
  * With dynamic weekly sheet selection and enhanced debugging.
  * By [Lecturer's Name]
  *
@@ -20,8 +20,8 @@ var CONFIG = {
   // --- NEW: DYNAMIC WEEKLY SHEET SELECTION ---
   // The first day of Week 1 of the semester, in "YYYY-MM-DD" format.
   // THIS IS THE MOST IMPORTANT SETTING. For best results, this should be a Monday.
-  // EXAMPLE: Set to "2024-05-27" for the semester where Week 9 starts on July 22nd, 2024.
-  semesterStartDate: "2024-05-27",
+  // EXAMPLE: Set to "2024-06-03" for the semester where Week 9 starts on July 29th, 2024.
+  semesterStartDate: "2024-06-03",
 
   // The prefix for your weekly sheets (e.g., "W" for sheets named "W6", "W7", etc.)
   sheetNamePrefix: "W",
@@ -48,6 +48,18 @@ var FIREBASE_URL = "${(FIREBASE_CONFIG.DATABASE_URL || 'PASTE_URL').replace(/\/+
 var FIREBASE_SECRET = "${FIREBASE_CONFIG.DATABASE_SECRET || 'PASTE_SECRET'}";
 
 function doPost(e) {
+  // --- ROBUSTNESS CHECK (v31.2) ---
+  // This error guard prevents crashes if the script is run manually from the editor,
+  // where the event object 'e' would be undefined.
+  if (!e || !e.postData || !e.postData.contents) {
+    Logger.log("doPost was called without valid POST data. This is normal if you run it manually from the script editor. Otherwise, check the client-side request.");
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false, 
+      error: "Script was called without POST data. This is intended for use as a web app endpoint."
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+  // --- END CHECK ---
+
   var lock = LockService.getScriptLock();
   if (!lock.tryLock(60000)) {
     return ContentService.createTextOutput(JSON.stringify({success:false, error:"Script is busy. Please try again."})).setMimeType(ContentService.MimeType.JSON);
@@ -61,7 +73,7 @@ function doPost(e) {
     }
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   } catch(err) {
-    Logger.log("FATAL ERROR in doPost: " + err.toString());
+    Logger.log("FATAL ERROR in doPost: " + err.toString() + ". Raw POST data: " + (e.postData.contents || "EMPTY"));
     return ContentService.createTextOutput(JSON.stringify({error:err.toString()})).setMimeType(ContentService.MimeType.JSON);
   } finally {
     lock.releaseLock();
@@ -230,7 +242,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
   return (
     <div className="bg-white p-6 rounded-3xl border-2 border-gray-100 space-y-4">
       <div className="flex justify-between items-center">
-        <h4 className="text-xs font-black text-gray-900 uppercase tracking-widest">Apps Script v31.1</h4>
+        <h4 className="text-xs font-black text-gray-900 uppercase tracking-widest">Apps Script v31.2</h4>
         <button 
           onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
           className={`text-[9px] px-4 py-2 rounded-xl font-black transition-all ${copied ? 'bg-green-600 text-white' : 'bg-indigo-600 text-white hover:bg-black'}`}
@@ -242,7 +254,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
       <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
         <div className="bg-amber-100 p-1.5 rounded-lg text-amber-600 shrink-0">⚠️</div>
         <p className="text-[10px] text-amber-800 leading-relaxed font-bold uppercase">
-          V31.1 Recommended: Minor comment update for clarity. If data saves to the wrong week, check the 'semesterStartDate' in your script. Detailed logs are available in your Apps Script Executions history.
+          V31.2 Recommended: Added robustness to prevent script crashes on manual execution. If data saves to the wrong week, check the 'semesterStartDate' in your script.
         </p>
       </div>
 
