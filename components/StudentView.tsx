@@ -117,12 +117,24 @@ export const StudentView: React.FC<StudentViewProps> = ({
       setStatus('show-student-qr');
     } else {
       setStatus('submitting');
+      // Optimistically lock the device before the async call.
+      if (!bypassRestrictions) {
+        localStorage.setItem(lockKey, 'true');
+      }
+      
       const result = await markAttendance(name, studentId, email);
       setMessage(result.message);
+      
       if (result.success) {
         setStatus('success');
-        if (!bypassRestrictions) localStorage.setItem(lockKey, 'true');
-      } else setStatus('error');
+        // Lock is already set.
+      } else {
+        setStatus('error');
+        // If submission failed, remove the lock to allow retry.
+        if (!bypassRestrictions) {
+          localStorage.removeItem(lockKey);
+        }
+      }
     }
   };
 
