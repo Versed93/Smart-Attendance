@@ -4,17 +4,23 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v28.1)
- * Robust data mapping to ensure data integrity.
+ * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v29.0)
+ * With dynamic weekly sheet selection.
  * By Ten Tat Jian
  */
 
 // --- CONFIGURATION ---
 // Adjust these values to match your Google Sheet layout.
 var CONFIG = {
-  // The sheet to use. It will find the first sheet with this string in its name.
-  // If not found, it will use the very first sheet in the file.
-  sheetNameIdentifier: "W",
+  // --- NEW: DYNAMIC WEEKLY SHEET SELECTION ---
+  // The first day of Week 1 of the semester, in "YYYY-MM-DD" format.
+  // The script calculates the week number from this date. For best results, this should be a Monday.
+  // EXAMPLE: "2024-07-22" for a semester starting on Monday, July 22nd 2024.
+  semesterStartDate: "2024-07-22",
+
+  // The prefix for your weekly sheets (e.g., "W" for sheets named "W6", "W7", etc.)
+  sheetNamePrefix: "W",
+  // --- END NEW CONFIG ---
 
   // The row number where your session dates are (e.g., "25/07/2024 - Course Name")
   sessionHeaderRow: 12,
@@ -96,7 +102,8 @@ function handleBulkRecords(data, source) {
       id: record.studentId,
       name: record.name,
       status: status,
-      header: header
+      header: header,
+      timestamp: record.timestamp // Pass timestamp for week calculation
     };
     
     processEntry(item, doc);
@@ -113,9 +120,39 @@ function handleBulkRecords(data, source) {
 }
 
 function processEntry(item, doc) {
-  var sheet = doc.getSheets().find(function(s) { 
-    return s.getName().indexOf(CONFIG.sheetNameIdentifier) !== -1;
-  }) || doc.getSheets()[0];
+  var sheet;
+  try {
+    // Calculate week number relative to the configured semester start date
+    var recordDate = new Date(item.timestamp);
+    var startDate = new Date(CONFIG.semesterStartDate);
+    var timeDiff = recordDate.getTime() - startDate.getTime();
+    
+    // Calculate days passed, then divide by 7 for weeks. Add 1 because week numbering starts at 1.
+    var weekNumber = Math.floor(timeDiff / (1000 * 60 * 60 * 24 * 7)) + 1;
+
+    if (weekNumber < 1) {
+      Logger.log("Record date is before semester start date. Defaulting to Week 1.");
+      weekNumber = 1;
+    }
+    
+    var targetSheetName = CONFIG.sheetNamePrefix + weekNumber;
+    sheet = doc.getSheetByName(targetSheetName);
+
+    if (!sheet) {
+      throw new Error("Sheet '" + targetSheetName + "' not found. Check if the sheet exists and the name matches the format (e.g., 'W6').");
+    }
+  } catch(e) {
+    Logger.log("ERROR: " + e.toString() + " Falling back to first available sheet as a last resort.");
+    // Fallback for safety if date config is wrong or sheet is missing. Tries to find any sheet starting with the prefix.
+    sheet = doc.getSheets().find(function(s) { 
+      return s.getName().indexOf(CONFIG.sheetNamePrefix) === 0;
+    }) || doc.getSheets()[0];
+  }
+  
+  if (!sheet) {
+    Logger.log("FATAL: No valid sheet could be found. Aborting entry for student ID: " + item.id);
+    return; // Cannot proceed without a valid sheet
+  }
 
   var sessionHeadersRange = sheet.getRange(CONFIG.sessionHeaderRow, CONFIG.firstSessionCol, 1, sheet.getLastColumn() - CONFIG.firstSessionCol + 1);
   var sessionHeaders = sessionHeadersRange.getValues()[0];
@@ -168,7 +205,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
   return (
     <div className="bg-white p-6 rounded-3xl border-2 border-gray-100 space-y-4">
       <div className="flex justify-between items-center">
-        <h4 className="text-xs font-black text-gray-900 uppercase tracking-widest">Apps Script v28.1</h4>
+        <h4 className="text-xs font-black text-gray-900 uppercase tracking-widest">Apps Script v29.0</h4>
         <button 
           onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
           className={`text-[9px] px-4 py-2 rounded-xl font-black transition-all ${copied ? 'bg-green-600 text-white' : 'bg-indigo-600 text-white hover:bg-black'}`}
@@ -180,7 +217,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
       <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
         <div className="bg-amber-100 p-1.5 rounded-lg text-amber-600 shrink-0">⚠️</div>
         <p className="text-[10px] text-amber-800 leading-relaxed font-bold uppercase">
-          V28.1 REQUIRED: This new script is configurable and more robust. Please update your Google Sheet Web App.
+          V29.0 REQUIRED: Script now supports dynamic weekly sheets (e.g., "W6", "W7"). Please update your script and configure the <code className="bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded-md font-mono">semesterStartDate</code>.
         </p>
       </div>
 

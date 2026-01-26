@@ -53,31 +53,44 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [studentQrData, setStudentQrData] = useState('');
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   
+  // Effect to pre-fill the form with the student's saved profile
   useEffect(() => {
-      const savedProfile = localStorage.getItem(STUDENT_PROFILE_KEY);
-      if (savedProfile) {
-          try {
-              const { name: sName, studentId: sId, email: sEmail } = JSON.parse(savedProfile);
-              if (sName) setName(sName);
-              if (sId) setStudentId(sId);
-              if (sEmail) setEmail(sEmail);
-          } catch (e) {}
-      }
-      
-      const lockKey = `attendance-device-lock-v1-${new Date().toISOString().slice(0, 10)}-${courseName || 'general'}`;
-      if (!bypassRestrictions && localStorage.getItem(lockKey)) {
-        setStatus('device-locked');
-      }
-  }, [bypassRestrictions, courseName]);
+    const savedProfile = localStorage.getItem(STUDENT_PROFILE_KEY);
+    if (savedProfile) {
+        try {
+            const { name: sName, studentId: sId, email: sEmail } = JSON.parse(savedProfile);
+            if (sName) setName(sName);
+            if (sId) setStudentId(sId);
+            if (sEmail) setEmail(sEmail);
+        } catch (e) {}
+    }
+  }, []); // Runs only once when the component mounts
 
+  // This single, robust effect handles the entire initial validation flow
   useEffect(() => {
-    if (status !== 'validating') return;
-    if (bypassRestrictions) { setStatus('form'); return; }
-    if (!token) { setStatus('error'); setMessage('Session link invalid. Please re-scan.'); return; }
+    // 1. Highest priority: Check if the device is already locked for this session.
+    const lockKey = `attendance-device-lock-v1-${new Date().toISOString().slice(0, 10)}-${courseName || 'general'}`;
+    if (!bypassRestrictions && localStorage.getItem(lockKey)) {
+      setStatus('device-locked');
+      return; // Stop processing if locked
+    }
+    
+    // 2. If in a special mode (like Kiosk), bypass validation and show the form directly.
+    if (bypassRestrictions) {
+        setStatus('form');
+        return;
+    }
+
+    // 3. Proceed with standard QR token and location validation.
+    if (!token) {
+        setStatus('error');
+        setMessage('Session link invalid. Please re-scan.');
+        return;
+    }
     
     const qrTime = parseInt(token, 10);
     const now = Date.now();
-    const isValid = !isNaN(qrTime) && (now - qrTime < 60000); 
+    const isValid = !isNaN(qrTime) && (now - qrTime < 60000); // 60-second validity
     
     if (isValid) {
         if (geoConstraints) {
@@ -85,15 +98,28 @@ export const StudentView: React.FC<StudentViewProps> = ({
             navigator.geolocation.getCurrentPosition(
                 (pos) => {
                     const dist = getDistanceFromLatLonInM(geoConstraints.lat, geoConstraints.lng, pos.coords.latitude, pos.coords.longitude);
-                    if (dist - pos.coords.accuracy <= geoConstraints.radius) setStatus('form');
-                    else { setStatus('error'); setMessage(`Location Mismatch: ${Math.round(dist)}m away.`); }
+                    // Allow for GPS accuracy margin
+                    if (dist - pos.coords.accuracy <= geoConstraints.radius) {
+                        setStatus('form');
+                    } else {
+                        setStatus('error');
+                        setMessage(`Location Mismatch: ${Math.round(dist)}m away.`);
+                    }
                 },
-                (err) => { setStatus('error'); setMessage('GPS access is required for verification.'); },
+                (err) => {
+                    setStatus('error');
+                    setMessage('GPS access is required for verification.');
+                },
                 { enableHighAccuracy: true, timeout: 15000 }
             );
-        } else setStatus('form');
-    } else { setStatus('error'); setMessage('QR Code expired. Scan the newest code.'); }
-  }, [token, bypassRestrictions, geoConstraints, status]);
+        } else {
+            setStatus('form');
+        }
+    } else {
+        setStatus('error');
+        setMessage('QR Code expired. Scan the newest code.');
+    }
+  }, [bypassRestrictions, courseName, geoConstraints, token]);
 
   useEffect(() => {
     if (status === 'show-student-qr' && canvasRef.current && studentQrData) {
