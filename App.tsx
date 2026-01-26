@@ -61,7 +61,7 @@ const App: React.FC = () => {
   });
 
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbyumw5vudgBhpXL-WCODdJ9lnLS5gN_T4rRbOPkeIkYMtP5jM43yO8A8s78AbuE8jID/exec';
+    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbx3MQp5DqUY3PEe8dQxgLr4icrbPzV0gROrfA48eQcPHRqde2KBuf4ZF_GsGNbgw1qU/exec';
   });
 
   useEffect(() => {

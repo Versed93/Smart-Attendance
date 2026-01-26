@@ -15,8 +15,8 @@ var CONFIG = {
   // --- NEW: DYNAMIC WEEKLY SHEET SELECTION ---
   // The first day of Week 1 of the semester, in "YYYY-MM-DD" format.
   // The script calculates the week number from this date. For best results, this should be a Monday.
-  // EXAMPLE: "2024-07-22" for a semester starting on Monday, July 22nd 2024.
-  semesterStartDate: "2024-07-22",
+  // EXAMPLE: Set to "2024-05-27" for the semester where Week 9 starts on July 22nd, 2024.
+  semesterStartDate: "2024-05-27",
 
   // The prefix for your weekly sheets (e.g., "W" for sheets named "W6", "W7", etc.)
   sheetNamePrefix: "W",
