@@ -4,7 +4,7 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v29.0)
+ * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v30.0)
  * With dynamic weekly sheet selection.
  * By Ten Tat Jian
  */
@@ -135,6 +135,12 @@ function processEntry(item, doc) {
       weekNumber = 1;
     }
     
+    // NEW RULE: Do not write to sheets for weeks 1-5.
+    if (weekNumber < 6) {
+      Logger.log("Skipping record for Student ID " + item.id + ". Reason: Calculated week (" + weekNumber + ") is before the minimum of W6. Record will not be saved.");
+      return; // Abort processing for this record.
+    }
+    
     var targetSheetName = CONFIG.sheetNamePrefix + weekNumber;
     sheet = doc.getSheetByName(targetSheetName);
 
@@ -205,7 +211,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
   return (
     <div className="bg-white p-6 rounded-3xl border-2 border-gray-100 space-y-4">
       <div className="flex justify-between items-center">
-        <h4 className="text-xs font-black text-gray-900 uppercase tracking-widest">Apps Script v29.0</h4>
+        <h4 className="text-xs font-black text-gray-900 uppercase tracking-widest">Apps Script v30.0</h4>
         <button 
           onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
           className={`text-[9px] px-4 py-2 rounded-xl font-black transition-all ${copied ? 'bg-green-600 text-white' : 'bg-indigo-600 text-white hover:bg-black'}`}
@@ -217,7 +223,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
       <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
         <div className="bg-amber-100 p-1.5 rounded-lg text-amber-600 shrink-0">⚠️</div>
         <p className="text-[10px] text-amber-800 leading-relaxed font-bold uppercase">
-          V29.0 REQUIRED: Script now supports dynamic weekly sheets (e.g., "W6", "W7"). Please update your script and configure the <code className="bg-amber-200 text-amber-900 px-1.5 py-0.5 rounded-md font-mono">semesterStartDate</code>.
+          V30.0 REQUIRED: The script now prevents writing to sheets before Week 6 (W1-W5). Please update your script to apply this new data validation rule.
         </p>
       </div>
 
