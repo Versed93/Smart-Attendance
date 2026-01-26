@@ -6,7 +6,7 @@ const appScriptCode = `
 /**
  * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v31.2)
  * With dynamic weekly sheet selection and enhanced debugging.
- * By [Lecturer's Name]
+ * By Jaibi Sabian
  *
  * HOW TO DEBUG: If data goes to the wrong week, go to your Apps Script project.
  * From the left menu, select "Executions". Find the recent failed or completed
@@ -20,8 +20,8 @@ var CONFIG = {
   // --- NEW: DYNAMIC WEEKLY SHEET SELECTION ---
   // The first day of Week 1 of the semester, in "YYYY-MM-DD" format.
   // THIS IS THE MOST IMPORTANT SETTING. For best results, this should be a Monday.
-  // EXAMPLE: Set to "2024-06-03" for the semester where Week 9 starts on July 29th, 2024.
-  semesterStartDate: "2024-06-03",
+  // EXAMPLE: Set to "2025-12-01" for the semester where Week 9 starts on January 26th, 2026.
+  semesterStartDate: "2025-12-01",
 
   // The prefix for your weekly sheets (e.g., "W" for sheets named "W6", "W7", etc.)
   sheetNamePrefix: "W",
