@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { TeacherView } from './components/TeacherView';
 import { StudentView } from './components/StudentView';
 import { LoginView } from './components/LoginView';
@@ -9,8 +9,10 @@ import { FIREBASE_CONFIG } from './firebaseConfig';
 
 type View = 'teacher' | 'student';
 
-const SCRIPT_URL_KEY = 'attendance-script-url-v55'; 
+const SCRIPT_URL_KEY = 'attendance-script-url-v58'; 
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
+const VIEW_PREF_KEY = 'attendance-view-pref-v1';
+const KIOSK_PREF_KEY = 'attendance-kiosk-pref-v1';
 const KNOWN_STUDENTS_KEY = 'attendance-known-students-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
 const LAST_SCAN_DATE_KEY = 'attendance-last-scan-date-v1';
@@ -27,11 +29,18 @@ const App: React.FC = () => {
   const lngParam = urlParams.get('lng');
   const radParam = urlParams.get('rad');
   
-  const initialView: View = token ? 'student' : 'teacher';
+  const savedView = localStorage.getItem(VIEW_PREF_KEY) as View;
+  const initialView: View = token ? 'student' : (savedView || 'teacher');
 
   const [view, setView] = useState<View>(initialView);
-  const [isKioskMode, setIsKioskMode] = useState(false);
-  const [isAuthenticated, setIsAuthenticated] = useState(() => localStorage.getItem(AUTH_KEY) === 'true');
+  const [isKioskMode, setIsKioskMode] = useState(() => localStorage.getItem(KIOSK_PREF_KEY) === 'true');
+  
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+      const auth = localStorage.getItem(AUTH_KEY) === 'true';
+      const kiosk = localStorage.getItem(KIOSK_PREF_KEY) === 'true';
+      return auth && !kiosk; 
+  });
+
   const [attendanceList, setAttendanceList] = useState<Student[]>([]);
   
   const [knownStudents, setKnownStudents] = useState<PreRegisteredStudent[]>(() => {
@@ -52,8 +61,18 @@ const App: React.FC = () => {
   });
 
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbwyrUEtOFgr-RHgk1-NBT4UljHWInbqd6w4nhqzqKJnKtmwybxNb3Y8JkF2KApZo-az/exec';
+    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbxmX2cLA1ApszeZ8uTUNkzKIvrRDyOyXcLppauarVTYuDtuCJA5eGibP9RPeKh_iY7u/exec';
   });
+
+  useEffect(() => {
+    if (!token) {
+        localStorage.setItem(VIEW_PREF_KEY, view);
+    }
+  }, [view, token]);
+
+  useEffect(() => {
+    localStorage.setItem(KIOSK_PREF_KEY, isKioskMode.toString());
+  }, [isKioskMode]);
 
   const checkAndClearForNewDay = useCallback(() => {
     const today = new Date().toISOString().slice(0, 10);
@@ -76,13 +95,11 @@ const App: React.FC = () => {
   }, [scriptUrl]);
   
   const fetchFirebaseLiveAttendance = useCallback(async () => {
-    if (view !== 'teacher' || !FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
+    if (view !== 'teacher' || !FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET || !isAuthenticated) return;
     try {
         const response = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
         if (!response.ok && response.status !== 404) return;
-        
         const data = response.status === 404 ? null : await response.json();
-        
         if (data) {
             const firebaseStudents: Student[] = Object.values(data);
             setAttendanceList(firebaseStudents.sort((a, b) => b.timestamp - a.timestamp));
@@ -90,17 +107,17 @@ const App: React.FC = () => {
             setAttendanceList([]);
         }
     } catch (e) {
-        console.warn("Polling from Firebase failed", e);
+        console.warn("Polling failed", e);
     }
-  }, [view]);
+  }, [view, isAuthenticated]);
 
   useEffect(() => {
-    if (view === 'teacher') {
+    if (view === 'teacher' && isAuthenticated) {
         fetchFirebaseLiveAttendance();
         const interval = setInterval(fetchFirebaseLiveAttendance, 8000); 
         return () => clearInterval(interval);
     }
-  }, [fetchFirebaseLiveAttendance, view]);
+  }, [fetchFirebaseLiveAttendance, view, isAuthenticated]);
 
   const handleLogin = (password: string) => {
     if (password === LECTURER_PASSWORD) {
@@ -111,10 +128,20 @@ const App: React.FC = () => {
     return false;
   };
 
-  const handleLogout = () => {
+  const handleLogout = useCallback(() => {
     setIsAuthenticated(false);
     localStorage.removeItem(AUTH_KEY);
-  };
+    localStorage.removeItem(KIOSK_PREF_KEY);
+    setView('teacher'); 
+    setIsKioskMode(false);
+  }, []);
+
+  const handleEnterKiosk = useCallback(() => {
+      setIsKioskMode(true);
+      setView('student');
+      localStorage.removeItem(AUTH_KEY); 
+      setIsAuthenticated(false);
+  }, []);
   
   const handleNewSession = async () => {
     if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
@@ -128,14 +155,13 @@ const App: React.FC = () => {
     }
   };
 
-  const addStudent = async (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number, mark?: number, absenceReason?: string) => {
+  const addStudent = async (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number, absenceReason?: string) => {
       if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) {
-          return { success: false, message: "System error: Config missing." };
+          return { success: false, message: "Configuration error." };
       }
-      
       checkAndClearForNewDay();
       const timestamp = overrideTimestamp || Date.now();
-      const studentData: Student = { name, studentId, email, status, timestamp, courseName, mark, absenceReason };
+      const studentData: Student = { name, studentId, email, status, timestamp, courseName, absenceReason };
       
       setAttendanceList(prev => [{ ...studentData }, ...prev.filter(s => s.studentId !== studentId)]);
 
@@ -148,27 +174,22 @@ const App: React.FC = () => {
               method: 'PUT',
               body: JSON.stringify(studentData),
           });
-          
           await Promise.all([p1, p2]);
-
           if (scriptUrl) {
               fetch(scriptUrl, {
                   method: 'POST',
                   mode: 'no-cors',
                   body: JSON.stringify({ [studentId]: studentData }),
-              }).catch(err => console.warn("Google Sheet sync deferred", err));
+              }).catch(err => console.warn("Deferred sync", err));
           }
-          
           setKnownStudents(prev => {
              if (!prev.some(s => s.id === studentId)) return [...prev, { id: studentId, name }];
              return prev;
           });
           localStorage.setItem(LAST_SCAN_DATE_KEY, new Date().toISOString().slice(0, 10));
-
-          return { success: true, message: "Attendance verified and recorded." };
+          return { success: true, message: "Record submitted successfully." };
       } catch (error) {
-          console.error("Submission error:", error);
-          return { success: false, message: "Connection error. Please try again." };
+          return { success: false, message: "Connection lost. Please try again." };
       }
   };
 
@@ -177,29 +198,22 @@ const App: React.FC = () => {
       setAttendanceList(prev => prev.filter(s => !ids.includes(s.studentId)));
       const now = Date.now();
       const promises: Promise<any>[] = [];
-
       for (const id of ids) {
         const student = attendanceList.find(s => s.studentId === id) || knownStudents.find(k => k.id === id);
-        const name = student ? student.name : 'Unknown';
         const removalData: Student = {
           studentId: id,
-          name: name,
+          name: student?.name || 'Unknown',
           email: `${id}@STUDENT.UTS.EDU.MY`,
           status: 'A',
           timestamp: now,
           courseName,
-          mark: 0,
-          absenceReason: 'Lecturer Removed'
+          absenceReason: 'Lecturer Override'
         };
-        
         promises.push(
           fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(removalData) }),
           fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'DELETE' })
         );
-
-        if (scriptUrl) {
-           fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ [id]: removalData }) });
-        }
+        if (scriptUrl) fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ [id]: removalData }) });
       }
       await Promise.all(promises);
   };
@@ -208,52 +222,45 @@ const App: React.FC = () => {
       setAttendanceList(prev => prev.map(s => ids.includes(s.studentId) ? { ...s, status, absenceReason } : s));
       const now = Date.now();
       const updatePayload: Record<string, Student> = {};
-
       for (const id of ids) {
         const student = attendanceList.find(s => s.studentId === id);
         if (student) {
            const updateData: Student = { ...student, status, timestamp: now, courseName, absenceReason };
            updatePayload[id] = updateData;
-           
            fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) });
            fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) });
         }
       }
-
       if (scriptUrl && Object.keys(updatePayload).length > 0) {
           fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(updatePayload) });
       }
   };
 
   const handleSendTestRecord = async (courseName: string): Promise<{ success: boolean; message: string }> => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) {
-      return { success: false, message: "Firebase missing." };
-    }
-    const testRecord: Student = { name: 'TEST STUDENT', studentId: 'TEST001', email: 'test@student.uts.edu.my', status: 'P', timestamp: Date.now(), courseName: courseName || 'Test Session', mark: 10, absenceReason: '' };
+    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return { success: false, message: "Firebase URL missing." };
+    const testRecord: Student = { name: 'CONNECTION TEST', studentId: 'TEST999', email: 'test@student.uts.edu.my', status: 'P', timestamp: Date.now(), courseName: courseName || 'Connectivity Test', absenceReason: '' };
     try {
-      await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/TEST001.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(testRecord) });
-      if (scriptUrl) {
-          await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ 'TEST001': testRecord }) });
-      }
-      return { success: true, message: "Test record sent. Ensure you have deployed v26.0 of the script." };
-    } catch (e) { return { success: false, message: "Test failed." }; }
+      await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/TEST999.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(testRecord) });
+      if (scriptUrl) await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ 'TEST999': testRecord }) });
+      return { success: true, message: "Test signal sent to Cloud." };
+    } catch (e) { return { success: false, message: "Cloud test failed." }; }
   };
 
   const handleCheckPendingRecords = async (): Promise<{ success: boolean; message: string; count: number }> => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return { success: false, message: "Firebase missing.", count: 0 };
+    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return { success: false, message: "Firebase URL missing.", count: 0 };
     try {
       const res = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
       const data = await res.json();
-      return { success: true, message: data ? `Found ${Object.keys(data).length} records.` : "None pending.", count: data ? Object.keys(data).length : 0 };
-    } catch (e) { return { success: false, message: "Error checking records.", count: 0 }; }
+      return { success: true, message: data ? `Queue length: ${Object.keys(data).length}` : "Synchronization queue is empty.", count: data ? Object.keys(data).length : 0 };
+    } catch (e) { return { success: false, message: "Status check failed.", count: 0 }; }
   };
   
   const handleForceSync = async (): Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number }> => {
-    if (!scriptUrl) return { success: false, message: "Script URL missing.", syncedCount: 0, errorCount: 0, total: 0 };
+    if (!scriptUrl) return { success: false, message: "Script Endpoint missing.", syncedCount: 0, errorCount: 0, total: 0 };
     try {
-        const res = await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ "action": "SYNC_QUEUE" }) });
-        return { success: true, message: "Sync command sent. Script will process pending records.", syncedCount: 0, errorCount: 0, total: 0 };
-    } catch (e) { return { success: false, message: "Sync failed.", syncedCount: 0, errorCount: 0, total: 0 }; }
+        await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ "action": "SYNC_QUEUE" }) });
+        return { success: true, message: "Cloud synchronization command triggered.", syncedCount: 0, errorCount: 0, total: 0 };
+    } catch (e) { return { success: false, message: "Trigger failed.", syncedCount: 0, errorCount: 0, total: 0 }; }
   };
 
   return (
@@ -268,8 +275,8 @@ const App: React.FC = () => {
                      onNewSession={handleNewSession}
                      scriptUrl={scriptUrl}
                      onScriptUrlChange={setScriptUrl}
-                     onOpenKiosk={() => { setIsKioskMode(true); setView('student'); }}
-                     onManualAdd={(name, id, email, status, courseName, mark, reason) => addStudent(name, id, email, status, courseName, undefined, mark, reason)}
+                     onOpenKiosk={handleEnterKiosk}
+                     onManualAdd={(name, id, email, status, courseName, reason) => addStudent(name, id, email, status, courseName, undefined, reason)}
                      addStudent={addStudent}
                      onLogout={handleLogout}
                      knownStudents={knownStudents}
@@ -283,12 +290,12 @@ const App: React.FC = () => {
            <div className="flex-1 flex flex-col items-center justify-center p-4 bg-gray-50">
                <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-6 border border-gray-100">
                    <StudentView 
-                       markAttendance={(name, id, email) => addStudent(name, id, email, 'P', courseNameParam || 'General')}
+                       markAttendance={(name, id, email) => addStudent(name, id, email, 'P', courseNameParam || 'General Session')}
                        token={token || (isKioskMode ? Date.now().toString() : '')}
                        courseName={courseNameParam || undefined}
                        geoConstraints={latParam && lngParam ? { lat: parseFloat(latParam), lng: parseFloat(lngParam), radius: radParam ? parseFloat(radParam) : 150 } : undefined}
                        bypassRestrictions={isKioskMode}
-                       onExit={() => { setIsKioskMode(false); setView('teacher'); }}
+                       onExit={handleLogout}
                        isOfflineScan={isOfflineScan}
                        knownStudents={knownStudents}
                    />
