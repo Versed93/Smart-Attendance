@@ -4,9 +4,14 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v30.0)
- * With dynamic weekly sheet selection.
- * By Ten Tat Jian
+ * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v31.1)
+ * With dynamic weekly sheet selection and enhanced debugging.
+ * By [Lecturer's Name]
+ *
+ * HOW TO DEBUG: If data goes to the wrong week, go to your Apps Script project.
+ * From the left menu, select "Executions". Find the recent failed or completed
+ * run and click on it to view the detailed logs from Logger.log() below.
+ * This will show you exactly how the week number was calculated.
  */
 
 // --- CONFIGURATION ---
@@ -14,7 +19,7 @@ const appScriptCode = `
 var CONFIG = {
   // --- NEW: DYNAMIC WEEKLY SHEET SELECTION ---
   // The first day of Week 1 of the semester, in "YYYY-MM-DD" format.
-  // The script calculates the week number from this date. For best results, this should be a Monday.
+  // THIS IS THE MOST IMPORTANT SETTING. For best results, this should be a Monday.
   // EXAMPLE: Set to "2024-05-27" for the semester where Week 9 starts on July 22nd, 2024.
   semesterStartDate: "2024-05-27",
 
@@ -56,7 +61,7 @@ function doPost(e) {
     }
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
   } catch(err) {
-    Logger.log(err);
+    Logger.log("FATAL ERROR in doPost: " + err.toString());
     return ContentService.createTextOutput(JSON.stringify({error:err.toString()})).setMimeType(ContentService.MimeType.JSON);
   } finally {
     lock.releaseLock();
@@ -122,13 +127,30 @@ function handleBulkRecords(data, source) {
 function processEntry(item, doc) {
   var sheet;
   try {
-    // Calculate week number relative to the configured semester start date
     var recordDate = new Date(item.timestamp);
-    var startDate = new Date(CONFIG.semesterStartDate);
-    var timeDiff = recordDate.getTime() - startDate.getTime();
+    var startDate;
     
-    // Calculate days passed, then divide by 7 for weeks. Add 1 because week numbering starts at 1.
+    try {
+        var dateParts = CONFIG.semesterStartDate.split("-");
+        // new Date(year, monthIndex, day). This creates the date in the script's local timezone.
+        startDate = new Date(parseInt(dateParts[0], 10), parseInt(dateParts[1], 10) - 1, parseInt(dateParts[2], 10));
+        if (isNaN(startDate.getTime())) throw new Error("Invalid date format parsed.");
+    } catch (dateErr) {
+        Logger.log("FATAL: Could not parse semesterStartDate: '" + CONFIG.semesterStartDate + "'. Please ensure it's in 'YYYY-MM-DD' format. Error: " + dateErr.toString());
+        return; // Stop processing if date is invalid
+    }
+
+    var timeDiff = recordDate.getTime() - startDate.getTime();
     var weekNumber = Math.floor(timeDiff / (1000 * 60 * 60 * 24 * 7)) + 1;
+    
+    // Detailed logging for debugging week calculation issues
+    Logger.log("--- Week Calculation Debug ---");
+    Logger.log("Student ID: " + item.id);
+    Logger.log("Record Timestamp: " + item.timestamp + " -> " + recordDate.toString());
+    Logger.log("Semester Start Date Config: '" + CONFIG.semesterStartDate + "' -> " + startDate.toString());
+    Logger.log("Time Difference (ms): " + timeDiff);
+    Logger.log("Calculated Week Number: " + weekNumber);
+    Logger.log("----------------------------");
 
     if (weekNumber < 1) {
       Logger.log("Record date is before semester start date. Defaulting to Week 1.");
@@ -145,19 +167,16 @@ function processEntry(item, doc) {
     sheet = doc.getSheetByName(targetSheetName);
 
     if (!sheet) {
-      throw new Error("Sheet '" + targetSheetName + "' not found. Check if the sheet exists and the name matches the format (e.g., 'W6').");
+      throw new Error("Sheet '" + targetSheetName + "' not found. Check if the sheet exists and the name matches the format (e.g., 'W9').");
     }
   } catch(e) {
     Logger.log("ERROR: " + e.toString() + " Falling back to first available sheet as a last resort.");
-    // Fallback for safety if date config is wrong or sheet is missing. Tries to find any sheet starting with the prefix.
-    sheet = doc.getSheets().find(function(s) { 
-      return s.getName().indexOf(CONFIG.sheetNamePrefix) === 0;
-    }) || doc.getSheets()[0];
+    sheet = doc.getSheets().find(function(s) { return s.getName().indexOf(CONFIG.sheetNamePrefix) === 0; }) || doc.getSheets()[0];
   }
   
   if (!sheet) {
     Logger.log("FATAL: No valid sheet could be found. Aborting entry for student ID: " + item.id);
-    return; // Cannot proceed without a valid sheet
+    return;
   }
 
   var sessionHeadersRange = sheet.getRange(CONFIG.sessionHeaderRow, CONFIG.firstSessionCol, 1, sheet.getLastColumn() - CONFIG.firstSessionCol + 1);
@@ -211,7 +230,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
   return (
     <div className="bg-white p-6 rounded-3xl border-2 border-gray-100 space-y-4">
       <div className="flex justify-between items-center">
-        <h4 className="text-xs font-black text-gray-900 uppercase tracking-widest">Apps Script v30.0</h4>
+        <h4 className="text-xs font-black text-gray-900 uppercase tracking-widest">Apps Script v31.1</h4>
         <button 
           onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
           className={`text-[9px] px-4 py-2 rounded-xl font-black transition-all ${copied ? 'bg-green-600 text-white' : 'bg-indigo-600 text-white hover:bg-black'}`}
@@ -223,7 +242,7 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
       <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
         <div className="bg-amber-100 p-1.5 rounded-lg text-amber-600 shrink-0">⚠️</div>
         <p className="text-[10px] text-amber-800 leading-relaxed font-bold uppercase">
-          V30.0 REQUIRED: The script now prevents writing to sheets before Week 6 (W1-W5). Please update your script to apply this new data validation rule.
+          V31.1 Recommended: Minor comment update for clarity. If data saves to the wrong week, check the 'semesterStartDate' in your script. Detailed logs are available in your Apps Script Executions history.
         </p>
       </div>
 
