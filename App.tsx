@@ -29,17 +29,20 @@ const App: React.FC = () => {
   const lngParam = urlParams.get('lng');
   const radParam = urlParams.get('rad');
   
-  const savedView = localStorage.getItem(VIEW_PREF_KEY) as View;
-  const initialView: View = token ? 'student' : (savedView || 'teacher');
-
-  const [view, setView] = useState<View>(initialView);
-  const [isKioskMode, setIsKioskMode] = useState(() => localStorage.getItem(KIOSK_PREF_KEY) === 'true');
-  
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
       const auth = localStorage.getItem(AUTH_KEY) === 'true';
       const kiosk = localStorage.getItem(KIOSK_PREF_KEY) === 'true';
       return auth && !kiosk; 
   });
+
+  const savedView = localStorage.getItem(VIEW_PREF_KEY) as View;
+  
+  // SECURITY FIX: If not authenticated and no token is present, always force 'student' view.
+  // This ensures that students landing on the root domain see the student portal, not the login screen.
+  const initialView: View = (token || !isAuthenticated) ? 'student' : (savedView || 'teacher');
+
+  const [view, setView] = useState<View>(initialView);
+  const [isKioskMode, setIsKioskMode] = useState(() => localStorage.getItem(KIOSK_PREF_KEY) === 'true');
 
   const [attendanceList, setAttendanceList] = useState<Student[]>([]);
   
@@ -123,6 +126,7 @@ const App: React.FC = () => {
     if (password === LECTURER_PASSWORD) {
         setIsAuthenticated(true);
         localStorage.setItem(AUTH_KEY, 'true');
+        setView('teacher');
         return true;
     }
     return false;
@@ -132,7 +136,7 @@ const App: React.FC = () => {
     setIsAuthenticated(false);
     localStorage.removeItem(AUTH_KEY);
     localStorage.removeItem(KIOSK_PREF_KEY);
-    setView('teacher'); 
+    setView('student'); 
     setIsKioskMode(false);
   }, []);
 
@@ -160,6 +164,21 @@ const App: React.FC = () => {
           return { success: false, message: "Configuration error." };
       }
       checkAndClearForNewDay();
+      
+      // DUPLICATE PROTECTION: Check if student already exists in local list
+      if (status === 'P' && attendanceList.some(s => s.studentId === studentId && s.status === 'P')) {
+        return { success: false, message: "Attendance already recorded for this student ID." };
+      }
+
+      // DUPLICATE PROTECTION: Check if student already exists in Firebase for this session
+      try {
+        const checkRes = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}/${studentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+        const existingData = await checkRes.json();
+        if (existingData && existingData.status === 'P' && status === 'P') {
+            return { success: false, message: "You have already checked in for this session." };
+        }
+      } catch (e) {}
+
       const timestamp = overrideTimestamp || Date.now();
       const studentData: Student = { name, studentId, email, status, timestamp, courseName, absenceReason };
       
@@ -298,6 +317,7 @@ const App: React.FC = () => {
                        onExit={handleLogout}
                        isOfflineScan={isOfflineScan}
                        knownStudents={knownStudents}
+                       onSwitchToTeacher={() => setView('teacher')}
                    />
                </div>
            </div>

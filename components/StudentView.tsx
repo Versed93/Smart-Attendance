@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { CheckCircleIcon } from './icons/CheckCircleIcon';
@@ -6,6 +5,11 @@ import { MapPinIcon } from './icons/MapPinIcon';
 import type { PreRegisteredStudent } from '../studentList';
 import { LockClosedIcon } from './icons/LockClosedIcon';
 import { ExclamationTriangleIcon } from './icons/ExclamationTriangleIcon';
+import { QrScanner } from './QrScanner';
+import { CameraIcon } from './icons/CameraIcon';
+import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
+import { FIREBASE_CONFIG } from '../firebaseConfig';
+import { UserIcon } from './icons/UserIcon';
 
 interface StudentViewProps {
   markAttendance: (name: string, studentId: string, email: string) => Promise<{ success: boolean, message: string }>;
@@ -16,11 +20,13 @@ interface StudentViewProps {
   onExit?: () => void;
   isOfflineScan?: boolean;
   knownStudents: PreRegisteredStudent[];
+  onSwitchToTeacher?: () => void;
 }
 
-type Status = 'validating' | 'validating-gps' | 'form' | 'submitting' | 'success' | 'error' | 'show-student-qr' | 'device-locked';
+type Status = 'landing' | 'validating' | 'validating-gps' | 'form' | 'submitting' | 'success' | 'error' | 'show-student-qr' | 'device-locked' | 'checking-firebase';
 
 const STUDENT_PROFILE_KEY = 'attendance-student-profile-v1';
+const SESSION_ID = new Date().toISOString().slice(0, 10);
 
 const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2: number) => {
   const R = 6371e3;
@@ -35,13 +41,14 @@ const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2
 
 export const StudentView: React.FC<StudentViewProps> = ({ 
   markAttendance, 
-  token, 
-  courseName, 
+  token: initialToken, 
+  courseName: initialCourseName, 
   geoConstraints, 
   bypassRestrictions = false, 
   onExit, 
   isOfflineScan = false,
-  knownStudents
+  knownStudents,
+  onSwitchToTeacher
 }) => {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
@@ -51,222 +58,326 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [message, setMessage] = useState('');
   const [formError, setFormError] = useState('');
   const [studentQrData, setStudentQrData] = useState('');
+  const [showScanner, setShowScanner] = useState(false);
+  const [token, setToken] = useState(initialToken);
+  const [courseName, setCourseName] = useState(initialCourseName);
+  
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   
-  // Effect to pre-fill the form with the student's saved profile
   useEffect(() => {
     const savedProfile = localStorage.getItem(STUDENT_PROFILE_KEY);
     if (savedProfile) {
         try {
-            const { name: sName, studentId: sId, email: sEmail } = JSON.parse(savedProfile);
+            const { name: sName, studentId: sId } = JSON.parse(savedProfile);
             if (sName) setName(sName);
             if (sId) setStudentId(sId);
-            if (sEmail) setEmail(sEmail);
         } catch (e) {}
     }
-  }, []); // Runs only once when the component mounts
+  }, []);
 
-  // This single, robust effect handles the entire initial validation flow
   useEffect(() => {
-    // 1. Highest priority: Check if the device is already locked for this session.
-    const lockKey = `attendance-device-lock-v1-${new Date().toISOString().slice(0, 10)}-${courseName || 'general'}`;
-    if (!bypassRestrictions && localStorage.getItem(lockKey)) {
-      setStatus('device-locked');
-      return; // Stop processing if locked
-    }
-    
-    // 2. If in a special mode (like Kiosk), bypass validation and show the form directly.
-    if (bypassRestrictions) {
-        setStatus('form');
-        return;
-    }
+    const checkStatus = async () => {
+        const lockKey = `attendance-device-lock-v1-${SESSION_ID}-${courseName || 'general'}`;
+        
+        if (!bypassRestrictions && localStorage.getItem(lockKey)) {
+          setStatus('device-locked');
+          return;
+        }
 
-    // 3. Proceed with standard QR token and location validation.
-    if (!token) {
-        setStatus('error');
-        setMessage('Session link invalid. Please re-scan.');
-        return;
-    }
-    
-    const qrTime = parseInt(token, 10);
-    const now = Date.now();
-    const isValid = !isNaN(qrTime) && (now - qrTime < 60000); // 60-second validity
-    
-    if (isValid) {
-        if (geoConstraints) {
+        if (!token) {
+            setStatus('landing');
+            return;
+        }
+
+        const qrTime = parseInt(token, 10);
+        const now = Date.now();
+        const isTokenValid = !isNaN(qrTime) && (now - qrTime < 60000); 
+        
+        if (!isTokenValid && !bypassRestrictions) {
+            setStatus('error');
+            setMessage('QR Code expired. Scan the newest code.');
+            return;
+        }
+
+        if (studentId && !bypassRestrictions) {
+            setStatus('checking-firebase');
+            try {
+                const res = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}/${studentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+                const data = await res.json();
+                if (data && data.status === 'P') {
+                    setStatus('device-locked');
+                    localStorage.setItem(lockKey, 'true');
+                    return;
+                }
+            } catch (e) {}
+        }
+
+        if (geoConstraints && !bypassRestrictions) {
             setStatus('validating-gps');
             navigator.geolocation.getCurrentPosition(
                 (pos) => {
                     const dist = getDistanceFromLatLonInM(geoConstraints.lat, geoConstraints.lng, pos.coords.latitude, pos.coords.longitude);
-                    // Allow for GPS accuracy margin
                     if (dist - pos.coords.accuracy <= geoConstraints.radius) {
                         setStatus('form');
                     } else {
                         setStatus('error');
-                        setMessage(`Location Mismatch: ${Math.round(dist)}m away.`);
+                        setMessage(`Location Mismatch: ${Math.round(dist)}m away. Move closer to the classroom.`);
                     }
                 },
                 (err) => {
                     setStatus('error');
-                    setMessage('GPS access is required for verification.');
+                    setMessage('GPS access is required for security verification.');
                 },
                 { enableHighAccuracy: true, timeout: 15000 }
             );
         } else {
             setStatus('form');
         }
-    } else {
-        setStatus('error');
-        setMessage('QR Code expired. Scan the newest code.');
-    }
-  }, [bypassRestrictions, courseName, geoConstraints, token]);
+    };
+
+    checkStatus();
+  }, [bypassRestrictions, courseName, geoConstraints, token, studentId]);
 
   useEffect(() => {
     if (status === 'show-student-qr' && canvasRef.current && studentQrData) {
-        QRCode.toCanvas(canvasRef.current, studentQrData, { width: 320, margin: 2 });
+        QRCode.toCanvas(canvasRef.current, studentQrData, { width: 320, margin: 2 }, (err) => {
+            if (err) console.error(err);
+        });
     }
   }, [status, studentQrData]);
-  
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setFormError('');
-    if (!name.trim() || !studentId.trim()) { setFormError('Please fill in required fields.'); return; }
-    if (!/^[A-Z]{3}\d{8}$/.test(studentId)) { setFormError('ID Format: FIA24001006'); return; }
-
-    localStorage.setItem(STUDENT_PROFILE_KEY, JSON.stringify({ name, studentId, email }));
-
-    const lockKey = `attendance-device-lock-v1-${new Date().toISOString().slice(0, 10)}-${courseName || 'general'}`;
-
+    if (!name || !studentId) { setFormError('All fields required.'); return; }
+    
+    localStorage.setItem(STUDENT_PROFILE_KEY, JSON.stringify({ name, studentId }));
+    
     if (isOfflineScan) {
+        setStudentQrData(JSON.stringify({ name, studentId, email: `${studentId}@STUDENT.UTS.EDU.MY`, timestamp: Date.now() }));
+        setStatus('show-student-qr');
+        return;
+    }
+
+    setStatus('submitting');
+    const result = await markAttendance(name, studentId, `${studentId}@STUDENT.UTS.EDU.MY`);
+    if (result.success) {
+      setStatus('success');
+      const lockKey = `attendance-device-lock-v1-${SESSION_ID}-${courseName || 'general'}`;
       if (!bypassRestrictions) localStorage.setItem(lockKey, 'true');
-      setStudentQrData(JSON.stringify({ name, studentId, email, timestamp: Date.now(), status: 'P' }));
-      setStatus('show-student-qr');
     } else {
-      setStatus('submitting');
-      // Optimistically lock the device before the async call.
-      if (!bypassRestrictions) {
-        localStorage.setItem(lockKey, 'true');
-      }
-      
-      const result = await markAttendance(name, studentId, email);
+      setStatus('error');
       setMessage(result.message);
-      
-      if (result.success) {
-        setStatus('success');
-        // Lock is already set.
-      } else {
-        setStatus('error');
-        // If submission failed, remove the lock to allow retry.
-        if (!bypassRestrictions) {
-          localStorage.removeItem(lockKey);
-        }
-      }
     }
   };
 
   const handleIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const val = e.target.value.toUpperCase();
-      setStudentId(val);
-      const matched = knownStudents.find(s => s.id === val);
-      if (matched) { setName(matched.name); setIsNewStudent(false); } 
-      else { if (!isNewStudent && name) setName(''); setIsNewStudent(true); }
-      if (/^[A-Z]{3}\d{8}$/.test(val)) setEmail(`${val}@STUDENT.UTS.EDU.MY`);
+    const val = e.target.value.toUpperCase().trim();
+    setStudentId(val);
+    const matched = knownStudents.find(s => s.id === val);
+    if (matched) { 
+        setName(matched.name); 
+        setIsNewStudent(false); 
+        setFormError(''); 
+    } else { 
+        if (!isNewStudent) setName(''); 
+        setIsNewStudent(true); 
+    }
   };
 
-  if (status === 'device-locked') return (
-     <div className="text-center py-12 px-4 animate-in fade-in duration-500">
-        <div className="bg-red-50 rounded-full p-6 w-20 h-20 mx-auto mb-6 flex items-center justify-center border-2 border-red-100 shadow-sm"> 
-           <LockClosedIcon className="w-10 h-10 text-red-500" /> 
-        </div>
-        <h3 className="text-xl font-black text-gray-900 mb-2">Device Restricted</h3>
-        <p className="text-sm text-gray-500 max-w-xs mx-auto mb-4">You have already checked in for this session. Only one check-in per device is allowed.</p>
-        <div className="inline-flex items-center gap-2 px-3 py-1 bg-amber-50 text-amber-700 rounded text-[10px] font-bold border border-amber-200">
-           <ExclamationTriangleIcon className="w-3.5 h-3.5" />
-           <span>Security Lock Active</span>
-        </div>
-     </div>
-  );
+  const handleScanJoin = (data: string) => {
+      setShowScanner(false);
+      try {
+          const url = new URL(data);
+          const t = url.searchParams.get('t');
+          const c = url.searchParams.get('c');
+          if (t) {
+              setToken(t);
+              if (c) setCourseName(c);
+              setStatus('validating');
+          } else {
+              setStatus('error');
+              setMessage('Invalid session QR.');
+          }
+      } catch (e) {
+          setStatus('error');
+          setMessage('Invalid QR format. Please scan the official attendance code.');
+      }
+  };
 
-  if (status === 'validating' || status === 'submitting') return <div className="text-center py-12"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-brand-primary mx-auto"></div><p className="mt-4 text-gray-500 font-bold uppercase text-[10px] tracking-widest">{status === 'submitting' ? 'RECORDING...' : 'VERIFYING...'}</p></div>;
-  if (status === 'validating-gps') return <div className="text-center py-12"><MapPinIcon className="w-10 h-10 text-brand-primary mx-auto animate-pulse" /><p className="mt-4 text-gray-500 font-bold text-[10px] uppercase tracking-widest">Checking Location...</p></div>;
+  if (status === 'landing') {
+      return (
+          <div className="text-center space-y-10 animate-in fade-in duration-500 py-6">
+              <div className="flex flex-col items-center">
+                  <div className="w-20 h-20 bg-gray-900 text-white rounded-[2rem] flex items-center justify-center shadow-2xl mb-6 relative">
+                      <ShieldCheckIcon className="w-12 h-12" />
+                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-indigo-500 rounded-full border-2 border-white animate-pulse"></div>
+                  </div>
+                  <h1 className="text-4xl font-black text-gray-900 tracking-tighter leading-tight">UTS Portal</h1>
+                  <p className="text-[11px] font-black text-gray-400 mt-3 uppercase tracking-[0.4em]">Official Terminal</p>
+              </div>
+
+              <div className="space-y-6">
+                  {/* PRIMARY ACTION: Lecturer Portal - High Prominence */}
+                  <div className="relative group">
+                      <div className="absolute -inset-1 bg-gradient-to-r from-indigo-600 to-indigo-400 rounded-2xl blur opacity-15 group-hover:opacity-30 transition duration-1000 group-hover:duration-200"></div>
+                      <button 
+                          onClick={onSwitchToTeacher}
+                          className="relative w-full bg-gray-900 text-white font-black py-6 rounded-2xl hover:bg-black active:scale-95 transition-all shadow-2xl flex flex-col items-center justify-center gap-1 uppercase tracking-[0.1em] text-sm overflow-hidden"
+                      >
+                          <div className="flex items-center gap-3">
+                              <LockClosedIcon className="w-5 h-5 text-indigo-400" />
+                              Lecturer Access Portal
+                          </div>
+                          <span className="text-[8px] opacity-40 font-bold">Authorized Personnel Only</span>
+                      </button>
+                  </div>
+
+                  <div className="flex items-center gap-4 py-2">
+                      <div className="h-[1px] flex-1 bg-gray-100"></div>
+                      <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">or</span>
+                      <div className="h-[1px] flex-1 bg-gray-100"></div>
+                  </div>
+
+                  {/* SECONDARY ACTION: Join Session - Lower Prominence */}
+                  <button 
+                      onClick={() => setShowScanner(true)}
+                      className="w-full bg-white border-2 border-gray-100 text-gray-500 font-black py-5 rounded-2xl hover:bg-gray-50 hover:border-indigo-100 hover:text-indigo-600 active:scale-95 transition-all flex items-center justify-center gap-4 uppercase tracking-[0.1em] text-xs"
+                  >
+                      <CameraIcon className="w-5 h-5 opacity-60" />
+                      Student Check-in
+                  </button>
+              </div>
+
+              <div className="bg-gray-50 border border-gray-100 p-6 rounded-3xl">
+                  <p className="text-[10px] text-gray-400 font-bold leading-relaxed uppercase tracking-tight text-center">
+                      Welcome to the University of Technology Sarawak Attendance Terminal. Please select your access level.
+                  </p>
+              </div>
+
+              {showScanner && <QrScanner onScan={handleScanJoin} onClose={() => setShowScanner(false)} />}
+          </div>
+      );
+  }
+
+  if (status === 'device-locked') {
+    return (
+      <div className="text-center py-10 animate-in zoom-in duration-300">
+        <div className="w-20 h-20 bg-green-50 text-green-500 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-sm"><CheckCircleIcon className="w-12 h-12" /></div>
+        <h2 className="text-2xl font-black text-gray-900 mb-2">Record Verified</h2>
+        <p className="text-sm text-gray-400 font-bold uppercase tracking-widest mb-8">Attendance already recorded</p>
+        <div className="bg-gray-50 border border-gray-100 p-6 rounded-2xl">
+             <p className="text-xs font-bold text-gray-500 leading-relaxed uppercase tracking-tight">One submission is permitted per student per session. Please see your lecturer if you believe this is an error.</p>
+        </div>
+        <button onClick={() => window.location.reload()} className="mt-8 text-xs font-black text-brand-primary uppercase tracking-widest">Refresh Status</button>
+      </div>
+    );
+  }
+
+  if (status === 'validating' || status === 'validating-gps' || status === 'checking-firebase') {
+    return (
+      <div className="flex flex-col items-center justify-center py-12 text-center">
+        <div className="w-16 h-16 border-4 border-brand-primary border-t-transparent rounded-full animate-spin mb-6"></div>
+        <p className="text-sm font-black text-gray-900 uppercase tracking-widest">
+            {status === 'validating-gps' ? 'Verifying Proximity...' : 
+             status === 'checking-firebase' ? 'Retrieving Records...' : 
+             'Securing Session...'}
+        </p>
+        <p className="text-xs text-gray-400 font-bold mt-2 uppercase">Please wait a moment</p>
+      </div>
+    );
+  }
+
+  if (status === 'success') {
+    return (
+      <div className="text-center py-10 animate-in zoom-in duration-300">
+        <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircleIcon className="w-12 h-12" /></div>
+        <h2 className="text-2xl font-black text-gray-900 mb-2">Check-in Complete</h2>
+        <p className="text-sm text-gray-500 font-medium mb-8 px-4">Thank you, <b>{name}</b>. Your attendance for <b>{courseName || 'this session'}</b> has been successfully recorded.</p>
+        <button onClick={() => window.location.reload()} className="w-full bg-gray-900 text-white font-bold py-4 rounded-xl hover:bg-black transition-all active:scale-95 shadow-lg uppercase tracking-widest text-xs">Finish</button>
+      </div>
+    );
+  }
+
+  if (status === 'show-student-qr') {
+    return (
+        <div className="text-center py-6">
+            <h2 className="text-xl font-black text-gray-900 mb-2">Check-in Token</h2>
+            <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-6">Show this to your lecturer</p>
+            <div className="bg-white p-4 rounded-3xl border-4 border-gray-100 inline-block mb-8">
+                <canvas ref={canvasRef} className="rounded-xl" />
+            </div>
+            <div className="space-y-3">
+                <p className="text-sm font-black text-gray-900 leading-none">{name}</p>
+                <p className="text-xs font-mono font-bold text-gray-400">{studentId}</p>
+            </div>
+            <button onClick={() => setStatus('form')} className="mt-10 text-xs font-black text-brand-primary uppercase tracking-widest hover:underline">Edit Info</button>
+        </div>
+    );
+  }
+
+  if (status === 'error') {
+    return (
+      <div className="text-center py-10">
+        <div className="w-20 h-20 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center mx-auto mb-6"><ExclamationTriangleIcon className="w-12 h-12" /></div>
+        <h2 className="text-2xl font-black text-gray-900 mb-2">Unable to Process</h2>
+        <p className="text-sm text-gray-500 font-medium mb-8 px-6">{message}</p>
+        <button onClick={() => { setToken(''); setStatus('landing'); }} className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 transition-all active:scale-95 shadow-lg uppercase tracking-widest text-xs">Try Scanning Again</button>
+      </div>
+    );
+  }
 
   return (
-    <div className="relative">
-        {bypassRestrictions && onExit && ( <button onClick={onExit} className="absolute -top-3 -right-3 text-[10px] bg-gray-100 hover:bg-gray-200 rounded-full p-2 transition-colors">✕ Exit Kiosk</button> )}
+    <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="text-center mb-8">
+        <h2 className="text-2xl font-black text-gray-900 tracking-tight leading-none mb-2">{courseName || 'Confirm Presence'}</h2>
+        <div className="flex items-center justify-center gap-2">
+            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Active Verification Flow</p>
+        </div>
+      </div>
 
-        {status === 'form' && (
-            <form onSubmit={handleSubmit} className="space-y-4">
-                <div className="text-center mb-4">
-                    <h3 className="text-lg font-black text-gray-800 tracking-tight uppercase mb-2">Student Attendance</h3>
-                    <div className="flex flex-wrap justify-center gap-2">
-                        <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-green-50 text-green-700 rounded-full text-[10px] font-bold border border-green-200"><CheckCircleIcon className="w-3.5 h-3.5" /><span>Session Verified</span></div>
-                        {geoConstraints && (<div className="inline-flex items-center gap-1.5 px-3 py-1 bg-blue-50 text-blue-700 rounded-full text-[10px] font-bold border border-blue-200"><MapPinIcon className="w-3.5 h-3.5" /><span>Location Locked</span></div>)}
-                    </div>
-                </div>
+      <form onSubmit={handleSubmit} className="space-y-5">
+        <div>
+          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">Student ID</label>
+          <input 
+            type="text" 
+            value={studentId} 
+            onChange={handleIdChange}
+            className="w-full border-2 border-gray-100 bg-gray-50 rounded-2xl p-4 font-mono font-black uppercase focus:bg-white focus:border-indigo-600 transition-all outline-none" 
+            placeholder="FIA..."
+            required
+            autoComplete="off"
+          />
+        </div>
 
-                {courseName && (
-                    <div className="bg-brand-primary/5 border-2 border-brand-primary/10 rounded-xl p-3 text-center">
-                        <p className="text-[9px] font-black text-brand-primary uppercase tracking-widest mb-0.5 opacity-60">Active Session</p>
-                        <p className="text-sm text-gray-900 font-extrabold truncate">{decodeURIComponent(courseName)}</p>
-                    </div>
-                )}
-                
-                <div className="space-y-3">
-                    <div>
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Student ID</label>
-                        <input type="text" value={studentId} placeholder="FIA25..." onChange={handleIdChange} className="block w-full bg-gray-50 border-2 border-gray-100 focus:border-brand-primary rounded-xl py-3 px-4 text-gray-900 uppercase font-mono font-black transition-all" required />
-                    </div>
-                    <div>
-                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Full Name</label>
-                        <input type="text" value={name} placeholder="AS PER REGISTRATION" onChange={(e) => setName(e.target.value.toUpperCase())} readOnly={!isNewStudent && name.length > 0} className={`block w-full border-2 rounded-xl py-3 px-4 text-gray-900 uppercase font-bold transition-all ${!isNewStudent && name.length > 0 ? 'bg-gray-100 border-transparent text-gray-400' : 'bg-gray-50 border-gray-100 focus:border-brand-primary'}`} required />
-                    </div>
-                </div>
-                
-                {formError && <p className="text-xs text-red-500 font-bold text-center bg-red-50 py-2 rounded-lg border border-red-100">{formError}</p>}
-                
-                <button type="submit" className="w-full py-4 px-4 rounded-xl shadow-lg shadow-brand-primary/20 text-sm font-black text-white bg-brand-primary hover:bg-brand-secondary active:scale-[0.98] transition-all mt-2">
-                    {isOfflineScan ? 'GENERATE QR PASS' : 'CONFIRM ATTENDANCE'}
-                </button>
-            </form>
-        )}
+        <div>
+          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">Full Name</label>
+          <input 
+            type="text" 
+            value={name} 
+            onChange={(e) => setName(e.target.value.toUpperCase())}
+            className="w-full border-2 border-gray-100 bg-gray-50 rounded-2xl p-4 font-black uppercase focus:bg-white focus:border-indigo-600 transition-all outline-none" 
+            placeholder="YOUR NAME"
+            required
+            autoComplete="name"
+          />
+        </div>
 
-        {status === 'show-student-qr' && (
-            <div className="text-center py-4 animate-in zoom-in duration-300">
-                <h3 className="text-lg font-black text-gray-800 mb-2">QR Passcode</h3>
-                <p className="text-xs text-gray-500 mb-4 px-4">Show this to the lecturer. Your device is now locked for this session.</p>
-                <div className="bg-white p-4 rounded-2xl shadow-inner border-4 border-double border-brand-primary/20 flex items-center justify-center mx-auto mb-6">
-                    <canvas ref={canvasRef} className="max-w-full" />
-                </div>
-                <div className="p-4 bg-indigo-50 rounded-xl border-2 border-indigo-100 inline-block min-w-[200px]">
-                    <p className="font-black text-indigo-900">{name}</p>
-                    <p className="text-xs font-mono text-indigo-500 mt-1">{studentId}</p>
-                </div>
-            </div>
-        )}
+        <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100 flex items-start gap-3">
+            <div className="p-2 bg-white rounded-xl text-gray-400 shrink-0"><LockClosedIcon className="w-4 h-4" /></div>
+            <p className="text-[10px] text-gray-400 font-bold leading-relaxed uppercase">Submission is permanent for this session. Please ensure your ID is correct before confirming.</p>
+        </div>
 
-        {(status === 'success' || status === 'error') && (
-            <div className="text-center py-10 animate-in fade-in duration-500">
-                <div className={`mx-auto flex items-center justify-center h-20 w-20 rounded-full ${status === 'success' ? 'bg-green-100 border-green-200' : 'bg-red-100 border-red-200'} mb-6 border-4 shadow-sm`}>
-                    {status === 'success' ? <CheckCircleIcon className="h-12 w-12 text-green-600 animate-in zoom-in duration-700" /> : <p className="text-4xl">❌</p>}
-                </div>
-                <h3 className={`text-2xl font-black ${status === 'success' ? 'text-green-800' : 'text-red-600'} mb-2`}>
-                    {status === 'success' ? 'Checked In!' : 'Submission Failed'}
-                </h3>
-                <p className="text-xs font-bold text-gray-400 mb-6 uppercase tracking-wider">{message}</p>
-                {status === 'success' && (
-                   <div className="space-y-4">
-                      <div className="bg-green-50 rounded-2xl p-6 border-2 border-green-100 shadow-sm animate-in slide-in-from-bottom-4 duration-1000">
-                         <p className="text-lg font-black text-green-900">Thank you for checked-in!</p>
-                         <p className="text-[11px] text-green-700 mt-2 font-medium">Attendance for <strong>{decodeURIComponent(courseName || 'General Session')}</strong> has been recorded. Have a great class!</p>
-                      </div>
-                      <div className="flex items-center justify-center gap-2 text-[10px] text-gray-400 font-bold uppercase tracking-[0.2em] pt-4">
-                         <LockClosedIcon className="w-3.5 h-3.5" />
-                         <span>Session Locked</span>
-                      </div>
-                   </div>
-                )}
-            </div>
-        )}
+        {formError && <p className="text-xs text-red-500 font-bold text-center bg-red-50 p-3 rounded-xl border border-red-100">{formError}</p>}
+
+        <button 
+          type="submit" 
+          disabled={status === 'submitting'}
+          className="w-full bg-indigo-600 text-white font-black py-5 rounded-2xl hover:bg-black active:scale-95 transition-all shadow-xl shadow-indigo-100 disabled:opacity-50 uppercase tracking-widest text-sm flex items-center justify-center gap-2"
+        >
+          {status === 'submitting' ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : (isOfflineScan ? 'Generate Check-in Pass' : 'Submit Attendance')}
+        </button>
+      </form>
     </div>
   );
 };
