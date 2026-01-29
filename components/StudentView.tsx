@@ -206,51 +206,44 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   if (status === 'landing') {
       return (
-          <div className="text-center space-y-10 animate-in fade-in duration-500 py-6">
+          <div className="text-center space-y-8 animate-in fade-in duration-500 py-4">
               <div className="flex flex-col items-center">
-                  <div className="w-20 h-20 bg-gray-900 text-white rounded-[2rem] flex items-center justify-center shadow-2xl mb-6 relative">
-                      <ShieldCheckIcon className="w-12 h-12" />
-                      <div className="absolute -top-1 -right-1 w-4 h-4 bg-indigo-500 rounded-full border-2 border-white animate-pulse"></div>
+                  <div className="w-16 h-16 bg-brand-primary text-white rounded-2xl flex items-center justify-center shadow-xl shadow-brand-primary/10 mb-4 relative">
+                      <ShieldCheckIcon className="w-10 h-10" />
                   </div>
-                  <h1 className="text-4xl font-black text-gray-900 tracking-tighter leading-tight">UTS Portal</h1>
-                  <p className="text-[11px] font-black text-gray-400 mt-3 uppercase tracking-[0.4em]">Official Terminal</p>
+                  <h1 className="text-3xl font-black text-gray-900 tracking-tight leading-tight">UTS Portal</h1>
+                  <p className="text-[10px] font-black text-gray-400 mt-2 uppercase tracking-[0.3em]">Access Point</p>
               </div>
 
-              <div className="space-y-6">
-                  {/* PRIMARY ACTION: Lecturer Portal - High Prominence */}
-                  <div className="relative group">
-                      <div className="absolute -inset-1 bg-gradient-to-r from-indigo-600 to-indigo-400 rounded-2xl blur opacity-15 group-hover:opacity-30 transition duration-1000 group-hover:duration-200"></div>
-                      <button 
-                          onClick={onSwitchToTeacher}
-                          className="relative w-full bg-gray-900 text-white font-black py-6 rounded-2xl hover:bg-black active:scale-95 transition-all shadow-2xl flex flex-col items-center justify-center gap-1 uppercase tracking-[0.1em] text-sm overflow-hidden"
-                      >
-                          <div className="flex items-center gap-3">
-                              <LockClosedIcon className="w-5 h-5 text-indigo-400" />
-                              Lecturer Access Portal
-                          </div>
-                          <span className="text-[8px] opacity-40 font-bold">Authorized Personnel Only</span>
-                      </button>
-                  </div>
-
-                  <div className="flex items-center gap-4 py-2">
-                      <div className="h-[1px] flex-1 bg-gray-100"></div>
-                      <span className="text-[10px] font-black text-gray-300 uppercase tracking-widest">or</span>
-                      <div className="h-[1px] flex-1 bg-gray-100"></div>
-                  </div>
-
-                  {/* SECONDARY ACTION: Join Session - Lower Prominence */}
+              <div className="space-y-4">
+                  {/* MAIN ACTION: Student Scan (Now a bit smaller) */}
                   <button 
                       onClick={() => setShowScanner(true)}
-                      className="w-full bg-white border-2 border-gray-100 text-gray-500 font-black py-5 rounded-2xl hover:bg-gray-50 hover:border-indigo-100 hover:text-indigo-600 active:scale-95 transition-all flex items-center justify-center gap-4 uppercase tracking-[0.1em] text-xs"
+                      className="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl hover:bg-black active:scale-95 transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-3 uppercase tracking-[0.1em] text-xs"
                   >
-                      <CameraIcon className="w-5 h-5 opacity-60" />
-                      Student Check-in
+                      <CameraIcon className="w-5 h-5" />
+                      Scan Attendance QR
+                  </button>
+
+                  <div className="flex items-center gap-4 py-1">
+                      <div className="h-[1px] flex-1 bg-gray-100"></div>
+                      <span className="text-[9px] font-black text-gray-300 uppercase tracking-widest">or</span>
+                      <div className="h-[1px] flex-1 bg-gray-100"></div>
+                  </div>
+
+                  {/* COMPACT ACTION: Lecturer Portal */}
+                  <button 
+                      onClick={onSwitchToTeacher}
+                      className="w-full bg-gray-900 text-white font-bold py-3 rounded-xl hover:bg-black active:scale-95 transition-all flex items-center justify-center gap-2.5 uppercase tracking-[0.1em] text-[10px] shadow-sm"
+                  >
+                      <LockClosedIcon className="w-4 h-4 text-brand-light" />
+                      Lecturer Access
                   </button>
               </div>
 
-              <div className="bg-gray-50 border border-gray-100 p-6 rounded-3xl">
-                  <p className="text-[10px] text-gray-400 font-bold leading-relaxed uppercase tracking-tight text-center">
-                      Welcome to the University of Technology Sarawak Attendance Terminal. Please select your access level.
+              <div className="bg-gray-50 border border-gray-100 p-5 rounded-2xl">
+                  <p className="text-[9px] text-gray-400 font-bold leading-relaxed uppercase tracking-widest text-center opacity-70">
+                      Authorized UTS Credentials Required
                   </p>
               </div>
 
