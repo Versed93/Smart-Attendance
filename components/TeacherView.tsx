@@ -39,6 +39,7 @@ interface TeacherViewProps {
   onCheckPendingRecords: () => Promise<{ success: boolean; message: string; count: number }>;
   onForceSync: () => Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number; }>;
   onUpdateKnownStudents: (students: PreRegisteredStudent[]) => void;
+  onCourseChange: (courseName: string) => void;
 }
 
 export const TeacherView: React.FC<TeacherViewProps> = ({ 
@@ -55,6 +56,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onCheckPendingRecords,
   onForceSync,
   onUpdateKnownStudents,
+  onCourseChange,
 }) => {
   const [baseUrl] = useState<string>(() => window.location.origin + window.location.pathname);
   const [qrData, setQrData] = useState<string>('');
@@ -97,7 +99,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     return () => clearInterval(timer);
   }, []);
 
-  useEffect(() => localStorage.setItem('attendance-course-name', courseName), [courseName]);
+  useEffect(() => {
+      localStorage.setItem('attendance-course-name', courseName);
+      onCourseChange(courseName);
+  }, [courseName, onCourseChange]);
 
   const handleScanResult = (data: string) => {
       setShowScanner(false);

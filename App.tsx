@@ -43,9 +43,12 @@ const App: React.FC = () => {
 
   const [view, setView] = useState<View>(initialView);
   const [isKioskMode, setIsKioskMode] = useState(() => localStorage.getItem(KIOSK_PREF_KEY) === 'true');
+  const [activeCourse, setActiveCourse] = useState(() => localStorage.getItem('attendance-course-name') || '');
 
   const [attendanceList, setAttendanceList] = useState<Student[]>([]);
   
+  const sanitize = (str: string) => str.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+
   const [knownStudents, setKnownStudents] = useState<PreRegisteredStudent[]>(() => {
       const saved = localStorage.getItem(KNOWN_STUDENTS_KEY);
       const initial = PRE_REGISTERED_STUDENTS;
@@ -106,7 +109,8 @@ const App: React.FC = () => {
   const fetchFirebaseLiveAttendance = useCallback(async () => {
     if (view !== 'teacher' || !FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET || !isAuthenticated) return;
     try {
-        const response = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+        const path = activeCourse ? `${SESSION_ID}_${sanitize(activeCourse)}` : SESSION_ID;
+        const response = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${path}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
         if (!response.ok && response.status !== 404) return;
         const data = response.status === 404 ? null : await response.json();
         if (data) {
@@ -118,7 +122,7 @@ const App: React.FC = () => {
     } catch {
         console.warn("Polling failed");
     }
-  }, [view, isAuthenticated]);
+  }, [view, isAuthenticated, activeCourse]);
 
   useEffect(() => {
     if (view === 'teacher' && isAuthenticated) {
@@ -164,7 +168,8 @@ const App: React.FC = () => {
     if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
     setAttendanceList([]);
     try {
-        await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
+        const path = activeCourse ? `${SESSION_ID}_${sanitize(activeCourse)}` : SESSION_ID;
+        await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${path}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
             method: 'DELETE',
         });
     } catch {
@@ -185,7 +190,8 @@ const App: React.FC = () => {
 
       // DUPLICATE PROTECTION: Check if student already exists in Firebase for this session
       try {
-        const checkRes = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}/${studentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+        const path = courseName ? `${SESSION_ID}_${sanitize(courseName)}` : SESSION_ID;
+        const checkRes = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${path}/${studentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
         const existingData = await checkRes.json();
         if (existingData && existingData.status === 'P' && status === 'P') {
             return { success: false, message: "You have already checked in for this session." };
@@ -198,11 +204,12 @@ const App: React.FC = () => {
       setAttendanceList(prev => [{ ...studentData }, ...prev.filter(s => s.studentId !== studentId)]);
 
       try {
+          const path = courseName ? `${SESSION_ID}_${sanitize(courseName)}` : SESSION_ID;
           const p1 = fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${studentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
               method: 'PUT',
               body: JSON.stringify(studentData),
           });
-          const p2 = fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}/${studentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
+          const p2 = fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${path}/${studentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
               method: 'PUT',
               body: JSON.stringify(studentData),
           });
@@ -230,6 +237,7 @@ const App: React.FC = () => {
       setAttendanceList(prev => prev.filter(s => !ids.includes(s.studentId)));
       const now = Date.now();
       const promises: Promise<Response>[] = [];
+      const path = courseName ? `${SESSION_ID}_${sanitize(courseName)}` : SESSION_ID;
       for (const id of ids) {
         const student = attendanceList.find(s => s.studentId === id) || knownStudents.find(k => k.id === id);
         const removalData: Student = {
@@ -243,7 +251,7 @@ const App: React.FC = () => {
         };
         promises.push(
           fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(removalData) }),
-          fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'DELETE' })
+          fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${path}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'DELETE' })
         );
         if (scriptUrl) fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ [id]: removalData }) });
       }
@@ -254,13 +262,14 @@ const App: React.FC = () => {
       setAttendanceList(prev => prev.map(s => ids.includes(s.studentId) ? { ...s, status, absenceReason } : s));
       const now = Date.now();
       const updatePayload: Record<string, Student> = {};
+      const path = courseName ? `${SESSION_ID}_${sanitize(courseName)}` : SESSION_ID;
       for (const id of ids) {
         const student = attendanceList.find(s => s.studentId === id);
         if (student) {
            const updateData: Student = { ...student, status, timestamp: now, courseName, absenceReason };
            updatePayload[id] = updateData;
            fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) });
-           fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) });
+           fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${path}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) });
         }
       }
       if (scriptUrl && Object.keys(updatePayload).length > 0) {
@@ -323,6 +332,7 @@ const App: React.FC = () => {
                          students.forEach(s => map.set(s.id, s));
                          return Array.from(map.values());
                      })}
+                     onCourseChange={setActiveCourse}
                  />
              </div>
            ) : <LoginView onLogin={handleLogin} />
