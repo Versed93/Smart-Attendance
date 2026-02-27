@@ -212,6 +212,32 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     setShowNewSessionModal(false);
   };
 
+  const handleDownloadTemplate = () => {
+    const headers = ["StudentID", "Name"];
+    const rows = [headers.join(',')];
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "student_list_template.csv";
+    link.click();
+  };
+
+  const handleClearKnownStudents = () => {
+    if (window.confirm("Are you sure you want to clear the entire student list? This cannot be undone.")) {
+      onUpdateKnownStudents([]);
+      alert("Student list cleared.");
+    }
+  };
+
+  const handleClearTeacherHistory = () => {
+    if (window.confirm("Are you sure you want to clear your local scan history?")) {
+      setTeacherHistory([]);
+      localStorage.removeItem('attendance-teacher-history-v1');
+      alert("Scan history cleared.");
+    }
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -574,13 +600,22 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                     <span className="text-xs font-bold text-gray-800">Import Student List</span>
                                     <span className="text-[9px] font-bold text-gray-400 uppercase">CSV Format: StudentID, Name</span>
                                 </div>
-                                <button 
-                                    onClick={() => fileInputRef.current?.click()}
-                                    className="flex items-center gap-2 bg-white text-indigo-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-indigo-100"
-                                >
-                                    <ArrowDownTrayIcon className="w-3.5 h-3.5 rotate-180" />
-                                    Upload CSV
-                                </button>
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={handleDownloadTemplate}
+                                        className="flex items-center gap-2 bg-white text-gray-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-gray-200"
+                                    >
+                                        <ArrowDownTrayIcon className="w-3.5 h-3.5" />
+                                        Template
+                                    </button>
+                                    <button 
+                                        onClick={() => fileInputRef.current?.click()}
+                                        className="flex items-center gap-2 bg-white text-indigo-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-indigo-100"
+                                    >
+                                        <ArrowDownTrayIcon className="w-3.5 h-3.5 rotate-180" />
+                                        Upload CSV
+                                    </button>
+                                </div>
                                 <input 
                                     type="file" 
                                     ref={fileInputRef} 
@@ -588,6 +623,29 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                     accept=".csv" 
                                     className="hidden" 
                                 />
+                            </div>
+                            <div className="h-[1px] bg-gray-200 w-full"></div>
+                            <div className="flex items-center justify-between">
+                                <div className="flex flex-col">
+                                    <span className="text-xs font-bold text-gray-800">Data Management</span>
+                                    <span className="text-[9px] font-bold text-gray-400 uppercase">Clear stored records</span>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={handleClearKnownStudents}
+                                        className="flex items-center gap-2 bg-white text-red-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-red-100"
+                                    >
+                                        <TrashIcon className="w-3.5 h-3.5" />
+                                        Clear List
+                                    </button>
+                                    <button 
+                                        onClick={handleClearTeacherHistory}
+                                        className="flex items-center gap-2 bg-white text-red-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-red-100"
+                                    >
+                                        <HistoryIcon className="w-3.5 h-3.5" />
+                                        Clear History
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>

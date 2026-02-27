@@ -7,6 +7,7 @@ import { QrScanner } from './QrScanner';
 import { CameraIcon } from './icons/CameraIcon';
 import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
 import { HistoryIcon } from './icons/HistoryIcon';
+import { TrashIcon } from './icons/TrashIcon';
 
 export interface ScanHistory {
   id: string;
@@ -217,6 +218,12 @@ export const StudentView: React.FC<StudentViewProps> = ({
       }
   };
 
+  const handleDeleteHistory = (id: string) => {
+    const newHistory = history.filter(h => h.id !== id);
+    setHistory(newHistory);
+    localStorage.setItem(STUDENT_HISTORY_KEY, JSON.stringify(newHistory));
+  };
+
   if (status === 'landing') {
       return (
           <div className="text-center space-y-8 animate-in fade-in duration-500 py-4">
@@ -288,21 +295,30 @@ export const StudentView: React.FC<StudentViewProps> = ({
                     {new Date(entry.timestamp).toLocaleString()}
                   </p>
                 </div>
-                {entry.type === 'offline' && entry.qrData ? (
+                <div className="flex items-center gap-2">
+                  {entry.type === 'offline' && entry.qrData ? (
+                    <button 
+                      onClick={() => {
+                        setStudentQrData(entry.qrData!);
+                        setStatus('show-student-qr');
+                      }}
+                      className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-indigo-100 transition-colors"
+                    >
+                      View QR
+                    </button>
+                  ) : (
+                    <span className="bg-green-50 text-green-600 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest">
+                      Online
+                    </span>
+                  )}
                   <button 
-                    onClick={() => {
-                      setStudentQrData(entry.qrData!);
-                      setStatus('show-student-qr');
-                    }}
-                    className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-indigo-100 transition-colors"
+                    onClick={() => handleDeleteHistory(entry.id)}
+                    className="p-1.5 text-gray-400 hover:text-red-500 transition-colors"
+                    title="Delete Record"
                   >
-                    View QR
+                    <TrashIcon className="w-4 h-4" />
                   </button>
-                ) : (
-                  <span className="bg-green-50 text-green-600 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest">
-                    Online
-                  </span>
-                )}
+                </div>
               </div>
             ))}
           </div>

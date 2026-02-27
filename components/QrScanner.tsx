@@ -14,6 +14,8 @@ export const QrScanner: React.FC<QrScannerProps> = ({ onScan, onClose }) => {
 
   useEffect(() => {
     let animationFrameId: number;
+    let stream: MediaStream | null = null;
+    let isMounted = true;
 
     const tick = () => {
       if (videoRef.current && videoRef.current.readyState === videoRef.current.HAVE_ENOUGH_DATA && canvasRef.current) {
@@ -41,28 +43,45 @@ export const QrScanner: React.FC<QrScannerProps> = ({ onScan, onClose }) => {
 
     const startCamera = async () => {
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ 
+        const newStream = await navigator.mediaDevices.getUserMedia({ 
             video: { facingMode: "environment" } 
         });
+
+        if (!isMounted) {
+            newStream.getTracks().forEach(track => track.stop());
+            return;
+        }
+        
+        stream = newStream;
+
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           videoRef.current.setAttribute("playsinline", "true"); // Required for iOS
-          videoRef.current.play();
+          videoRef.current.play().catch(e => {
+              if (e.name !== 'AbortError') {
+                  console.error("Video play error:", e);
+              }
+          });
           animationFrameId = requestAnimationFrame(tick);
         }
       } catch (err) {
-        console.error("Camera Error:", err);
-        setError("Could not access camera. Please check permissions.");
+        if (isMounted) {
+            console.error("Camera Error:", err);
+            setError("Could not access camera. Please check permissions.");
+        }
       }
     };
 
     startCamera();
 
-    const videoElement = videoRef.current;
     return () => {
+      isMounted = false;
       cancelAnimationFrame(animationFrameId);
-      if (videoElement && videoElement.srcObject) {
-        (videoElement.srcObject as MediaStream).getTracks().forEach(track => track.stop());
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+      }
+      if (videoRef.current) {
+        videoRef.current.srcObject = null;
       }
     };
   }, [onScan]);
