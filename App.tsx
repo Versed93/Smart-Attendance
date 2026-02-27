@@ -70,6 +70,41 @@ const App: React.FC = () => {
     return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbxpwABKeVoJgMVdeCI7OHDgB-Cm0146YldpgYMixjQNVQjUt4c1WZX8K6HCx9zNdK-h/exec';
   });
 
+  const syncToAirtable = async (records: Record<string, Student>) => {
+      const type = localStorage.getItem('attendance-integration-type');
+      if (type !== 'airtable') return;
+
+      const token = localStorage.getItem('airtable-token');
+      const baseId = localStorage.getItem('airtable-base-id');
+      const tableName = localStorage.getItem('airtable-table-name') || 'Attendance';
+
+      if (!token || !baseId) return;
+
+      const airtableRecords = Object.values(records).map(r => ({
+          fields: {
+              "Student ID": r.studentId,
+              "Name": r.name,
+              "Status": r.status,
+              "Course": r.courseName || 'General Session',
+              "Timestamp": new Date(r.timestamp).toISOString(),
+              "Reason": r.absenceReason || ""
+          }
+      }));
+
+      try {
+          await fetch(`https://api.airtable.com/v0/${baseId}/${tableName}`, {
+              method: 'POST',
+              headers: {
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ records: airtableRecords })
+          });
+      } catch (err) {
+          console.error("Airtable sync failed", err);
+      }
+  };
+
   useEffect(() => {
     if (!token) {
         localStorage.setItem(VIEW_PREF_KEY, view);
@@ -214,12 +249,17 @@ const App: React.FC = () => {
               body: JSON.stringify(studentData),
           });
           await Promise.all([p1, p2]);
-          if (scriptUrl) {
+          
+          const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
+          
+          if (integrationType === 'google_sheets' && scriptUrl) {
               fetch(scriptUrl, {
                   method: 'POST',
                   mode: 'no-cors',
                   body: JSON.stringify({ [studentId]: studentData }),
               }).catch(err => console.warn("Deferred sync", err));
+          } else if (integrationType === 'airtable') {
+              syncToAirtable({ [studentId]: studentData });
           }
           setKnownStudents(prev => {
              if (!prev.some(s => s.id === studentId)) return [...prev, { id: studentId, name }];
@@ -253,7 +293,13 @@ const App: React.FC = () => {
           fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(removalData) }),
           fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${path}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'DELETE' })
         );
-        if (scriptUrl) fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ [id]: removalData }) });
+        
+        const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
+        if (integrationType === 'google_sheets' && scriptUrl) {
+            fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ [id]: removalData }) });
+        } else if (integrationType === 'airtable') {
+            syncToAirtable({ [id]: removalData });
+        }
       }
       await Promise.all(promises);
   };
@@ -272,8 +318,11 @@ const App: React.FC = () => {
            fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${path}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) });
         }
       }
-      if (scriptUrl && Object.keys(updatePayload).length > 0) {
+      const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
+      if (integrationType === 'google_sheets' && scriptUrl && Object.keys(updatePayload).length > 0) {
           fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(updatePayload) });
+      } else if (integrationType === 'airtable' && Object.keys(updatePayload).length > 0) {
+          syncToAirtable(updatePayload);
       }
   };
 
@@ -282,7 +331,14 @@ const App: React.FC = () => {
     const testRecord: Student = { name: 'CONNECTION TEST', studentId: 'TEST999', email: 'test@student.edu.my', status: 'P', timestamp: Date.now(), courseName: courseName || 'Connectivity Test', absenceReason: '' };
     try {
       await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/TEST999.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(testRecord) });
-      if (scriptUrl) await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ 'TEST999': testRecord }) });
+      
+      const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
+      if (integrationType === 'google_sheets' && scriptUrl) {
+          await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ 'TEST999': testRecord }) });
+      } else if (integrationType === 'airtable') {
+          await syncToAirtable({ 'TEST999': testRecord });
+      }
+      
       return { success: true, message: "Test signal sent to Cloud." };
     } catch { return { success: false, message: "Cloud test failed." }; }
   };
@@ -297,6 +353,26 @@ const App: React.FC = () => {
   };
   
   const handleForceSync = async (): Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number }> => {
+    const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
+    
+    if (integrationType === 'firebase') {
+        return { success: true, message: "Firebase syncs automatically.", syncedCount: 0, errorCount: 0, total: 0 };
+    }
+    
+    if (integrationType === 'airtable') {
+        try {
+            const res = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+            const data = await res.json();
+            if (data) {
+                await syncToAirtable(data);
+                return { success: true, message: "Synced pending records to Airtable.", syncedCount: Object.keys(data).length, errorCount: 0, total: Object.keys(data).length };
+            }
+            return { success: true, message: "No pending records to sync.", syncedCount: 0, errorCount: 0, total: 0 };
+        } catch {
+            return { success: false, message: "Airtable sync failed.", syncedCount: 0, errorCount: 0, total: 0 };
+        }
+    }
+
     if (!scriptUrl) return { success: false, message: "Script Endpoint missing.", syncedCount: 0, errorCount: 0, total: 0 };
     try {
         await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ "action": "SYNC_QUEUE" }) });

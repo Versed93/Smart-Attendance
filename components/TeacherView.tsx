@@ -12,7 +12,7 @@ import { QrCodeIcon } from './icons/QrCodeIcon';
 import { AdjustmentsHorizontalIcon } from './icons/AdjustmentsHorizontalIcon';
 import { MagnifyingGlassIcon } from './icons/MagnifyingGlassIcon';
 import { XCircleIcon } from './icons/XCircleIcon';
-import { GoogleSheetIntegrationInfo } from './GoogleSheetIntegrationInfo';
+import { CloudIntegrationSettings } from './CloudIntegrationSettings';
 import { ArrowDownTrayIcon } from './icons/ArrowDownTrayIcon';
 import { CheckIcon } from './icons/CheckIcon';
 import { XMarkIcon } from './icons/XMarkIcon';
@@ -22,6 +22,7 @@ import { EyeIcon } from './icons/EyeIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { HistoryIcon } from './icons/HistoryIcon';
 import { ListBulletIcon } from './icons/ListBulletIcon';
+import { ChevronDownIcon } from './icons/ChevronDownIcon';
 
 interface TeacherViewProps {
   attendanceList: Student[];
@@ -47,6 +48,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onRemoveStudents,
   onBulkStatusUpdate,
   onNewSession,
+  scriptUrl,
+  onScriptUrlChange,
   onOpenKiosk, 
   onManualAdd,
   addStudent,
@@ -90,6 +93,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [confirmation, setConfirmation] = useState<{ action: 'P' | 'A' | null, count: number, reason?: string }>({ action: null, count: 0 });
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [showStudentListModal, setShowStudentListModal] = useState(false);
+  const [studentListFilter, setStudentListFilter] = useState('');
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -251,6 +256,21 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       if (window.confirm(`Remove student ${id} from the known list?`)) {
           const newList = knownStudents.filter(s => s.id !== id);
           onUpdateKnownStudents(newList);
+      }
+  };
+
+  const toggleGroup = (groupKey: string) => {
+      const newSet = new Set(collapsedGroups);
+      if (newSet.has(groupKey)) newSet.delete(groupKey);
+      else newSet.add(groupKey);
+      setCollapsedGroups(newSet);
+  };
+
+  const toggleAllGroups = (allKeys: string[]) => {
+      if (collapsedGroups.size === allKeys.length) {
+          setCollapsedGroups(new Set());
+      } else {
+          setCollapsedGroups(new Set(allKeys));
       }
   };
 
@@ -624,7 +644,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     </div>
                     <div className="space-y-4">
                         <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] ml-1">Cloud Synchronization</h3>
-                        <GoogleSheetIntegrationInfo onSendTestRecord={() => onSendTestRecord(courseName)} onCheckPendingRecords={onCheckPendingRecords} onForceSync={onForceSync} />
+                        <CloudIntegrationSettings 
+                            scriptUrl={scriptUrl} 
+                            onScriptUrlChange={onScriptUrlChange} 
+                            onSendTestRecord={() => onSendTestRecord(courseName)} 
+                            onCheckPendingRecords={onCheckPendingRecords} 
+                            onForceSync={onForceSync} 
+                        />
                     </div>
                     <div className="space-y-4">
                         <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] ml-1">Student Management</h3>
@@ -697,22 +723,81 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
       {showStudentListModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[130] flex items-center justify-center p-4">
-            <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-8 relative overflow-y-auto max-h-[90vh]">
-                <button onClick={() => setShowStudentListModal(false)} className="absolute top-6 right-6 text-gray-300 hover:text-gray-900 transition-all active:scale-90"><XCircleIcon className="w-8 h-8"/></button>
-                <h2 className="text-2xl font-bold text-gray-900 mb-6 tracking-tight">Student List</h2>
-                <div className="space-y-2">
+            <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-8 relative overflow-hidden flex flex-col max-h-[90vh]">
+                <div className="flex items-center justify-between mb-6 shrink-0">
+                    <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Student List</h2>
+                    <button onClick={() => setShowStudentListModal(false)} className="text-gray-300 hover:text-gray-900 transition-all active:scale-90"><XCircleIcon className="w-8 h-8"/></button>
+                </div>
+                
+                <div className="mb-4 shrink-0 flex gap-2">
+                    <div className="relative flex-1">
+                        <MagnifyingGlassIcon className="w-4 h-4 text-gray-400 absolute top-1/2 left-3 -translate-y-1/2" />
+                        <input 
+                            type="text" 
+                            placeholder="Search by ID or Name..." 
+                            value={studentListFilter}
+                            onChange={(e) => setStudentListFilter(e.target.value)}
+                            className="w-full pl-9 pr-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl text-xs font-bold focus:bg-white focus:border-brand-primary outline-none transition-all"
+                        />
+                    </div>
+                    <button 
+                        onClick={() => {
+                            const groups = Object.keys(
+                                knownStudents.reduce((acc, s) => {
+                                    const key = s.id.charAt(0).toUpperCase() || '#';
+                                    acc[key] = true;
+                                    return acc;
+                                }, {} as Record<string, boolean>)
+                            );
+                            toggleAllGroups(groups);
+                        }}
+                        className="px-3 bg-gray-50 border-2 border-gray-100 rounded-xl text-gray-500 hover:bg-gray-100 hover:text-gray-900 transition-all active:scale-95"
+                        title="Toggle All"
+                    >
+                        <ChevronDownIcon className={`w-5 h-5 transition-transform duration-300 ${collapsedGroups.size > 0 ? '-rotate-180' : ''}`} />
+                    </button>
+                </div>
+
+                <div className="space-y-4 overflow-y-auto custom-scrollbar pr-2">
                     {knownStudents.length === 0 ? (
-                        <p className="text-center text-gray-400 font-bold text-sm">No students in list.</p>
+                        <p className="text-center text-gray-400 font-bold text-sm py-8">No students in list.</p>
                     ) : (
-                        knownStudents.map(s => (
-                            <div key={s.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
-                                <div>
-                                    <p className="font-bold text-xs text-gray-900">{s.name}</p>
-                                    <p className="font-mono text-[10px] text-gray-400">{s.id}</p>
+                        Object.entries(
+                            knownStudents
+                                .filter(s => s.name.toLowerCase().includes(studentListFilter.toLowerCase()) || s.id.toLowerCase().includes(studentListFilter.toLowerCase()))
+                                .sort((a, b) => a.id.localeCompare(b.id))
+                                .reduce((groups, s) => {
+                                    const key = s.id.charAt(0).toUpperCase() || '#';
+                                    if (!groups[key]) groups[key] = [];
+                                    groups[key].push(s);
+                                    return groups;
+                                }, {} as Record<string, typeof knownStudents>)
+                        ).sort((a, b) => a[0].localeCompare(b[0])).map(([groupKey, students]) => (
+                            <div key={groupKey} className="rounded-xl overflow-hidden border border-transparent transition-all">
+                                <button 
+                                    onClick={() => toggleGroup(groupKey)}
+                                    className="w-full flex items-center justify-between bg-white py-2 px-1 hover:bg-gray-50 transition-colors group sticky top-0 z-10"
+                                >
+                                    <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 group-hover:text-brand-primary transition-colors">{groupKey} <span className="text-gray-300 text-[9px]">({students.length})</span></h3>
+                                    <ChevronDownIcon className={`w-4 h-4 text-gray-300 group-hover:text-brand-primary transition-all duration-300 ${collapsedGroups.has(groupKey) ? '-rotate-90' : ''}`} />
+                                </button>
+                                
+                                <div className={`space-y-2 transition-all duration-300 origin-top ${collapsedGroups.has(groupKey) ? 'hidden' : 'block'}`}>
+                                    {students.map(s => (
+                                        <div key={s.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100 group hover:border-brand-primary/20 transition-all">
+                                            <div>
+                                                <p className="font-bold text-xs text-gray-900">{s.name}</p>
+                                                <p className="font-mono text-[10px] text-gray-400 group-hover:text-brand-primary transition-colors">{s.id}</p>
+                                            </div>
+                                            <button onClick={() => handleDeleteKnownStudent(s.id)} className="text-gray-300 hover:text-red-500 p-2 transition-colors"><TrashIcon className="w-4 h-4" /></button>
+                                        </div>
+                                    ))}
                                 </div>
-                                <button onClick={() => handleDeleteKnownStudent(s.id)} className="text-red-400 hover:text-red-600 p-2"><TrashIcon className="w-4 h-4" /></button>
                             </div>
                         ))
+                    )}
+                    {knownStudents.length > 0 && knownStudents.filter(s => s.name.toLowerCase().includes(studentListFilter.toLowerCase()) || s.id.toLowerCase().includes(studentListFilter.toLowerCase())).length === 0 && (
+                        <p className="text-center text-gray-400 font-bold text-xs py-4">No matches found.</p>
                     )}
                 </div>
             </div>
