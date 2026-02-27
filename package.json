@@ -2,6 +2,10 @@
   "name": "smart-qr-attendance",
   "private": true,
   "version": "0.0.2",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Versed93/Smart-Attendance-Plus.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=18.0.0"
@@ -20,13 +24,13 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
+    "@eslint/js": "^9.10.0",
     "@types/node": "^20.11.24",
     "@types/qrcode": "^1.5.5",
     "@types/react": "^18.3.3",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
-    "eslint": "^10.0.2",
+    "eslint": "^9.10.0",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.5.2",
     "globals": "^15.15.0",

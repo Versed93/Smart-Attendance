@@ -90,6 +90,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const lastConfigRef = useRef('');
   
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -117,6 +118,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         if (courseName) params += `&c=${encodeURIComponent(courseName)}`;
         if (isOfflineMode) params += `&offline=true`;
         if (isGeoEnabled && teacherLocation) params += `&lat=${teacherLocation.lat.toFixed(6)}&lng=${teacherLocation.lng.toFixed(6)}&rad=150`;
+        
+        // Only show loading if configuration changes (not just timestamp)
+        const configString = `${courseName}-${isOfflineMode}-${isGeoEnabled}-${teacherLocation?.lat}-${teacherLocation?.lng}`;
+        if (configString !== lastConfigRef.current) {
+            setIsQrLoading(true);
+            lastConfigRef.current = configString;
+        }
+
         setQrData(`${baseUrl}?${params}`);
     };
     updateQR();

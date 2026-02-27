@@ -62,6 +62,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [formError, setFormError] = useState('');
   const [studentQrData, setStudentQrData] = useState('');
   const [showScanner, setShowScanner] = useState(false);
+  const [isQrLoading, setIsQrLoading] = useState(false);
   const [token, setToken] = useState(initialToken);
   const [courseName, setCourseName] = useState(initialCourseName);
   const [history, setHistory] = useState<ScanHistory[]>(() => {
@@ -139,6 +140,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
     if (status === 'show-student-qr' && canvasRef.current && studentQrData) {
         QRCode.toCanvas(canvasRef.current, studentQrData, { width: 320, margin: 2 }, (err) => {
             if (err) console.error(err);
+            setIsQrLoading(false);
         });
     }
   }, [status, studentQrData]);
@@ -156,6 +158,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
     };
 
     if (isOfflineScan) {
+        setIsQrLoading(true);
         const qrData = JSON.stringify({ name, studentId, email: `${studentId}@student.edu.my`, timestamp: Date.now() });
         setStudentQrData(qrData);
         addHistory({ courseName: courseName || 'Offline Check-in', timestamp: Date.now(), type: 'offline', qrData });
@@ -352,7 +355,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
         <div className="text-center py-6">
             <h2 className="text-xl font-bold text-gray-900 mb-2">Check-in Token</h2>
             <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-6">Show this to your lecturer</p>
-            <div className="bg-white p-4 rounded-3xl border-4 border-gray-100 inline-block mb-8">
+            <div className="bg-white p-4 rounded-3xl border-4 border-gray-100 inline-block mb-8 relative min-h-[320px] min-w-[320px] flex items-center justify-center">
+                {isQrLoading && <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10 rounded-xl"><div className="animate-spin h-8 w-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>}
                 <canvas ref={canvasRef} className="rounded-xl" />
             </div>
             <div className="space-y-3">
@@ -439,7 +443,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
           disabled={status === 'submitting'}
           className="w-full bg-indigo-600 text-white font-bold py-5 rounded-2xl hover:bg-black active:scale-95 transition-all shadow-xl shadow-indigo-100 disabled:opacity-50 uppercase tracking-widest text-sm flex items-center justify-center gap-2"
         >
-          {status === 'submitting' ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : (isOfflineScan ? 'Generate Check-in Pass' : 'Submit Attendance')}
+          {status === 'submitting' ? <div className="flex items-center gap-2"><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div><span>Processing...</span></div> : (isOfflineScan ? 'Generate Check-in Pass' : 'Submit Attendance')}
         </button>
       </form>
     </div>
