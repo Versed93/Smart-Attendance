@@ -58,7 +58,7 @@ const App: React.FC = () => {
                   parsed.forEach(s => map.set(s.id, s));
                   return Array.from(map.values());
               }
-          } catch (e) { console.error("Error loading known students", e); }
+          } catch { console.error("Error loading known students"); }
       }
       return initial;
   });
@@ -86,7 +86,13 @@ const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    checkAndClearForNewDay();
+    const timer = setTimeout(() => {
+        const shouldClear = checkAndClearForNewDay();
+        if (shouldClear) {
+            // Logic already handled inside checkAndClearForNewDay
+        }
+    }, 0);
+    return () => clearTimeout(timer);
   }, [checkAndClearForNewDay]);
 
   useEffect(() => {
@@ -109,16 +115,23 @@ const App: React.FC = () => {
         } else {
             setAttendanceList([]);
         }
-    } catch (e) {
-        console.warn("Polling failed", e);
+    } catch {
+        console.warn("Polling failed");
     }
   }, [view, isAuthenticated]);
 
   useEffect(() => {
     if (view === 'teacher' && isAuthenticated) {
-        fetchFirebaseLiveAttendance();
-        const interval = setInterval(fetchFirebaseLiveAttendance, 8000); 
-        return () => clearInterval(interval);
+        const timer = setTimeout(() => {
+            void fetchFirebaseLiveAttendance();
+        }, 0);
+        const interval = setInterval(() => {
+            void fetchFirebaseLiveAttendance();
+        }, 8000); 
+        return () => {
+            clearTimeout(timer);
+            clearInterval(interval);
+        };
     }
   }, [fetchFirebaseLiveAttendance, view, isAuthenticated]);
 
@@ -154,8 +167,8 @@ const App: React.FC = () => {
         await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
             method: 'DELETE',
         });
-    } catch (e) {
-        console.error("Failed to clear live session", e);
+    } catch {
+        console.error("Failed to clear live session");
     }
   };
 
@@ -177,7 +190,7 @@ const App: React.FC = () => {
         if (existingData && existingData.status === 'P' && status === 'P') {
             return { success: false, message: "You have already checked in for this session." };
         }
-      } catch (e) {}
+      } catch { /* ignore */ }
 
       const timestamp = overrideTimestamp || Date.now();
       const studentData: Student = { name, studentId, email, status, timestamp, courseName, absenceReason };
@@ -207,7 +220,7 @@ const App: React.FC = () => {
           });
           localStorage.setItem(LAST_SCAN_DATE_KEY, new Date().toISOString().slice(0, 10));
           return { success: true, message: "Record submitted successfully." };
-      } catch (error) {
+      } catch {
           return { success: false, message: "Connection lost. Please try again." };
       }
   };
@@ -216,13 +229,13 @@ const App: React.FC = () => {
       if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
       setAttendanceList(prev => prev.filter(s => !ids.includes(s.studentId)));
       const now = Date.now();
-      const promises: Promise<any>[] = [];
+      const promises: Promise<Response>[] = [];
       for (const id of ids) {
         const student = attendanceList.find(s => s.studentId === id) || knownStudents.find(k => k.id === id);
         const removalData: Student = {
           studentId: id,
           name: student?.name || 'Unknown',
-          email: `${id}@STUDENT.UTS.EDU.MY`,
+          email: `${id}@student.edu.my`,
           status: 'A',
           timestamp: now,
           courseName,
@@ -257,12 +270,12 @@ const App: React.FC = () => {
 
   const handleSendTestRecord = async (courseName: string): Promise<{ success: boolean; message: string }> => {
     if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return { success: false, message: "Firebase URL missing." };
-    const testRecord: Student = { name: 'CONNECTION TEST', studentId: 'TEST999', email: 'test@student.uts.edu.my', status: 'P', timestamp: Date.now(), courseName: courseName || 'Connectivity Test', absenceReason: '' };
+    const testRecord: Student = { name: 'CONNECTION TEST', studentId: 'TEST999', email: 'test@student.edu.my', status: 'P', timestamp: Date.now(), courseName: courseName || 'Connectivity Test', absenceReason: '' };
     try {
       await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/TEST999.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(testRecord) });
       if (scriptUrl) await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ 'TEST999': testRecord }) });
       return { success: true, message: "Test signal sent to Cloud." };
-    } catch (e) { return { success: false, message: "Cloud test failed." }; }
+    } catch { return { success: false, message: "Cloud test failed." }; }
   };
 
   const handleCheckPendingRecords = async (): Promise<{ success: boolean; message: string; count: number }> => {
@@ -271,7 +284,7 @@ const App: React.FC = () => {
       const res = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
       const data = await res.json();
       return { success: true, message: data ? `Queue length: ${Object.keys(data).length}` : "Synchronization queue is empty.", count: data ? Object.keys(data).length : 0 };
-    } catch (e) { return { success: false, message: "Status check failed.", count: 0 }; }
+    } catch { return { success: false, message: "Status check failed.", count: 0 }; }
   };
   
   const handleForceSync = async (): Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number }> => {
@@ -279,8 +292,10 @@ const App: React.FC = () => {
     try {
         await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ "action": "SYNC_QUEUE" }) });
         return { success: true, message: "Cloud synchronization command triggered.", syncedCount: 0, errorCount: 0, total: 0 };
-    } catch (e) { return { success: false, message: "Trigger failed.", syncedCount: 0, errorCount: 0, total: 0 }; }
+    } catch { return { success: false, message: "Trigger failed.", syncedCount: 0, errorCount: 0, total: 0 }; }
   };
+
+  const [kioskToken] = useState(() => Date.now().toString());
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col font-sans antialiased">
@@ -302,6 +317,12 @@ const App: React.FC = () => {
                      onSendTestRecord={handleSendTestRecord}
                      onCheckPendingRecords={handleCheckPendingRecords}
                      onForceSync={handleForceSync}
+                     onUpdateKnownStudents={(students) => setKnownStudents(prev => {
+                         const map = new Map();
+                         prev.forEach(s => map.set(s.id, s));
+                         students.forEach(s => map.set(s.id, s));
+                         return Array.from(map.values());
+                     })}
                  />
              </div>
            ) : <LoginView onLogin={handleLogin} />
@@ -310,7 +331,7 @@ const App: React.FC = () => {
                <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-6 border border-gray-100">
                    <StudentView 
                        markAttendance={(name, id, email) => addStudent(name, id, email, 'P', courseNameParam || 'General Session')}
-                       token={token || (isKioskMode ? Date.now().toString() : '')}
+                       token={token || (isKioskMode ? kioskToken : '')}
                        courseName={courseNameParam || undefined}
                        geoConstraints={latParam && lngParam ? { lat: parseFloat(latParam), lng: parseFloat(lngParam), radius: radParam ? parseFloat(radParam) : 150 } : undefined}
                        bypassRestrictions={isKioskMode}

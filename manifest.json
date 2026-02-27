@@ -1,6 +1,6 @@
 {
-  "name": "UTS QR Attendance",
-  "short_name": "UTS Attend",
+  "name": "Smart QR Attendance",
+  "short_name": "Smart Attend",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#f3f4f6",

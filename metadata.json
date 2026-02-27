@@ -1,5 +1,5 @@
 {
-  "name": "UTS QR Attendance",
+  "name": "Smart QR Attendance",
   "description": "A real-time, dynamic QR code attendance system for students. The QR code changes every second to ensure security. Students must input their details before scanning to mark their attendance.",
   "requestFramePermissions": [
     "camera",

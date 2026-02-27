@@ -26,8 +26,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
            <div className="flex items-center justify-center w-16 h-16 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl shadow-lg shadow-brand-primary/20 mb-4" aria-hidden="true">
              <ShieldCheckIcon className="w-9 h-9" />
            </div>
-           <h1 className="text-2xl font-black text-gray-900 tracking-tight">Main Access</h1>
-           <p className="text-sm text-gray-500 font-medium mt-1">UTS QR Attendance System</p>
+           <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Main Access</h1>
+           <p className="text-sm text-gray-500 font-bold mt-1">Smart QR Attendance System</p>
         </div>
 
         <form onSubmit={handleSubmit} className="space-y-6">
@@ -38,7 +38,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLogin }) => {
               type="password" 
               value={password} 
               onChange={(e) => setPassword(e.target.value)} 
-              className="block w-full border-2 border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-brand-primary transition-colors text-gray-900 font-medium placeholder-gray-300"
+              className="block w-full border-2 border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-brand-primary transition-colors text-gray-900 font-bold placeholder-gray-300"
               placeholder="••••••••"
               autoFocus
               aria-invalid={!!error}

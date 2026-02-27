@@ -1,15 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
 import QRCode from 'qrcode';
 import { CheckCircleIcon } from './icons/CheckCircleIcon';
-import { MapPinIcon } from './icons/MapPinIcon';
-import type { PreRegisteredStudent } from '../studentList';
 import { LockClosedIcon } from './icons/LockClosedIcon';
 import { ExclamationTriangleIcon } from './icons/ExclamationTriangleIcon';
 import { QrScanner } from './QrScanner';
 import { CameraIcon } from './icons/CameraIcon';
 import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
-import { FIREBASE_CONFIG } from '../firebaseConfig';
-import { UserIcon } from './icons/UserIcon';
+import { HistoryIcon } from './icons/HistoryIcon';
+
+export interface ScanHistory {
+  id: string;
+  courseName: string;
+  timestamp: number;
+  type: 'online' | 'offline';
+  qrData?: string;
+}
 
 interface StudentViewProps {
   markAttendance: (name: string, studentId: string, email: string) => Promise<{ success: boolean, message: string }>;
@@ -17,15 +22,15 @@ interface StudentViewProps {
   courseName?: string;
   geoConstraints?: { lat: number; lng: number; radius: number };
   bypassRestrictions?: boolean;
-  onExit?: () => void;
   isOfflineScan?: boolean;
   knownStudents: PreRegisteredStudent[];
   onSwitchToTeacher?: () => void;
 }
 
-type Status = 'landing' | 'validating' | 'validating-gps' | 'form' | 'submitting' | 'success' | 'error' | 'show-student-qr' | 'device-locked' | 'checking-firebase';
+type Status = 'landing' | 'validating' | 'validating-gps' | 'form' | 'submitting' | 'success' | 'error' | 'show-student-qr' | 'device-locked' | 'checking-firebase' | 'history';
 
 const STUDENT_PROFILE_KEY = 'attendance-student-profile-v1';
+const STUDENT_HISTORY_KEY = 'attendance-student-history-v1';
 const SESSION_ID = new Date().toISOString().slice(0, 10);
 
 const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2: number) => {
@@ -45,14 +50,12 @@ export const StudentView: React.FC<StudentViewProps> = ({
   courseName: initialCourseName, 
   geoConstraints, 
   bypassRestrictions = false, 
-  onExit, 
   isOfflineScan = false,
   knownStudents,
   onSwitchToTeacher
 }) => {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
-  const [email, setEmail] = useState('');
   const [isNewStudent, setIsNewStudent] = useState(false);
   const [status, setStatus] = useState<Status>('validating');
   const [message, setMessage] = useState('');
@@ -61,6 +64,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [showScanner, setShowScanner] = useState(false);
   const [token, setToken] = useState(initialToken);
   const [courseName, setCourseName] = useState(initialCourseName);
+  const [history, setHistory] = useState<ScanHistory[]>(() => {
+    const saved = localStorage.getItem(STUDENT_HISTORY_KEY);
+    return saved ? JSON.parse(saved) : [];
+  });
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   
@@ -69,9 +76,12 @@ export const StudentView: React.FC<StudentViewProps> = ({
     if (savedProfile) {
         try {
             const { name: sName, studentId: sId } = JSON.parse(savedProfile);
-            if (sName) setName(sName);
-            if (sId) setStudentId(sId);
-        } catch (e) {}
+            // Use timeout to avoid synchronous setState in effect
+            setTimeout(() => {
+                if (sName) setName(sName);
+                if (sId) setStudentId(sId);
+            }, 0);
+        } catch { /* ignore */ }
     }
   }, []);
 
@@ -111,7 +121,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
                         setMessage(`Location Mismatch: ${Math.round(dist)}m away. Move closer to the classroom.`);
                     }
                 },
-                (err) => {
+                () => {
                     setStatus('error');
                     setMessage('GPS access is required for security verification.');
                 },
@@ -139,16 +149,25 @@ export const StudentView: React.FC<StudentViewProps> = ({
     
     localStorage.setItem(STUDENT_PROFILE_KEY, JSON.stringify({ name, studentId }));
     
+    const addHistory = (entry: Omit<ScanHistory, 'id'>) => {
+      const newHistory = [{ ...entry, id: Date.now().toString() }, ...history];
+      setHistory(newHistory);
+      localStorage.setItem(STUDENT_HISTORY_KEY, JSON.stringify(newHistory));
+    };
+
     if (isOfflineScan) {
-        setStudentQrData(JSON.stringify({ name, studentId, email: `${studentId}@STUDENT.UTS.EDU.MY`, timestamp: Date.now() }));
+        const qrData = JSON.stringify({ name, studentId, email: `${studentId}@student.edu.my`, timestamp: Date.now() });
+        setStudentQrData(qrData);
+        addHistory({ courseName: courseName || 'Offline Check-in', timestamp: Date.now(), type: 'offline', qrData });
         setStatus('show-student-qr');
         return;
     }
 
     setStatus('submitting');
-    const result = await markAttendance(name, studentId, `${studentId}@STUDENT.UTS.EDU.MY`);
+    const result = await markAttendance(name, studentId, `${studentId}@student.edu.my`);
     if (result.success) {
       setStatus('success');
+      addHistory({ courseName: courseName || 'General Session', timestamp: Date.now(), type: 'online' });
       const lockKey = `attendance-device-lock-v1-${SESSION_ID}-${courseName || 'general'}`;
       if (!bypassRestrictions) localStorage.setItem(lockKey, 'true');
     } else if (result.message === "You have already checked in for this session." || result.message === "Attendance already recorded for this student ID.") {
@@ -189,7 +208,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
               setStatus('error');
               setMessage('Invalid session QR.');
           }
-      } catch (e) {
+      } catch {
           setStatus('error');
           setMessage('Invalid QR format. Please scan the official attendance code.');
       }
@@ -202,15 +221,15 @@ export const StudentView: React.FC<StudentViewProps> = ({
                   <div className="w-16 h-16 bg-brand-primary text-white rounded-2xl flex items-center justify-center shadow-xl shadow-brand-primary/10 mb-4 relative">
                       <ShieldCheckIcon className="w-10 h-10" />
                   </div>
-                  <h1 className="text-3xl font-black text-gray-900 tracking-tight leading-tight">UTS Portal</h1>
-                  <p className="text-[10px] font-black text-gray-400 mt-2 uppercase tracking-[0.3em]">Access Point</p>
+                  <h1 className="text-3xl font-bold text-gray-900 tracking-tight leading-tight">Attendance Portal</h1>
+                  <p className="text-[10px] font-bold text-gray-400 mt-2 uppercase tracking-[0.3em]">Access Point</p>
               </div>
 
               <div className="space-y-4">
                   {/* MAIN ACTION: Student Scan (Now a bit smaller) */}
                   <button 
                       onClick={() => setShowScanner(true)}
-                      className="w-full bg-indigo-600 text-white font-black py-4 rounded-2xl hover:bg-black active:scale-95 transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-3 uppercase tracking-[0.1em] text-xs"
+                      className="w-full bg-indigo-600 text-white font-bold py-4 rounded-2xl hover:bg-black active:scale-95 transition-all shadow-xl shadow-indigo-100 flex items-center justify-center gap-3 uppercase tracking-[0.1em] text-xs"
                   >
                       <CameraIcon className="w-5 h-5" />
                       Scan Attendance QR
@@ -218,7 +237,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
                   <div className="flex items-center gap-4 py-1">
                       <div className="h-[1px] flex-1 bg-gray-100"></div>
-                      <span className="text-[9px] font-black text-gray-300 uppercase tracking-widest">or</span>
+                      <span className="text-[9px] font-bold text-gray-300 uppercase tracking-widest">or</span>
                       <div className="h-[1px] flex-1 bg-gray-100"></div>
                   </div>
 
@@ -234,7 +253,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
               <div className="bg-gray-50 border border-gray-100 p-5 rounded-2xl">
                   <p className="text-[9px] text-gray-400 font-bold leading-relaxed uppercase tracking-widest text-center opacity-70">
-                      Authorized UTS Credentials Required
+                      Authorized Credentials Required
                   </p>
               </div>
 
@@ -243,16 +262,62 @@ export const StudentView: React.FC<StudentViewProps> = ({
       );
   }
 
+  if (status === 'history') {
+    return (
+      <div className="animate-in fade-in duration-300 py-4">
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-xl font-bold text-gray-900 tracking-tight">Previous Scans</h2>
+          <button onClick={() => setStatus('landing')} className="text-xs font-bold text-indigo-600 uppercase tracking-widest hover:text-indigo-800">Back</button>
+        </div>
+        
+        {history.length === 0 ? (
+          <div className="text-center py-12 bg-gray-50 rounded-2xl border border-gray-100">
+            <HistoryIcon className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+            <p className="text-sm font-bold text-gray-500 uppercase tracking-widest">No previous scans found</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {history.map((entry) => (
+              <div key={entry.id} className="bg-white border border-gray-200 p-4 rounded-xl shadow-sm flex items-center justify-between">
+                <div>
+                  <p className="font-bold text-gray-900 text-sm">{entry.courseName}</p>
+                  <p className="text-[10px] text-gray-500 font-bold uppercase tracking-widest mt-1">
+                    {new Date(entry.timestamp).toLocaleString()}
+                  </p>
+                </div>
+                {entry.type === 'offline' && entry.qrData ? (
+                  <button 
+                    onClick={() => {
+                      setStudentQrData(entry.qrData!);
+                      setStatus('show-student-qr');
+                    }}
+                    className="bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-indigo-100 transition-colors"
+                  >
+                    View QR
+                  </button>
+                ) : (
+                  <span className="bg-green-50 text-green-600 px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-widest">
+                    Online
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   if (status === 'device-locked') {
     return (
       <div className="text-center py-10 animate-in zoom-in duration-300">
         <div className="w-20 h-20 bg-green-50 text-green-500 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-sm"><CheckCircleIcon className="w-12 h-12" /></div>
-        <h2 className="text-2xl font-black text-gray-900 mb-2">Record Verified</h2>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Record Verified</h2>
         <p className="text-sm text-gray-400 font-bold uppercase tracking-widest mb-8">Attendance already recorded</p>
         <div className="bg-gray-50 border border-gray-100 p-6 rounded-2xl">
              <p className="text-xs font-bold text-gray-500 leading-relaxed uppercase tracking-tight">One submission is permitted per student per session. Please see your lecturer if you believe this is an error.</p>
         </div>
-        <button onClick={() => window.location.reload()} className="mt-8 text-xs font-black text-brand-primary uppercase tracking-widest">Refresh Status</button>
+        <button onClick={() => window.location.reload()} className="mt-8 text-xs font-bold text-brand-primary uppercase tracking-widest">Refresh Status</button>
       </div>
     );
   }
@@ -261,7 +326,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
     return (
       <div className="flex flex-col items-center justify-center py-12 text-center">
         <div className="w-16 h-16 border-4 border-brand-primary border-t-transparent rounded-full animate-spin mb-6"></div>
-        <p className="text-sm font-black text-gray-900 uppercase tracking-widest">
+        <p className="text-sm font-bold text-gray-900 uppercase tracking-widest">
             {status === 'validating-gps' ? 'Verifying Proximity...' : 
              status === 'checking-firebase' ? 'Retrieving Records...' : 
              'Securing Session...'}
@@ -275,8 +340,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
     return (
       <div className="text-center py-10 animate-in zoom-in duration-300">
         <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircleIcon className="w-12 h-12" /></div>
-        <h2 className="text-2xl font-black text-gray-900 mb-2">Check-in Complete</h2>
-        <p className="text-sm text-gray-500 font-medium mb-8 px-4">Thank you, <b>{name}</b>. Your attendance for <b>{courseName || 'this session'}</b> has been successfully recorded.</p>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Check-in Complete</h2>
+        <p className="text-sm text-gray-500 font-bold mb-8 px-4">Thank you, <b>{name}</b>. Your attendance for <b>{courseName || 'this session'}</b> has been successfully recorded.</p>
         <button onClick={() => window.location.reload()} className="w-full bg-gray-900 text-white font-bold py-4 rounded-xl hover:bg-black transition-all active:scale-95 shadow-lg uppercase tracking-widest text-xs">Finish</button>
       </div>
     );
@@ -285,16 +350,16 @@ export const StudentView: React.FC<StudentViewProps> = ({
   if (status === 'show-student-qr') {
     return (
         <div className="text-center py-6">
-            <h2 className="text-xl font-black text-gray-900 mb-2">Check-in Token</h2>
+            <h2 className="text-xl font-bold text-gray-900 mb-2">Check-in Token</h2>
             <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-6">Show this to your lecturer</p>
             <div className="bg-white p-4 rounded-3xl border-4 border-gray-100 inline-block mb-8">
                 <canvas ref={canvasRef} className="rounded-xl" />
             </div>
             <div className="space-y-3">
-                <p className="text-sm font-black text-gray-900 leading-none">{name}</p>
+                <p className="text-sm font-bold text-gray-900 leading-none">{name}</p>
                 <p className="text-xs font-mono font-bold text-gray-400">{studentId}</p>
             </div>
-            <button onClick={() => setStatus('form')} className="mt-10 text-xs font-black text-brand-primary uppercase tracking-widest hover:underline">Edit Info</button>
+            <button onClick={() => setStatus('landing')} className="mt-10 text-xs font-bold text-brand-primary uppercase tracking-widest hover:underline">Back to Home</button>
         </div>
     );
   }
@@ -303,8 +368,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
     return (
       <div className="text-center py-10">
         <div className="w-20 h-20 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center mx-auto mb-6"><ExclamationTriangleIcon className="w-12 h-12" /></div>
-        <h2 className="text-2xl font-black text-gray-900 mb-2">Unable to Process</h2>
-        <p className="text-sm text-gray-500 font-medium mb-8 px-6">{message}</p>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Unable to Process</h2>
+        <p className="text-sm text-gray-500 font-bold mb-8 px-6">{message}</p>
         <button onClick={() => { setToken(''); setStatus('landing'); }} className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 transition-all active:scale-95 shadow-lg uppercase tracking-widest text-xs">Try Scanning Again</button>
       </div>
     );
@@ -312,36 +377,51 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   return (
     <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-      <div className="text-center mb-8">
-        <h2 className="text-2xl font-black text-gray-900 tracking-tight leading-none mb-2">{courseName || 'Confirm Presence'}</h2>
-        <div className="flex items-center justify-center gap-2">
-            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-            <p className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Active Verification Flow</p>
+      <div className="flex items-center justify-between mb-8">
+        <div className="text-left">
+          <h2 className="text-2xl font-bold text-gray-900 tracking-tight leading-none mb-2">{courseName || 'Confirm Presence'}</h2>
+          <div className="flex items-center gap-2">
+              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Active Verification Flow</p>
+          </div>
         </div>
+        <button 
+          onClick={() => {
+            if (bypassRestrictions) {
+              onSwitchToTeacher?.();
+            } else {
+              setToken('');
+              setStatus('landing');
+            }
+          }}
+          className={`text-[10px] font-bold uppercase tracking-widest transition-colors ${bypassRestrictions ? 'text-red-600 hover:text-red-800' : 'text-indigo-600 hover:text-black'}`}
+        >
+          {bypassRestrictions ? 'Exit' : 'Back'}
+        </button>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">
         <div>
-          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">Student ID</label>
+          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Student ID</label>
           <input 
             type="text" 
             value={studentId} 
             onChange={handleIdChange}
-            className="w-full border-2 border-gray-100 bg-gray-50 rounded-2xl p-4 font-mono font-black uppercase focus:bg-white focus:border-indigo-600 transition-all outline-none" 
-            placeholder="FIA..."
+            className="w-full border-2 border-gray-100 bg-gray-50 rounded-2xl p-4 font-mono font-bold uppercase focus:bg-white focus:border-indigo-600 transition-all outline-none placeholder:font-sans placeholder:text-gray-400 placeholder:text-xs placeholder:normal-case" 
+            placeholder="Enter Student ID"
             required
             autoComplete="off"
           />
         </div>
 
         <div>
-          <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-1 ml-1">Full Name</label>
+          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Full Name</label>
           <input 
             type="text" 
             value={name} 
             onChange={(e) => setName(e.target.value.toUpperCase())}
-            className="w-full border-2 border-gray-100 bg-gray-50 rounded-2xl p-4 font-black uppercase focus:bg-white focus:border-indigo-600 transition-all outline-none" 
-            placeholder="YOUR NAME"
+            className="w-full border-2 border-gray-100 bg-gray-50 rounded-2xl p-4 font-bold uppercase focus:bg-white focus:border-indigo-600 transition-all outline-none placeholder:text-gray-400 placeholder:text-xs placeholder:normal-case" 
+            placeholder="Enter Full Name"
             required
             autoComplete="name"
           />
@@ -357,7 +437,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
         <button 
           type="submit" 
           disabled={status === 'submitting'}
-          className="w-full bg-indigo-600 text-white font-black py-5 rounded-2xl hover:bg-black active:scale-95 transition-all shadow-xl shadow-indigo-100 disabled:opacity-50 uppercase tracking-widest text-sm flex items-center justify-center gap-2"
+          className="w-full bg-indigo-600 text-white font-bold py-5 rounded-2xl hover:bg-black active:scale-95 transition-all shadow-xl shadow-indigo-100 disabled:opacity-50 uppercase tracking-widest text-sm flex items-center justify-center gap-2"
         >
           {status === 'submitting' ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div> : (isOfflineScan ? 'Generate Check-in Pass' : 'Submit Attendance')}
         </button>

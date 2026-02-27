@@ -3,8 +3,17 @@ import { ArrowDownOnSquareIcon } from './icons/ArrowDownOnSquareIcon';
 import { ShareIcon } from './icons/ShareIcon';
 import { XCircleIcon } from './icons/XCircleIcon';
 
+interface BeforeInstallPromptEvent extends Event {
+  readonly platforms: string[];
+  readonly userChoice: Promise<{
+    outcome: 'accepted' | 'dismissed';
+    platform: string;
+  }>;
+  prompt(): Promise<void>;
+}
+
 export const InstallPwaPrompt: React.FC = () => {
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isIOS, setIsIOS] = useState(false);
   const [isStandalone, setIsStandalone] = useState(false);
   const [showIOSHelp, setShowIOSHelp] = useState(false);
@@ -12,18 +21,22 @@ export const InstallPwaPrompt: React.FC = () => {
 
   useEffect(() => {
     // Check if already installed (Standalone mode)
-    const isStandaloneMode = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
-    setIsStandalone(isStandaloneMode);
-
+    const isStandaloneMode = window.matchMedia('(display-mode: standalone)').matches || ('standalone' in window.navigator && (window.navigator as { standalone?: boolean }).standalone);
+    
     // Detect iOS
     const userAgent = window.navigator.userAgent.toLowerCase();
     const isIosDevice = /iphone|ipad|ipod/.test(userAgent);
-    setIsIOS(isIosDevice);
+
+    // Use a timeout to avoid synchronous setState in effect
+    setTimeout(() => {
+        setIsStandalone(isStandaloneMode);
+        setIsIOS(isIosDevice);
+    }, 0);
 
     // Capture the native install prompt for Android/Chrome
-    const handleBeforeInstallPrompt = (e: any) => {
+    const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
-      setDeferredPrompt(e);
+      setDeferredPrompt(e as BeforeInstallPromptEvent);
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
@@ -39,8 +52,8 @@ export const InstallPwaPrompt: React.FC = () => {
   const handleInstallClick = () => {
     if (deferredPrompt) {
       // Trigger native Android/Chrome prompt
-      deferredPrompt.prompt();
-      deferredPrompt.userChoice.then((choiceResult: any) => {
+      void deferredPrompt.prompt();
+      void deferredPrompt.userChoice.then((choiceResult) => {
         if (choiceResult.outcome === 'accepted') {
           setDeferredPrompt(null);
         }
@@ -79,9 +92,9 @@ export const InstallPwaPrompt: React.FC = () => {
                     <button onClick={() => setShowIOSHelp(false)} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
                         <XCircleIcon className="w-6 h-6" />
                     </button>
-                    <h3 className="text-lg font-black text-gray-900 mb-2">Install on iOS</h3>
+                    <h3 className="text-lg font-bold text-gray-900 mb-2">Install on iOS</h3>
                     <p className="text-sm text-gray-600 mb-4 leading-relaxed">iOS does not support one-click installation. Please follow these manual steps:</p>
-                    <ol className="space-y-4 text-sm font-medium text-gray-800">
+                    <ol className="space-y-4 text-sm font-bold text-gray-800">
                         <li className="flex items-center gap-3">
                             <span className="flex items-center justify-center w-6 h-6 bg-gray-100 rounded-full text-xs font-bold shrink-0">1</span>
                             <span>Tap the <ShareIcon className="w-4 h-4 inline mx-1 text-blue-500" /> <span className="font-bold">Share</span> button in your browser's bottom bar.</span>

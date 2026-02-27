@@ -4,7 +4,7 @@ import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 const appScriptCode = `
 /**
- * UTS FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v31.2)
+ * SMART FIREBASE TO GOOGLE SHEETS SYNC SCRIPT (v31.2)
  * With dynamic weekly sheet selection and enhanced debugging.
  * By Jaibi Sabian
  *
@@ -242,10 +242,10 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
   return (
     <div className="bg-white p-6 rounded-3xl border-2 border-gray-100 space-y-4">
       <div className="flex justify-between items-center">
-        <h4 className="text-xs font-black text-gray-900 uppercase tracking-widest">Apps Script v31.2</h4>
+        <h4 className="text-xs font-bold text-gray-900 uppercase tracking-widest">Apps Script v31.2</h4>
         <button 
           onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
-          className={`text-[9px] px-4 py-2 rounded-xl font-black transition-all ${copied ? 'bg-green-600 text-white' : 'bg-indigo-600 text-white hover:bg-black'}`}
+          className={`text-[9px] px-4 py-2 rounded-xl font-bold transition-all ${copied ? 'bg-green-600 text-white' : 'bg-indigo-600 text-white hover:bg-black'}`}
         >
           {copied ? 'COPIED TO CLIPBOARD' : 'COPY SCRIPT CODE'}
         </button>
@@ -258,9 +258,10 @@ export const GoogleSheetIntegrationInfo: React.FC<GoogleSheetIntegrationInfoProp
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <button onClick={async () => { setStatus('Syncing...'); await onForceSync(); setStatus('Sync Complete'); }} className="bg-gray-100 text-gray-800 font-black py-3 rounded-xl text-[10px] hover:bg-gray-200 uppercase tracking-widest active:scale-95 transition-all">Force Sync</button>
-        <button onClick={async () => { setStatus('Testing...'); const r = await onSendTestRecord(); setStatus(r.message); }} className="bg-gray-900 text-white font-black py-3 rounded-xl text-[10px] hover:bg-black uppercase tracking-widest active:scale-95 transition-all">Test Sheet</button>
+      <div className="grid grid-cols-3 gap-3">
+        <button onClick={async () => { setStatus('Checking...'); const r = await onCheckPendingRecords(); setStatus(r.message); }} className="bg-gray-100 text-gray-800 font-bold py-3 rounded-xl text-[10px] hover:bg-gray-200 uppercase tracking-widest active:scale-95 transition-all">Check Queue</button>
+        <button onClick={async () => { setStatus('Syncing...'); await onForceSync(); setStatus('Sync Complete'); }} className="bg-gray-100 text-gray-800 font-bold py-3 rounded-xl text-[10px] hover:bg-gray-200 uppercase tracking-widest active:scale-95 transition-all">Force Sync</button>
+        <button onClick={async () => { setStatus('Testing...'); const r = await onSendTestRecord(); setStatus(r.message); }} className="bg-gray-900 text-white font-bold py-3 rounded-xl text-[10px] hover:bg-black uppercase tracking-widest active:scale-95 transition-all">Test Sheet</button>
       </div>
       
       {status && <p className="text-[10px] text-center font-bold text-indigo-600 uppercase tracking-widest">{status}</p>}

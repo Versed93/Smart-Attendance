@@ -58,10 +58,11 @@ export const QrScanner: React.FC<QrScannerProps> = ({ onScan, onClose }) => {
 
     startCamera();
 
+    const videoElement = videoRef.current;
     return () => {
       cancelAnimationFrame(animationFrameId);
-      if (videoRef.current && videoRef.current.srcObject) {
-        (videoRef.current.srcObject as MediaStream).getTracks().forEach(track => track.stop());
+      if (videoElement && videoElement.srcObject) {
+        (videoElement.srcObject as MediaStream).getTracks().forEach(track => track.stop());
       }
     };
   }, [onScan]);
