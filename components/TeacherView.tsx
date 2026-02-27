@@ -89,6 +89,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [confirmation, setConfirmation] = useState<{ action: 'P' | 'A' | null, count: number, reason?: string }>({ action: null, count: 0 });
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
+  const [showStudentListModal, setShowStudentListModal] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -238,6 +239,21 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     }
   };
 
+  const handleDeleteHistoryItem = (timestamp: number, studentId: string) => {
+      if (window.confirm("Delete this history record?")) {
+          const newHistory = teacherHistory.filter(h => !(h.timestamp === timestamp && h.studentId === studentId));
+          setTeacherHistory(newHistory);
+          localStorage.setItem('attendance-teacher-history-v1', JSON.stringify(newHistory));
+      }
+  };
+
+  const handleDeleteKnownStudent = (id: string) => {
+      if (window.confirm(`Remove student ${id} from the known list?`)) {
+          const newList = knownStudents.filter(s => s.id !== id);
+          onUpdateKnownStudents(newList);
+      }
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -247,25 +263,42 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       const text = event.target?.result as string;
       if (!text) return;
 
-      const lines = text.split(/\r?\n/);
+      const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
+      if (lines.length === 0) return;
+
+      // Try to find headers
+      const headerLine = lines[0].toLowerCase();
+      const headerParts = headerLine.split(',').map(p => p.trim());
+      
+      let idIndex = headerParts.findIndex(h => h.includes('id') || h.includes('matrik') || h.includes('number') || h.includes('no.'));
+      let nameIndex = headerParts.findIndex(h => h.includes('name') || h.includes('nama') || h.includes('student'));
+
+      // Fallback to 0 and 1 if headers not found or ambiguous
+      if (idIndex === -1) idIndex = 0;
+      if (nameIndex === -1) nameIndex = 1;
+
       const newStudents: PreRegisteredStudent[] = [];
       
-      lines.forEach(line => {
-        const parts = line.split(',').map(p => p.trim());
-        if (parts.length >= 2) {
-          const id = parts[0].toUpperCase();
-          const name = parts[1].toUpperCase();
-          if (id && name && id !== 'ID' && id !== 'STUDENT ID') {
-            newStudents.push({ id, name });
-          }
+      // Start from index 1 if we found headers, otherwise 0
+      const startIndex = (headerLine.includes('id') || headerLine.includes('name')) ? 1 : 0;
+
+      for (let i = startIndex; i < lines.length; i++) {
+        const parts = lines[i].split(',').map(p => p.trim());
+        if (parts.length > Math.max(idIndex, nameIndex)) {
+           const id = parts[idIndex].toUpperCase();
+           const name = parts[nameIndex].toUpperCase();
+           // Basic validation
+           if (id && name && id.length > 1 && id !== 'ID' && id !== 'STUDENT ID') {
+               newStudents.push({ id, name });
+           }
         }
-      });
+      }
 
       if (newStudents.length > 0) {
         onUpdateKnownStudents(newStudents);
         alert(`Successfully imported ${newStudents.length} students.`);
       } else {
-        alert("No valid student records found. Please ensure the CSV format is: StudentID, Name");
+        alert("No valid student records found. Please ensure the CSV has columns for Student ID and Name.");
       }
       
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -500,6 +533,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                         </div>
                                         <div className="flex flex-col items-end gap-1 shrink-0">
                                             {getStatusBadge(s.status)}
+                                            <button onClick={(e) => { e.stopPropagation(); handleDeleteHistoryItem(s.timestamp, s.studentId); }} className="text-gray-300 hover:text-red-500 transition-colors p-1"><TrashIcon className="w-3.5 h-3.5" /></button>
                                         </div>
                                     </div>
                                 </li>
@@ -609,6 +643,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                         Template
                                     </button>
                                     <button 
+                                        onClick={() => setShowStudentListModal(true)}
+                                        className="flex items-center gap-2 bg-white text-gray-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-gray-200"
+                                    >
+                                        <ListBulletIcon className="w-3.5 h-3.5" />
+                                        Manage
+                                    </button>
+                                    <button 
                                         onClick={() => fileInputRef.current?.click()}
                                         className="flex items-center gap-2 bg-white text-indigo-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-indigo-100"
                                     >
@@ -649,6 +690,30 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             </div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {showStudentListModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[130] flex items-center justify-center p-4">
+            <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-8 relative overflow-y-auto max-h-[90vh]">
+                <button onClick={() => setShowStudentListModal(false)} className="absolute top-6 right-6 text-gray-300 hover:text-gray-900 transition-all active:scale-90"><XCircleIcon className="w-8 h-8"/></button>
+                <h2 className="text-2xl font-bold text-gray-900 mb-6 tracking-tight">Student List</h2>
+                <div className="space-y-2">
+                    {knownStudents.length === 0 ? (
+                        <p className="text-center text-gray-400 font-bold text-sm">No students in list.</p>
+                    ) : (
+                        knownStudents.map(s => (
+                            <div key={s.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100">
+                                <div>
+                                    <p className="font-bold text-xs text-gray-900">{s.name}</p>
+                                    <p className="font-mono text-[10px] text-gray-400">{s.id}</p>
+                                </div>
+                                <button onClick={() => handleDeleteKnownStudent(s.id)} className="text-red-400 hover:text-red-600 p-2"><TrashIcon className="w-4 h-4" /></button>
+                            </div>
+                        ))
+                    )}
                 </div>
             </div>
         </div>
