@@ -99,19 +99,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
             return;
         }
 
-        if (studentId && !bypassRestrictions) {
-            setStatus('checking-firebase');
-            try {
-                const res = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${SESSION_ID}/${studentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
-                const data = await res.json();
-                if (data && data.status === 'P') {
-                    setStatus('device-locked');
-                    localStorage.setItem(lockKey, 'true');
-                    return;
-                }
-            } catch (e) {}
-        }
-
         if (geoConstraints && !bypassRestrictions) {
             setStatus('validating-gps');
             navigator.geolocation.getCurrentPosition(
@@ -136,7 +123,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
     };
 
     checkStatus();
-  }, [bypassRestrictions, courseName, geoConstraints, token, studentId]);
+  }, [bypassRestrictions, courseName, geoConstraints, token]);
 
   useEffect(() => {
     if (status === 'show-student-qr' && canvasRef.current && studentQrData) {
@@ -162,6 +149,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
     const result = await markAttendance(name, studentId, `${studentId}@STUDENT.UTS.EDU.MY`);
     if (result.success) {
       setStatus('success');
+      const lockKey = `attendance-device-lock-v1-${SESSION_ID}-${courseName || 'general'}`;
+      if (!bypassRestrictions) localStorage.setItem(lockKey, 'true');
+    } else if (result.message === "You have already checked in for this session." || result.message === "Attendance already recorded for this student ID.") {
+      setStatus('device-locked');
       const lockKey = `attendance-device-lock-v1-${SESSION_ID}-${courseName || 'general'}`;
       if (!bypassRestrictions) localStorage.setItem(lockKey, 'true');
     } else {
