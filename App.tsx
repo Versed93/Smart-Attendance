@@ -67,7 +67,17 @@ const App: React.FC = () => {
   });
 
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbxpwABKeVoJgMVdeCI7OHDgB-Cm0146YldpgYMixjQNVQjUt4c1WZX8K6HCx9zNdK-h/exec';
+    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbyWAb_swy-wolWfXUDDTbueUveOWWX-y1qJIxZ-KVvOdHunubkjYNAxhU4JIYVzTkZmog/exec';
+  });
+
+  const formatCloudPayload = (r: Student) => ({
+      "Student ID": r.studentId,
+      "Name": r.name,
+      "[Course Name Here]": r.courseName || 'General Session',
+      "[Date Here 1]": new Date(r.timestamp).toLocaleDateString(),
+      "[Status Here]": r.status,
+      "Reason": r.absenceReason || "",
+      "Timestamp": new Date(r.timestamp).toISOString()
   });
 
   const syncToAirtable = async (records: Record<string, Student>) => {
@@ -81,14 +91,7 @@ const App: React.FC = () => {
       if (!token || !baseId) return;
 
       const airtableRecords = Object.values(records).map(r => ({
-          fields: {
-              "Student ID": r.studentId,
-              "Name": r.name,
-              "Status": r.status,
-              "Course": r.courseName || 'General Session',
-              "Timestamp": new Date(r.timestamp).toISOString(),
-              "Reason": r.absenceReason || ""
-          }
+          fields: formatCloudPayload(r)
       }));
 
       try {
@@ -256,7 +259,7 @@ const App: React.FC = () => {
               fetch(scriptUrl, {
                   method: 'POST',
                   mode: 'no-cors',
-                  body: JSON.stringify({ [studentId]: studentData }),
+                  body: JSON.stringify(formatCloudPayload(studentData)),
               }).catch(err => console.warn("Deferred sync", err));
           } else if (integrationType === 'airtable') {
               syncToAirtable({ [studentId]: studentData });
@@ -296,7 +299,7 @@ const App: React.FC = () => {
         
         const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
         if (integrationType === 'google_sheets' && scriptUrl) {
-            fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ [id]: removalData }) });
+            fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(formatCloudPayload(removalData)) });
         } else if (integrationType === 'airtable') {
             syncToAirtable({ [id]: removalData });
         }
@@ -320,7 +323,8 @@ const App: React.FC = () => {
       }
       const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
       if (integrationType === 'google_sheets' && scriptUrl && Object.keys(updatePayload).length > 0) {
-          fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(updatePayload) });
+          const bulkPayload = Object.values(updatePayload).map(formatCloudPayload);
+          fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(bulkPayload) });
       } else if (integrationType === 'airtable' && Object.keys(updatePayload).length > 0) {
           syncToAirtable(updatePayload);
       }
@@ -334,7 +338,7 @@ const App: React.FC = () => {
       
       const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
       if (integrationType === 'google_sheets' && scriptUrl) {
-          await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ 'TEST999': testRecord }) });
+          await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(formatCloudPayload(testRecord)) });
       } else if (integrationType === 'airtable') {
           await syncToAirtable({ 'TEST999': testRecord });
       }

@@ -191,13 +191,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   const handleExportCSV = () => {
       if (filteredList.length === 0) return alert("No data to export.");
-      const headers = ["Student ID", "Name", "Status", "Reason", "Timestamp", "Date", "Time"];
+      const headers = ["Student ID", "Name", "[Course Name Here]", "[Date Here 1]", "[Status Here]", "Reason", "Time"];
       const rows = [headers.join(',')];
       filteredList.forEach(s => {
           const ts = new Date(s.timestamp);
           const name = `"${s.name.replace(/"/g, '""')}"`;
           const reason = `"${(s.absenceReason || '').replace(/"/g, '""')}"`;
-          rows.push([s.studentId, name, s.status, reason, s.timestamp, ts.toLocaleDateString(), ts.toLocaleTimeString()].join(','));
+          const course = `"${(courseName || 'General Session').replace(/"/g, '""')}"`;
+          rows.push([s.studentId, name, course, ts.toLocaleDateString(), s.status, reason, ts.toLocaleTimeString()].join(','));
       });
       const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);
