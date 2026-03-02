@@ -95,6 +95,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [showStudentListModal, setShowStudentListModal] = useState(false);
   const [studentListFilter, setStudentListFilter] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const [selectedStudentListIds, setSelectedStudentListIds] = useState<Set<string>>(new Set());
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -257,6 +258,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       if (window.confirm(`Remove student ${id} from the known list?`)) {
           const newList = knownStudents.filter(s => s.id !== id);
           onUpdateKnownStudents(newList);
+      }
+  };
+
+  const handleBulkDeleteKnownStudents = () => {
+      if (selectedStudentListIds.size === 0) return;
+      if (window.confirm(`Are you sure you want to delete ${selectedStudentListIds.size} selected students?`)) {
+          const newList = knownStudents.filter(s => !selectedStudentListIds.has(s.id));
+          onUpdateKnownStudents(newList);
+          setSelectedStudentListIds(new Set());
       }
   };
 
@@ -822,6 +832,41 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     </button>
                 </div>
 
+                {knownStudents.length > 0 && (
+                    <div className="flex items-center justify-between mb-4 bg-gray-50 p-2 rounded-xl border border-gray-100 shrink-0">
+                        <div className="flex items-center gap-2 px-2">
+                            <input 
+                                type="checkbox" 
+                                checked={
+                                    knownStudents.filter(s => s.name.toLowerCase().includes(studentListFilter.toLowerCase()) || s.id.toLowerCase().includes(studentListFilter.toLowerCase())).length > 0 &&
+                                    knownStudents.filter(s => s.name.toLowerCase().includes(studentListFilter.toLowerCase()) || s.id.toLowerCase().includes(studentListFilter.toLowerCase())).every(s => selectedStudentListIds.has(s.id))
+                                }
+                                onChange={(e) => {
+                                    const visibleStudents = knownStudents.filter(s => s.name.toLowerCase().includes(studentListFilter.toLowerCase()) || s.id.toLowerCase().includes(studentListFilter.toLowerCase()));
+                                    const newSet = new Set(selectedStudentListIds);
+                                    if (e.target.checked) {
+                                        visibleStudents.forEach(s => newSet.add(s.id));
+                                    } else {
+                                        visibleStudents.forEach(s => newSet.delete(s.id));
+                                    }
+                                    setSelectedStudentListIds(newSet);
+                                }}
+                                className="w-4 h-4 text-brand-primary rounded border-gray-300 focus:ring-brand-primary"
+                            />
+                            <span className="text-[10px] font-bold text-gray-500 uppercase">Select All {studentListFilter ? 'Filtered' : ''}</span>
+                        </div>
+                        {selectedStudentListIds.size > 0 && (
+                            <button 
+                                onClick={handleBulkDeleteKnownStudents}
+                                className="flex items-center gap-1 bg-red-100 text-red-600 text-[10px] font-bold px-3 py-1.5 rounded-lg hover:bg-red-200 transition-all active:scale-95 uppercase"
+                            >
+                                <TrashIcon className="w-3.5 h-3.5" />
+                                Delete ({selectedStudentListIds.size})
+                            </button>
+                        )}
+                    </div>
+                )}
+
                 <div className="space-y-4 overflow-y-auto custom-scrollbar pr-2">
                     {knownStudents.length === 0 ? (
                         <p className="text-center text-gray-400 font-bold text-sm py-8">No students in list.</p>
@@ -838,20 +883,50 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                 }, {} as Record<string, typeof knownStudents>)
                         ).sort((a, b) => a[0].localeCompare(b[0])).map(([groupKey, students]) => (
                             <div key={groupKey} className="rounded-xl overflow-hidden border border-transparent transition-all">
-                                <button 
-                                    onClick={() => toggleGroup(groupKey)}
-                                    className="w-full flex items-center justify-between bg-white py-2 px-1 hover:bg-gray-50 transition-colors group sticky top-0 z-10"
-                                >
-                                    <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 group-hover:text-brand-primary transition-colors">{groupKey} <span className="text-gray-300 text-[9px]">({students.length})</span></h3>
-                                    <ChevronDownIcon className={`w-4 h-4 text-gray-300 group-hover:text-brand-primary transition-all duration-300 ${collapsedGroups.has(groupKey) ? '-rotate-90' : ''}`} />
-                                </button>
+                                <div className="w-full flex items-center justify-between bg-white py-2 px-1 hover:bg-gray-50 transition-colors group sticky top-0 z-10">
+                                    <div className="flex items-center gap-2">
+                                        <input 
+                                            type="checkbox" 
+                                            checked={students.length > 0 && students.every(s => selectedStudentListIds.has(s.id))}
+                                            onChange={(e) => {
+                                                const newSet = new Set(selectedStudentListIds);
+                                                if (e.target.checked) {
+                                                    students.forEach(s => newSet.add(s.id));
+                                                } else {
+                                                    students.forEach(s => newSet.delete(s.id));
+                                                }
+                                                setSelectedStudentListIds(newSet);
+                                            }}
+                                            className="w-3.5 h-3.5 text-brand-primary rounded border-gray-300 focus:ring-brand-primary ml-1"
+                                        />
+                                        <button onClick={() => toggleGroup(groupKey)} className="flex items-center gap-1">
+                                            <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest group-hover:text-brand-primary transition-colors">{groupKey} <span className="text-gray-300 text-[9px]">({students.length})</span></h3>
+                                        </button>
+                                    </div>
+                                    <button onClick={() => toggleGroup(groupKey)} className="p-1">
+                                        <ChevronDownIcon className={`w-4 h-4 text-gray-300 group-hover:text-brand-primary transition-all duration-300 ${collapsedGroups.has(groupKey) ? '-rotate-90' : ''}`} />
+                                    </button>
+                                </div>
                                 
                                 <div className={`space-y-2 transition-all duration-300 origin-top ${collapsedGroups.has(groupKey) ? 'hidden' : 'block'}`}>
                                     {students.map(s => (
                                         <div key={s.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100 group hover:border-brand-primary/20 transition-all">
-                                            <div>
-                                                <p className="font-bold text-xs text-gray-900">{s.name}</p>
-                                                <p className="font-mono text-[10px] text-gray-400 group-hover:text-brand-primary transition-colors">{s.id}</p>
+                                            <div className="flex items-center gap-3">
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={selectedStudentListIds.has(s.id)}
+                                                    onChange={(e) => {
+                                                        const newSet = new Set(selectedStudentListIds);
+                                                        if (e.target.checked) newSet.add(s.id);
+                                                        else newSet.delete(s.id);
+                                                        setSelectedStudentListIds(newSet);
+                                                    }}
+                                                    className="w-4 h-4 text-brand-primary rounded border-gray-300 focus:ring-brand-primary"
+                                                />
+                                                <div>
+                                                    <p className="font-bold text-xs text-gray-900">{s.name}</p>
+                                                    <p className="font-mono text-[10px] text-gray-400 group-hover:text-brand-primary transition-colors">{s.id}</p>
+                                                </div>
                                             </div>
                                             <button onClick={() => handleDeleteKnownStudent(s.id)} className="text-gray-300 hover:text-red-500 p-2 transition-colors"><TrashIcon className="w-4 h-4" /></button>
                                         </div>

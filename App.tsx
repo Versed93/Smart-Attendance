@@ -67,7 +67,7 @@ const App: React.FC = () => {
   });
 
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbzrdrb0cqODFWezoHQFc-dN4rMW3RQwmmuq-TJylNDgyZJxPw0kkgUL1T77IiwU5njuAg/exec';
+    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbwbjXTrbFPRqVA0I-RGc1rV7K7eZ_CkgQujSBVtOtvjDCW1GJYAkxiVlXJzAB_-R_CaLA/exec';
   });
 
   const formatCloudPayload = (r: Student) => ({
