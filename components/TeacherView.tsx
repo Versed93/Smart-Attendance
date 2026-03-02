@@ -287,29 +287,92 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
       if (lines.length === 0) return;
 
+      // Function to split CSV line handling quotes
+      const parseCsvLine = (line: string, delimiter: string = ',') => {
+          const parts = [];
+          let current = '';
+          let inQuotes = false;
+          for (let i = 0; i < line.length; i++) {
+              const char = line[i];
+              if (current === '' && char === ' ' && !inQuotes) continue; // skip leading spaces
+              if (char === '"' && line[i+1] === '"') {
+                  current += '"';
+                  i++; // skip escaped quote
+              } else if (char === '"') {
+                  inQuotes = !inQuotes;
+              } else if (char === delimiter && !inQuotes) {
+                  parts.push(current.trim());
+                  current = '';
+              } else {
+                  current += char;
+              }
+          }
+          parts.push(current.trim());
+          return parts;
+      };
+
       // Try to find headers
       const headerLine = lines[0].toLowerCase();
-      const headerParts = headerLine.split(',').map(p => p.trim());
+      const delimiter = headerLine.includes('\t') ? '\t' : (headerLine.includes(';') ? ';' : ',');
+      const headerParts = parseCsvLine(headerLine, delimiter);
       
-      let idIndex = headerParts.findIndex(h => h.includes('id') || h.includes('matrik') || h.includes('number') || h.includes('no.'));
-      let nameIndex = headerParts.findIndex(h => h.includes('name') || h.includes('nama') || h.includes('student'));
+      let idIndex = headerParts.findIndex(h => h === 'id' || h === 'student id' || h === 'matrik' || h === 'matric');
+      if (idIndex === -1) {
+          idIndex = headerParts.findIndex(h => h.includes('id') || h.includes('matrik') || h.includes('matric'));
+      }
+      if (idIndex === -1) {
+          idIndex = headerParts.findIndex(h => h.includes('number') || h.includes('no.'));
+      }
+
+      let nameIndex = headerParts.findIndex(h => h === 'name' || h === 'student name' || h === 'nama');
+      if (nameIndex === -1) {
+          nameIndex = headerParts.findIndex(h => h.includes('name') || h.includes('nama') || h.includes('student'));
+      }
 
       // Fallback to 0 and 1 if headers not found or ambiguous
-      if (idIndex === -1) idIndex = 0;
-      if (nameIndex === -1) nameIndex = 1;
+      if (idIndex === -1 && nameIndex === -1) {
+          const isFirstColSerial = lines.slice(0, 3).every(l => {
+              const p = parseCsvLine(l, delimiter);
+              return p.length > 0 && !isNaN(Number(p[0])) && p[0].length < 4;
+          });
+          
+          if (isFirstColSerial && headerParts.length >= 3) {
+              idIndex = 1;
+              nameIndex = 2;
+          } else if (headerParts.length >= 2) {
+              // Guess based on content: if col 1 is a number and col 0 is not
+              const isCol1Number = !isNaN(Number(headerParts[1])) || /^[a-z0-9]+$/.test(headerParts[1].replace(/\s/g, ''));
+              const isCol0Name = isNaN(Number(headerParts[0])) && headerParts[0].length > 4;
+              
+              if (isCol1Number && isCol0Name) {
+                  idIndex = 1;
+                  nameIndex = 0;
+              } else {
+                  idIndex = 0;
+                  nameIndex = 1;
+              }
+          } else {
+              idIndex = 0;
+              nameIndex = 1;
+          }
+      } else {
+          if (idIndex === -1) idIndex = 0;
+          if (nameIndex === -1) nameIndex = 1;
+      }
 
       const newStudents: PreRegisteredStudent[] = [];
       
       // Start from index 1 if we found headers, otherwise 0
-      const startIndex = (headerLine.includes('id') || headerLine.includes('name')) ? 1 : 0;
+      const hasHeaders = headerParts.some(h => h.includes('id') || h.includes('name') || h.includes('matrik'));
+      const startIndex = hasHeaders ? 1 : 0;
 
       for (let i = startIndex; i < lines.length; i++) {
-        const parts = lines[i].split(',').map(p => p.trim());
+        const parts = parseCsvLine(lines[i], delimiter);
         if (parts.length > Math.max(idIndex, nameIndex)) {
            const id = parts[idIndex].toUpperCase();
            const name = parts[nameIndex].toUpperCase();
            // Basic validation
-           if (id && name && id.length > 1 && id !== 'ID' && id !== 'STUDENT ID') {
+           if (id && name && id.length > 1 && id !== 'ID' && id !== 'STUDENT ID' && id !== 'MATRIK' && id !== 'MATRIC' && id !== 'NO.') {
                newStudents.push({ id, name });
            }
         }
