@@ -256,13 +256,13 @@ const App: React.FC = () => {
           const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
           
           if (integrationType === 'google_sheets' && scriptUrl) {
-              fetch(scriptUrl, {
+              await fetch(scriptUrl, {
                   method: 'POST',
                   mode: 'no-cors',
                   body: JSON.stringify(formatCloudPayload(studentData)),
               }).catch(err => console.warn("Deferred sync", err));
           } else if (integrationType === 'airtable') {
-              syncToAirtable({ [studentId]: studentData });
+              await syncToAirtable({ [studentId]: studentData });
           }
           setKnownStudents(prev => {
              if (!prev.some(s => s.id === studentId)) return [...prev, { id: studentId, name }];
@@ -299,9 +299,9 @@ const App: React.FC = () => {
         
         const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
         if (integrationType === 'google_sheets' && scriptUrl) {
-            fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(formatCloudPayload(removalData)) });
+            promises.push(fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(formatCloudPayload(removalData)) }));
         } else if (integrationType === 'airtable') {
-            syncToAirtable({ [id]: removalData });
+            promises.push(syncToAirtable({ [id]: removalData }));
         }
       }
       await Promise.all(promises);
@@ -312,21 +312,25 @@ const App: React.FC = () => {
       const now = Date.now();
       const updatePayload: Record<string, Student> = {};
       const path = courseName ? `${SESSION_ID}_${sanitize(courseName)}` : SESSION_ID;
+      const promises: Promise<Response>[] = [];
       for (const id of ids) {
         const student = attendanceList.find(s => s.studentId === id);
         if (student) {
            const updateData: Student = { ...student, status, timestamp: now, courseName, absenceReason };
            updatePayload[id] = updateData;
-           fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) });
-           fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${path}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) });
+           promises.push(
+               fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) }),
+               fetch(`${FIREBASE_CONFIG.DATABASE_URL}/live_sessions/${path}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) })
+           );
         }
       }
+      await Promise.all(promises);
       const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
       if (integrationType === 'google_sheets' && scriptUrl && Object.keys(updatePayload).length > 0) {
           const bulkPayload = Object.values(updatePayload).map(formatCloudPayload);
-          fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(bulkPayload) });
+          await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(bulkPayload) });
       } else if (integrationType === 'airtable' && Object.keys(updatePayload).length > 0) {
-          syncToAirtable(updatePayload);
+          await syncToAirtable(updatePayload);
       }
   };
 
