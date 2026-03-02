@@ -25,6 +25,98 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
   const [airtableTableName, setAirtableTableName] = useState(() => localStorage.getItem('airtable-table-name') || 'Attendance');
 
   const [status, setStatus] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  const appScriptCode = `function doPost(e) {
+  if (!e || !e.postData || !e.postData.contents) {
+    return ContentService.createTextOutput(JSON.stringify({success: false, error: "No data"})).setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(60000)) {
+    return ContentService.createTextOutput(JSON.stringify({success:false, error:"Busy"})).setMimeType(ContentService.MimeType.JSON);
+  }
+  
+  try {
+    var data = JSON.parse(e.postData.contents);
+    var doc = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = doc.getSheets()[0]; // Use the first sheet
+    
+    var records = Array.isArray(data) ? data : [data];
+    
+    var headersRange = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1));
+    var headers = headersRange.getValues()[0];
+    
+    for (var i = 0; i < records.length; i++) {
+      var record = records[i];
+      var studentId = record["Student ID"];
+      var name = record["Name"];
+      
+      var idCol = headers.indexOf("Student ID") + 1;
+      var nameCol = headers.indexOf("Name") + 1;
+      
+      var studentRow = -1;
+      
+      // 1. Try to find the student by Student ID
+      if (idCol > 0 && studentId) {
+        var idValues = sheet.getRange(1, idCol, Math.max(sheet.getLastRow(), 1), 1).getValues();
+        for (var r = 1; r < idValues.length; r++) {
+          if (String(idValues[r][0]).toUpperCase().trim() === String(studentId).toUpperCase().trim()) {
+            studentRow = r + 1;
+            break;
+          }
+        }
+      }
+      
+      // 2. If not found by ID, try to find by Name
+      if (studentRow === -1 && nameCol > 0 && name) {
+        var nameValues = sheet.getRange(1, nameCol, Math.max(sheet.getLastRow(), 1), 1).getValues();
+        for (var r = 1; r < nameValues.length; r++) {
+          if (String(nameValues[r][0]).toUpperCase().trim() === String(name).toUpperCase().trim()) {
+            studentRow = r + 1;
+            break;
+          }
+        }
+      }
+      
+      // 3. If still not found, append a new row
+      if (studentRow === -1) {
+        studentRow = sheet.getLastRow() + 1;
+        if (idCol === 0) {
+          idCol = headers.length + 1;
+          headers.push("Student ID");
+          sheet.getRange(1, idCol).setValue("Student ID");
+        }
+        sheet.getRange(studentRow, idCol).setValue(studentId);
+      }
+      
+      // 4. Dynamically update all columns based on the keys provided in the payload
+      var keys = Object.keys(record);
+      for (var k = 0; k < keys.length; k++) {
+        var key = keys[k];
+        if (key === "Student ID") continue; // Already handled
+        
+        var colIdx = headers.indexOf(key) + 1;
+        
+        // If the column doesn't exist, create it
+        if (colIdx === 0) {
+          colIdx = headers.length + 1;
+          headers.push(key);
+          sheet.getRange(1, colIdx).setValue(key);
+        }
+        
+        // Write the value to the correct column for this student
+        sheet.getRange(studentRow, colIdx).setValue(record[key]);
+      }
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
+  } catch(err) {
+    return ContentService.createTextOutput(JSON.stringify({error:err.toString()})).setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    lock.releaseLock();
+  }
+}`;
 
   useEffect(() => {
       localStorage.setItem('attendance-integration-type', integrationType);
@@ -64,10 +156,19 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
 
       {integrationType === 'google_sheets' && (
           <div className="space-y-4 animate-in fade-in">
+              <div className="flex justify-between items-center">
+                  <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Apps Script Code</h4>
+                  <button 
+                      onClick={() => { navigator.clipboard.writeText(appScriptCode.trim()); setCopied(true); setTimeout(()=>setCopied(false),2000); }} 
+                      className={`text-[9px] px-3 py-1.5 rounded-lg font-bold transition-all ${copied ? 'bg-green-600 text-white' : 'bg-indigo-600 text-white hover:bg-black'}`}
+                  >
+                      {copied ? 'COPIED TO CLIPBOARD' : 'COPY SCRIPT CODE'}
+                  </button>
+              </div>
               <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
                   <div className="bg-amber-100 p-1.5 rounded-lg text-amber-600 shrink-0">ℹ️</div>
                   <p className="text-[10px] text-amber-800 leading-relaxed font-bold uppercase">
-                      Paste your Google Apps Script Web App URL below.
+                      Copy the script code above, deploy it as a Web App in Google Apps Script, and paste the URL below.
                   </p>
               </div>
               <div>
