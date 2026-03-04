@@ -451,6 +451,23 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-yellow-100 text-yellow-800 border border-yellow-200">{s}</span>;
   };
 
+  const toggleClassroomView = async (mode: 'teacher' | 'classroom') => {
+    setViewMode(mode);
+    try {
+        if (mode === 'classroom') {
+            if (document.documentElement.requestFullscreen) {
+                await document.documentElement.requestFullscreen();
+            }
+        } else {
+            if (document.fullscreenElement && document.exitFullscreen) {
+                await document.exitFullscreen();
+            }
+        }
+    } catch (err) {
+        console.warn("Fullscreen API failed", err);
+    }
+  };
+
   if (viewMode === 'classroom') {
     return (
         <div className="fixed inset-0 bg-gray-900/95 backdrop-blur-lg z-[100] flex flex-col items-center justify-center p-4 animate-in fade-in duration-300">
@@ -465,7 +482,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             <div className="bg-white p-4 rounded-[2.5rem] shadow-2xl w-full max-w-sm sm:max-w-md aspect-square flex items-center justify-center relative border-8 border-brand-primary/10">
                  <canvas ref={canvasRef} className="max-w-full max-h-full rounded-3xl" />
             </div>
-            <button onClick={() => setViewMode('teacher')} className="mt-10 bg-white/10 border border-white/20 text-white font-bold py-4 px-12 rounded-2xl hover:bg-white/20 active:scale-95 transition-all text-sm uppercase tracking-widest">Close Classroom View</button>
+            <button onClick={() => toggleClassroomView('teacher')} className="mt-10 bg-white/10 border border-white/20 text-white font-bold py-4 px-12 rounded-2xl hover:bg-white/20 active:scale-95 transition-all text-sm uppercase tracking-widest">Close Classroom View</button>
         </div>
     );
   }
@@ -481,7 +498,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             <button onClick={() => setShowNewSessionModal(true)} className="flex items-center justify-center w-11 h-11 bg-gray-900 text-white rounded-xl border border-gray-800 hover:bg-black transition-all shrink-0 active:scale-90" title="Clear Session"><PlusIcon className="w-5 h-5" /></button>
             <button onClick={() => { setShowManualModal(true); setManualId(''); setManualName(''); setManualError(''); }} className="flex items-center justify-center w-11 h-11 bg-brand-primary/5 text-brand-primary rounded-xl border-2 border-brand-primary/10 hover:bg-brand-primary/10 transition-all shrink-0 active:scale-90" title="Manual Entry"><PencilSquareIcon className="w-5 h-5" /></button>
             <button onClick={() => setShowSettingsModal(true)} className="flex items-center justify-center w-11 h-11 rounded-xl border-2 border-gray-100 bg-gray-50 text-gray-500 hover:bg-gray-100 transition-all shrink-0 active:scale-90" title="Settings"><AdjustmentsHorizontalIcon className="w-5 h-5" /></button>
-            <button onClick={() => setViewMode('classroom')} className="flex group items-center gap-4 px-5 py-2.5 rounded-xl font-bold transition-all shrink-0 bg-gray-900 text-white hover:bg-black active:scale-95 shadow-lg shadow-gray-200">
+            <button onClick={() => toggleClassroomView('classroom')} className="flex group items-center gap-4 px-5 py-2.5 rounded-xl font-bold transition-all shrink-0 bg-gray-900 text-white hover:bg-black active:scale-95 shadow-lg shadow-gray-200">
                 <div className="text-right hidden sm:block"><span className="block text-[9px] uppercase opacity-60 tracking-widest">Launch</span><span className="block text-xs uppercase tracking-widest">Classroom View</span></div>
                 <EyeIcon className="w-5 h-5" />
             </button>
