@@ -45,6 +45,36 @@ const App: React.FC = () => {
   const [isKioskMode, setIsKioskMode] = useState(() => localStorage.getItem(KIOSK_PREF_KEY) === 'true');
   const [activeCourse, setActiveCourse] = useState(() => localStorage.getItem('attendance-course-name') || '');
 
+  const REGISTERED_USERS_KEY = 'attendance-registered-users-v1';
+  const CURRENT_ADMIN_NAME_KEY = 'attendance-current-admin-name-v1';
+
+  const [registeredUsers, setRegisteredUsers] = useState<{ username: string; password: string }[]>(() => {
+    const saved = localStorage.getItem(REGISTERED_USERS_KEY);
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      } catch { /* ignore */ }
+    }
+    return [{ username: 'admin', password: 'adminscm' }];
+  });
+
+  const [currentAdminName, setCurrentAdminName] = useState(() => {
+    return localStorage.getItem(CURRENT_ADMIN_NAME_KEY) || 'admin';
+  });
+
+  useEffect(() => {
+    localStorage.setItem(REGISTERED_USERS_KEY, JSON.stringify(registeredUsers));
+  }, [registeredUsers]);
+
+  useEffect(() => {
+    if (currentAdminName) {
+      localStorage.setItem(CURRENT_ADMIN_NAME_KEY, currentAdminName);
+    } else {
+      localStorage.removeItem(CURRENT_ADMIN_NAME_KEY);
+    }
+  }, [currentAdminName]);
+
   const [attendanceList, setAttendanceList] = useState<Student[]>([]);
   
   const sanitize = (str: string) => str.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
@@ -177,9 +207,12 @@ const App: React.FC = () => {
     }
   }, [fetchFirebaseLiveAttendance, view, isAuthenticated]);
 
-  const handleLogin = (password: string) => {
-    if (password === LECTURER_PASSWORD) {
+  const handleLogin = (username: string, password: string) => {
+    const cleanUser = username.trim().toLowerCase();
+    const found = registeredUsers.find(u => u.username.toLowerCase() === cleanUser && u.password === password);
+    if (found || (cleanUser === 'admin' && password === LECTURER_PASSWORD)) {
         setIsAuthenticated(true);
+        setCurrentAdminName(found ? found.username : 'admin');
         localStorage.setItem(AUTH_KEY, 'true');
         setView('teacher');
         return true;
@@ -187,13 +220,36 @@ const App: React.FC = () => {
     return false;
   };
 
+  const handleSignUp = (username: string, password: string) => {
+    const cleanUser = username.trim();
+    if (!cleanUser || !password) return false;
+    if (registeredUsers.some(u => u.username.toLowerCase() === cleanUser.toLowerCase())) {
+        return false;
+    }
+    const updated = [...registeredUsers, { username: cleanUser, password }];
+    setRegisteredUsers(updated);
+    return true;
+  };
+
   const handleLogout = useCallback(() => {
     setIsAuthenticated(false);
+    setCurrentAdminName('');
     localStorage.removeItem(AUTH_KEY);
+    localStorage.removeItem(CURRENT_ADMIN_NAME_KEY);
     localStorage.removeItem(KIOSK_PREF_KEY);
     setView('student'); 
     setIsKioskMode(false);
   }, []);
+
+  const onDeleteAllSessions = () => {
+    setRegisteredUsers([{ username: 'admin', password: 'adminscm' }]);
+    localStorage.removeItem(REGISTERED_USERS_KEY);
+    handleLogout();
+  };
+
+  const onLogoutUser = (username: string) => {
+    setRegisteredUsers(prev => prev.filter(u => u.username !== username));
+  };
 
   const handleEnterKiosk = useCallback(() => {
       setIsKioskMode(true);
@@ -417,9 +473,16 @@ const App: React.FC = () => {
                          return Array.from(map.values());
                      })}
                      onCourseChange={setActiveCourse}
+                     currentAdminName={currentAdminName}
                  />
              </div>
-           ) : <LoginView onLogin={handleLogin} />
+           ) : <LoginView 
+                   onLogin={handleLogin} 
+                   onSignUp={handleSignUp} 
+                   registeredUsers={registeredUsers} 
+                   onDeleteAllSessions={onDeleteAllSessions} 
+                   onLogoutUser={onLogoutUser} 
+               />
        ) : (
            <div className="flex-1 flex flex-col items-center justify-center p-4 bg-gray-50">
                <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-6 border border-gray-100">
