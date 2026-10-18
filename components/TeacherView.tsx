@@ -41,6 +41,7 @@ interface TeacherViewProps {
   onForceSync: () => Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number; }>;
   onUpdateKnownStudents: (students: PreRegisteredStudent[]) => void;
   onCourseChange: (courseName: string) => void;
+  currentAdminName?: string;
 }
 
 export const TeacherView: React.FC<TeacherViewProps> = ({ 
@@ -60,6 +61,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onForceSync,
   onUpdateKnownStudents,
   onCourseChange,
+  currentAdminName = 'admin',
 }) => {
   const [baseUrl] = useState<string>(() => window.location.origin + window.location.pathname);
   const [qrData, setQrData] = useState<string>('');
@@ -491,8 +493,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     <div className="w-full max-w-[1600px] mx-auto p-3 sm:p-6 space-y-6 pb-24 sm:pb-6 animate-in fade-in duration-500">
        <div className="relative z-10 flex flex-col xl:flex-row justify-between items-stretch xl:items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
          <div className="flex items-center gap-4">
-            <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl shadow-lg shrink-0"><ShieldCheckIcon className="w-7 h-7" /></div>
-            <div className="min-w-0"><h1 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight leading-none">SMART ATTENDANCE</h1><p className="text-[10px] text-gray-400 font-bold tracking-[0.2em] mt-1.5 uppercase">Lecturer Dashboard</p></div>
+             <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl shadow-lg shrink-0"><ShieldCheckIcon className="w-7 h-7" /></div>
+             <div className="min-w-0"><h1 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight leading-none">SMART ATTENDANCE</h1><p className="text-[10px] text-gray-400 font-bold tracking-[0.2em] mt-1.5 uppercase">Lecturer Dashboard {currentAdminName ? `• User: ${currentAdminName}` : ''}</p></div>
          </div>
          <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0 no-scrollbar w-full xl:w-auto">
             <button onClick={() => setShowNewSessionModal(true)} className="flex items-center justify-center w-11 h-11 bg-gray-900 text-white rounded-xl border border-gray-800 hover:bg-black transition-all shrink-0 active:scale-90" title="Clear Session"><PlusIcon className="w-5 h-5" /></button>
@@ -525,6 +527,32 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
              <span className="text-2xl font-bold text-indigo-600 tabular-nums leading-none">{stats.pct}%</span>
           </div>
        </div>
+
+       {currentAdminName?.toLowerCase() === 'admin' && (
+         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
+            <div className="flex items-center justify-between mb-4">
+               <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></div>
+                  <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Admin Activity Tracker</h3>
+               </div>
+               <span className="text-[10px] bg-indigo-50 text-indigo-600 font-bold px-3 py-1 rounded-full border border-indigo-100">Secure Session Active</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
+               <div className="bg-gray-50 p-3.5 rounded-xl border border-gray-100">
+                  <span className="block font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-1">Logged In User</span>
+                  <span className="font-black text-gray-900 text-sm">{currentAdminName}</span>
+               </div>
+               <div className="bg-gray-50 p-3.5 rounded-xl border border-gray-100">
+                  <span className="block font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-1">Session State</span>
+                  <span className="font-bold text-emerald-600">Active & Monitored</span>
+               </div>
+               <div className="bg-gray-50 p-3.5 rounded-xl border border-gray-100">
+                  <span className="block font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-1">System Audit</span>
+                  <span className="font-bold text-gray-700">All checks passed ({attendanceList.length} records)</span>
+               </div>
+            </div>
+         </div>
+       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center">

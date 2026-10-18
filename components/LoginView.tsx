@@ -5,17 +5,11 @@ import { UserPlusIcon } from './icons/UserPlusIcon';
 interface LoginViewProps {
   onLogin: (username: string, password: string) => boolean;
   onSignUp?: (username: string, password: string) => boolean;
-  registeredUsers?: { username: string; password: string }[];
-  onDeleteAllSessions?: () => void;
-  onLogoutUser?: (username: string) => void;
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({ 
   onLogin, 
-  onSignUp, 
-  registeredUsers = [],
-  onDeleteAllSessions,
-  onLogoutUser
+  onSignUp,
 }) => {
   const [isSignUp, setIsSignUp] = useState(false);
   const [username, setUsername] = useState('admin');
@@ -128,37 +122,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
           </button>
         </form>
 
-        {/* Admin Session / User Management Tools */}
-        {registeredUsers.length > 0 && (
-          <div className="mt-8 pt-6 border-t border-gray-100">
-            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-3">Admin User & Session Control</h3>
-            <div className="space-y-2 max-h-36 overflow-y-auto pr-1">
-              {registeredUsers.map((u) => (
-                <div key={u.username} className="flex items-center justify-between bg-gray-50 p-2.5 rounded-xl border border-gray-200/60 text-xs">
-                  <span className="font-bold text-gray-700">{u.username}</span>
-                  <div className="flex gap-1">
-                    {onLogoutUser && u.username !== 'admin' && (
-                      <button 
-                        onClick={() => onLogoutUser(u.username)}
-                        className="px-2 py-1 bg-amber-100 text-amber-700 rounded-lg font-bold hover:bg-amber-200 transition-all text-[10px]"
-                      >
-                        Log Out
-                      </button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-            {onDeleteAllSessions && (
-              <button 
-                onClick={onDeleteAllSessions}
-                className="w-full mt-3 py-2 bg-red-50 text-red-600 font-bold rounded-xl border border-red-100 hover:bg-red-100 transition-all text-xs uppercase tracking-wider"
-              >
-                Delete Login Session For All Users
-              </button>
-            )}
-          </div>
-        )}
         
         <div className="mt-6 text-center">
            <p className="text-[11px] text-gray-400 font-medium">Default Admin: User Name <strong className="text-gray-600">admin</strong> | Password <strong className="text-gray-600">adminscm</strong></p>
