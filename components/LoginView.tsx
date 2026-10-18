@@ -12,8 +12,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
   onSignUp,
 }) => {
   const [isSignUp, setIsSignUp] = useState(false);
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('adminscm');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
@@ -122,10 +122,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
           </button>
         </form>
 
-        
-        <div className="mt-6 text-center">
-           <p className="text-[11px] text-gray-400 font-medium">Default Admin: User Name <strong className="text-gray-600">admin</strong> | Password <strong className="text-gray-600">adminscm</strong></p>
-        </div>
       </div>
     </div>
   );
