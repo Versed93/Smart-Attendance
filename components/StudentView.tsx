@@ -100,16 +100,16 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   useEffect(() => {
     const checkStatus = async () => {
+        if (!token) {
+            setStatus('landing');
+            return;
+        }
+
         const lockKey = `attendance-device-lock-v1-${SESSION_ID}-${courseName || 'general'}`;
         
         if (!bypassRestrictions && localStorage.getItem(lockKey)) {
           setStatus('device-locked');
           return;
-        }
-
-        if (!token) {
-            setStatus('landing');
-            return;
         }
 
         const qrTime = parseInt(token, 10);
@@ -480,14 +480,34 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   if (status === 'device-locked') {
     return (
-      <div className="text-center py-10 animate-in zoom-in duration-300">
-        <div className="w-20 h-20 bg-green-50 text-green-500 rounded-3xl flex items-center justify-center mx-auto mb-6 shadow-sm"><CheckCircleIcon className="w-12 h-12" /></div>
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Record Verified</h2>
-        <p className="text-sm text-gray-400 font-bold uppercase tracking-widest mb-8">Attendance already recorded</p>
-        <div className="bg-gray-50 border border-gray-100 p-6 rounded-2xl">
+      <div className="text-center py-8 animate-in zoom-in duration-300 space-y-5">
+        <div className="w-20 h-20 bg-green-50 text-green-500 rounded-3xl flex items-center justify-center mx-auto shadow-sm"><CheckCircleIcon className="w-12 h-12" /></div>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Record Verified</h2>
+          <p className="text-sm text-gray-400 font-bold uppercase tracking-widest">Attendance already recorded</p>
+        </div>
+        <div className="bg-gray-50 border border-gray-100 p-5 rounded-2xl">
              <p className="text-xs font-bold text-gray-500 leading-relaxed uppercase tracking-tight">One submission is permitted per student per session. Please see your lecturer if you believe this is an error.</p>
         </div>
-        <button onClick={() => window.location.reload()} className="mt-8 text-xs font-bold text-brand-primary uppercase tracking-widest">Refresh Status</button>
+        <div className="space-y-2.5 pt-1">
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="w-full bg-indigo-50 text-indigo-700 font-bold py-3 rounded-xl hover:bg-indigo-100 transition-all text-xs uppercase tracking-widest"
+          >
+            Refresh Status
+          </button>
+          {onSwitchToTeacher && (
+            <button
+              type="button"
+              onClick={onSwitchToTeacher}
+              className="w-full bg-gray-900 text-white font-bold py-3 rounded-xl hover:bg-black active:scale-95 transition-all flex items-center justify-center gap-2 uppercase tracking-[0.1em] text-[10px] shadow-sm"
+            >
+              <LockClosedIcon className="w-4 h-4 text-brand-light" />
+              Lecturer / Admin Access
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -508,11 +528,35 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   if (status === 'success') {
     return (
-      <div className="text-center py-10 animate-in zoom-in duration-300">
-        <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-6"><CheckCircleIcon className="w-12 h-12" /></div>
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Check-in Complete</h2>
-        <p className="text-sm text-gray-500 font-bold mb-8 px-4">Thank you, <b>{name}</b>. Your attendance for <b>{courseName || 'this session'}</b> has been successfully recorded.</p>
-        <button onClick={() => window.location.reload()} className="w-full bg-gray-900 text-white font-bold py-4 rounded-xl hover:bg-black transition-all active:scale-95 shadow-lg uppercase tracking-widest text-xs">Finish</button>
+      <div className="text-center py-10 animate-in zoom-in duration-300 space-y-4">
+        <div className="w-20 h-20 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto"><CheckCircleIcon className="w-12 h-12" /></div>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Check-in Complete</h2>
+          <p className="text-sm text-gray-500 font-bold px-4">Thank you, <b>{name}</b>. Your attendance for <b>{courseName || 'this session'}</b> has been successfully recorded.</p>
+        </div>
+        <div className="space-y-2.5 pt-2">
+          <button
+            type="button"
+            onClick={() => {
+              window.history.replaceState({}, '', window.location.pathname);
+              setToken('');
+              setStatus('landing');
+            }}
+            className="w-full bg-gray-900 text-white font-bold py-4 rounded-xl hover:bg-black transition-all active:scale-95 shadow-lg uppercase tracking-widest text-xs"
+          >
+            Finish
+          </button>
+          {onSwitchToTeacher && (
+            <button
+              type="button"
+              onClick={onSwitchToTeacher}
+              className="w-full bg-indigo-50 text-indigo-700 font-bold py-3 rounded-xl hover:bg-indigo-100 active:scale-95 transition-all flex items-center justify-center gap-2 uppercase tracking-[0.1em] text-[10px]"
+            >
+              <LockClosedIcon className="w-4 h-4" />
+              Lecturer / Admin Access
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -585,11 +629,25 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   if (status === 'error') {
     return (
-      <div className="text-center py-10">
-        <div className="w-20 h-20 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center mx-auto mb-6"><ExclamationTriangleIcon className="w-12 h-12" /></div>
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">Unable to Process</h2>
-        <p className="text-sm text-gray-500 font-bold mb-8 px-6">{message}</p>
-        <button onClick={() => { setToken(''); setStatus('landing'); }} className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 transition-all active:scale-95 shadow-lg uppercase tracking-widest text-xs">Try Scanning Again</button>
+      <div className="text-center py-10 space-y-4">
+        <div className="w-20 h-20 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center mx-auto"><ExclamationTriangleIcon className="w-12 h-12" /></div>
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">Unable to Process</h2>
+          <p className="text-sm text-gray-500 font-bold px-6">{message}</p>
+        </div>
+        <div className="space-y-2.5 pt-2">
+          <button onClick={() => { setToken(''); setStatus('landing'); }} className="w-full bg-red-600 text-white font-bold py-4 rounded-xl hover:bg-red-700 transition-all active:scale-95 shadow-lg uppercase tracking-widest text-xs">Try Scanning Again</button>
+          {onSwitchToTeacher && (
+            <button
+              type="button"
+              onClick={onSwitchToTeacher}
+              className="w-full bg-gray-900 text-white font-bold py-3 rounded-xl hover:bg-black active:scale-95 transition-all flex items-center justify-center gap-2 uppercase tracking-[0.1em] text-[10px] shadow-sm"
+            >
+              <LockClosedIcon className="w-4 h-4 text-brand-light" />
+              Lecturer / Admin Access
+            </button>
+          )}
+        </div>
       </div>
     );
   }
