@@ -272,6 +272,11 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function authorizeMail() {
+  var quota = MailApp.getRemainingDailyQuota();
+  Logger.log("MailApp authorized! Remaining daily quota: " + quota);
 }`;
 
   useEffect(() => {
