@@ -109,7 +109,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [selectedStudentListIds, setSelectedStudentListIds] = useState<Set<string>>(new Set());
   const [showWeekPromptModal, setShowWeekPromptModal] = useState(true);
   const [isLoadingSheetCourse, setIsLoadingSheetCourse] = useState(false);
-  const [sheetCourseOptions, setSheetCourseOptions] = useState<{ sheetName: string; courseName: string }[]>([]);
+  const [sheetCourseOptions, setSheetCourseOptions] = useState<{ sheetName: string; courseName: string; students?: PreRegisteredStudent[] }[]>([]);
   const [sheetReadError, setSheetReadError] = useState<string | null>(null);
   const [pendingDeleteAction, setPendingDeleteAction] = useState<
     | { type: 'single'; id: string; name: string }
@@ -133,6 +133,67 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       onCourseChange(courseName);
   }, [courseName, onCourseChange]);
 
+  const normalizeSheetStudents = (rawList: unknown): PreRegisteredStudent[] => {
+      if (!Array.isArray(rawList)) return [];
+      const seen = new Set<string>();
+      const cleaned: PreRegisteredStudent[] = [];
+      for (const item of rawList) {
+          const rec = item as { id?: unknown; name?: unknown } | null;
+          const id = String(rec?.id || '').trim().toUpperCase();
+          const name = String(rec?.name || '').trim().toUpperCase();
+          if (id && name && !seen.has(id)) {
+              seen.add(id);
+              cleaned.push({ id, name });
+          }
+      }
+      return cleaned;
+  };
+
+  const applySheetResponse = (
+      data: { courseName?: unknown; students?: unknown; sheets?: Array<{ sheetName?: string; courseName?: string; students?: unknown }> },
+      preferredCourse: string,
+      replaceCourseIfPresent: boolean
+  ) => {
+      const sheets = Array.isArray(data.sheets)
+          ? data.sheets
+              .filter((s) => s && (s.courseName || (Array.isArray(s.students) && s.students.length > 0)))
+              .map((s) => ({
+                  sheetName: String(s.sheetName || ''),
+                  courseName: String(s.courseName || '').trim(),
+                  students: normalizeSheetStudents(s.students),
+              }))
+          : [];
+
+      if (sheets.length > 0) {
+          setSheetCourseOptions(sheets.filter((s) => s.courseName));
+      }
+
+      const firstNonEmpty = sheets.find((s) => s.courseName)?.courseName || '';
+      const resolvedCourse = String(data.courseName || firstNonEmpty || '').trim();
+      const activeTarget = (replaceCourseIfPresent ? resolvedCourse : (preferredCourse || resolvedCourse)).trim();
+
+      if (resolvedCourse) {
+          if (replaceCourseIfPresent) {
+              setCourseName(resolvedCourse);
+          } else {
+              setCourseName(prev => (!prev || prev === 'General Session') ? resolvedCourse : prev);
+          }
+      }
+
+      const matchedSheet = activeTarget
+          ? sheets.find((s) => s.courseName.toUpperCase() === activeTarget.toUpperCase())
+          : undefined;
+      const resolvedStudents = matchedSheet && matchedSheet.students.length > 0
+          ? matchedSheet.students
+          : normalizeSheetStudents(data.students);
+
+      if (resolvedStudents.length > 0) {
+          onUpdateKnownStudents(resolvedStudents);
+      }
+
+      return { resolvedCourse, studentCount: resolvedStudents.length };
+  };
+
   const fetchCourseFromB1 = async (manual = false) => {
       const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
       if (!scriptUrl || integrationType !== 'google_sheets') {
@@ -150,7 +211,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       setIsLoadingSheetCourse(true);
       setSheetReadError(null);
       try {
-          const url = `${scriptUrl.trim()}${scriptUrl.includes('?') ? '&' : '?'}action=getCourse&t=${Date.now()}`;
+          const courseQuery = courseName ? `&course=${encodeURIComponent(courseName)}` : '';
+          const url = `${scriptUrl.trim()}${scriptUrl.includes('?') ? '&' : '?'}action=getCourse${courseQuery}&t=${Date.now()}`;
           const res = await fetch(url, { method: 'GET', redirect: 'follow' });
           const rawText = await res.text();
           if (res.status === 404 || rawText.trim().startsWith('<')) {
@@ -163,20 +225,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           }
           const data = JSON.parse(rawText);
           if (data && data.success) {
-              if (Array.isArray(data.sheets)) {
-                  setSheetCourseOptions(data.sheets.filter((s: { courseName?: string }) => s.courseName));
-              }
-              const firstNonEmpty = Array.isArray(data.sheets)
-                  ? data.sheets.find((s: { courseName?: string }) => s.courseName && String(s.courseName).trim())?.courseName
-                  : '';
-              const resolvedCourse = String(data.courseName || firstNonEmpty || '').trim();
-              if (resolvedCourse) {
-                  setCourseName(resolvedCourse);
+              const { resolvedCourse, studentCount } = applySheetResponse(data, courseName, true);
+              if (resolvedCourse || studentCount > 0) {
                   setSheetReadError(null);
-                  if (manual) showToast('success', `Loaded course from B1: ${resolvedCourse}`);
+                  if (manual) {
+                      const courseLabel = resolvedCourse || courseName || 'Sheet';
+                      showToast('success', `Loaded ${courseLabel} (${studentCount} students from Sheet)`);
+                  }
               } else {
-                  setSheetReadError('Row B1 on the Google Sheet is empty.');
-                  if (manual) showToast('error', 'Row B1 on the Google Sheet is empty.');
+                  setSheetReadError('Row B1 and Student rows (B4+/C4+) on the Google Sheet are empty.');
+                  if (manual) showToast('error', 'Row B1 and Student rows on the Google Sheet are empty.');
               }
           } else {
               const msg = data?.error ? `Sheet error: ${data.error}` : 'Could not read Row B1. Re-deploy updated Apps Script.';
@@ -184,7 +242,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               if (manual) showToast('error', msg);
           }
       } catch {
-          const msg = 'Could not read Row B1. Check Apps Script URL in Settings (must be /exec with access = Anyone).';
+          const msg = 'Could not read Google Sheet. Check Apps Script URL in Settings (must be /exec with access = Anyone).';
           setSheetReadError(msg);
           if (manual) {
               showToast('error', msg);
@@ -219,16 +277,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               const data = JSON.parse(rawText);
               if (cancelled || !data?.success) return;
               setSheetReadError(null);
-              if (Array.isArray(data.sheets)) {
-                  setSheetCourseOptions(data.sheets.filter((s: { courseName?: string }) => s.courseName));
-              }
-              const firstNonEmpty = Array.isArray(data.sheets)
-                  ? data.sheets.find((s: { courseName?: string }) => s.courseName && String(s.courseName).trim())?.courseName
-                  : '';
-              const resolvedCourse = String(data.courseName || firstNonEmpty || '').trim();
-              if (resolvedCourse) {
-                  setCourseName(prev => (!prev || prev === 'General Session') ? resolvedCourse : prev);
-              }
+              applySheetResponse(data, courseName, false);
           } catch {
               if (!cancelled) {
                   setSheetReadError('Could not connect to Apps Script URL. Check Settings → Apps Script URL.');
@@ -237,6 +286,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       };
       void loadInitialCourse();
       return () => { cancelled = true; };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scriptUrl]);
 
   const handleScanResult = (data: string) => {
@@ -816,7 +866,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                       <button
                         key={opt.sheetName}
                         type="button"
-                        onClick={() => setCourseName(opt.courseName)}
+                        onClick={() => {
+                          setCourseName(opt.courseName);
+                          if (opt.students && opt.students.length > 0) {
+                            onUpdateKnownStudents(opt.students);
+                            showToast('success', `Switched to ${opt.courseName} (${opt.students.length} students)`);
+                          }
+                        }}
                         className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-all ${
                           courseName.toUpperCase() === opt.courseName.toUpperCase()
                             ? 'bg-indigo-600 text-white border-indigo-600'
@@ -1108,9 +1164,19 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       {showStudentListModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[130] flex items-center justify-center p-4">
             <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-8 relative overflow-hidden flex flex-col max-h-[90vh]">
-                <div className="flex items-center justify-between mb-6 shrink-0">
+                <div className="flex items-center justify-between mb-6 shrink-0 gap-2">
                     <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Student List</h2>
-                    <button onClick={() => setShowStudentListModal(false)} className="text-gray-300 hover:text-gray-900 transition-all active:scale-90"><XCircleIcon className="w-8 h-8"/></button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={() => fetchCourseFromB1(true)}
+                            disabled={isLoadingSheetCourse}
+                            className="text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 px-3 py-1.5 rounded-xl transition-all disabled:opacity-50"
+                        >
+                            {isLoadingSheetCourse ? 'Syncing...' : 'Sync Sheet'}
+                        </button>
+                        <button onClick={() => setShowStudentListModal(false)} className="text-gray-300 hover:text-gray-900 transition-all active:scale-90"><XCircleIcon className="w-8 h-8"/></button>
+                    </div>
                 </div>
                 
                 <div className="mb-4 shrink-0 flex gap-2">

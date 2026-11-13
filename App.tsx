@@ -13,7 +13,8 @@ const SCRIPT_URL_KEY = 'attendance-script-url-v58';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
 const VIEW_PREF_KEY = 'attendance-view-pref-v1';
 const KIOSK_PREF_KEY = 'attendance-kiosk-pref-v1';
-const KNOWN_STUDENTS_KEY = 'attendance-known-students-v1';
+const KNOWN_STUDENTS_KEY = 'attendance-known-students-v2';
+const LEGACY_KNOWN_STUDENTS_KEY = 'attendance-known-students-v1';
 const LECTURER_PASSWORD = 'adminscm'; 
 const LAST_SCAN_DATE_KEY = 'attendance-last-scan-date-v1';
 
@@ -82,6 +83,7 @@ const App: React.FC = () => {
   const sanitize = (str: string) => str.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
 
   const [knownStudents, setKnownStudents] = useState<PreRegisteredStudent[]>(() => {
+      localStorage.removeItem(LEGACY_KNOWN_STUDENTS_KEY);
       const saved = localStorage.getItem(KNOWN_STUDENTS_KEY);
       if (saved !== null) {
           try {
@@ -147,7 +149,7 @@ const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwbjXTrbFPRq
   const syncKnownStudentsToCloud = useCallback((students: PreRegisteredStudent[]) => {
     if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
     const baseDbUrl = FIREBASE_CONFIG.DATABASE_URL.replace(/\/+$/, '');
-    void fetch(`${baseDbUrl}/app_config/known_students.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
+    void fetch(`${baseDbUrl}/app_config/known_students_v2.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
       method: 'PUT',
       body: JSON.stringify(students),
     }).catch(() => { /* ignore */ });
@@ -159,13 +161,52 @@ const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwbjXTrbFPRq
   }, [syncKnownStudentsToCloud]);
 
   useEffect(() => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
-    if (isAuthenticated && localStorage.getItem(KNOWN_STUDENTS_KEY) !== null) return;
     let cancelled = false;
-    const loadCloudKnownStudents = async () => {
+    const loadStudentsFromSheetOrCloud = async () => {
+      const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
+      const cleanScriptUrl = scriptUrl.trim();
+      const canFetchSheet =
+        integrationType === 'google_sheets' &&
+        cleanScriptUrl &&
+        cleanScriptUrl !== DEFAULT_SCRIPT_URL &&
+        !cleanScriptUrl.endsWith('/dev');
+
+      if (canFetchSheet) {
+        try {
+          const courseFilter = courseNameParam || activeCourse || '';
+          const sheetUrl = `${cleanScriptUrl}${cleanScriptUrl.includes('?') ? '&' : '?'}action=getCourse${courseFilter ? `&course=${encodeURIComponent(courseFilter)}` : ''}&t=${Date.now()}`;
+          const res = await fetch(sheetUrl, { method: 'GET', redirect: 'follow' });
+          const rawText = await res.text();
+          if (!cancelled && res.ok && !rawText.trim().startsWith('<')) {
+            const data = JSON.parse(rawText);
+            if (data?.success && Array.isArray(data.students) && data.students.length > 0) {
+              const normalized: PreRegisteredStudent[] = [];
+              const seen = new Set<string>();
+              for (const item of data.students) {
+                const id = String(item?.id || '').trim().toUpperCase();
+                const name = String(item?.name || '').trim().toUpperCase();
+                if (id && name && !seen.has(id)) {
+                  seen.add(id);
+                  normalized.push({ id, name });
+                }
+              }
+              if (!cancelled && normalized.length > 0) {
+                setKnownStudents(normalized);
+                syncKnownStudentsToCloud(normalized);
+                return;
+              }
+            }
+          }
+        } catch {
+          // Fallback to Firebase cached roster below
+        }
+      }
+
+      if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
+      if (isAuthenticated && localStorage.getItem(KNOWN_STUDENTS_KEY) !== null) return;
       try {
         const baseDbUrl = FIREBASE_CONFIG.DATABASE_URL.replace(/\/+$/, '');
-        const res = await fetch(`${baseDbUrl}/app_config/known_students.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+        const res = await fetch(`${baseDbUrl}/app_config/known_students_v2.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
         if (!res.ok || cancelled) return;
         const remote = await res.json();
         if (!cancelled && Array.isArray(remote)) {
@@ -175,9 +216,9 @@ const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwbjXTrbFPRq
         // Ignore network errors
       }
     };
-    void loadCloudKnownStudents();
+    void loadStudentsFromSheetOrCloud();
     return () => { cancelled = true; };
-  }, [isAuthenticated]);
+  }, [isAuthenticated, scriptUrl, courseNameParam, activeCourse, syncKnownStudentsToCloud]);
 
   useEffect(() => {
       localStorage.setItem('attendance-active-week', selectedWeek);

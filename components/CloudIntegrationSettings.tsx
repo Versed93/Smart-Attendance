@@ -35,10 +35,15 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
   try {
     var doc = SpreadsheetApp.getActiveSpreadsheet();
     var sheets = doc.getSheets();
+    var requestedCourse = (e && e.parameter && e.parameter.course) ? String(e.parameter.course).trim().toUpperCase() : "";
     var sheetCourses = [];
     var primaryCourse = "";
+    var primaryStudents = [];
+    var matchedStudents = null;
+
     for (var i = 0; i < sheets.length; i++) {
-      var b1Range = sheets[i].getRange("B1");
+      var sheet = sheets[i];
+      var b1Range = sheet.getRange("B1");
       var b1Val = String(b1Range.getDisplayValue() || "").trim();
       if (!b1Val && b1Range.isPartOfMerge()) {
         var merged = b1Range.getMergedRanges();
@@ -46,14 +51,42 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
           b1Val = String(merged[0].getCell(1, 1).getDisplayValue() || "").trim();
         }
       }
-      sheetCourses.push({ sheetName: sheets[i].getName(), courseName: b1Val });
+
+      // Read students starting from Row 4 (B4+ = Name, C4+ = Student ID)
+      var lastRow = sheet.getLastRow();
+      var students = [];
+      if (lastRow >= 4) {
+        var rows = sheet.getRange(4, 2, lastRow - 3, 2).getDisplayValues();
+        for (var r = 0; r < rows.length; r++) {
+          var sName = String(rows[r][0] || "").trim().toUpperCase();
+          var sId = String(rows[r][1] || "").trim().toUpperCase();
+          if (sName && sId && sId !== "TEST999" && sName !== "CONNECTION TEST") {
+            students.push({ id: sId, name: sName });
+          }
+        }
+      }
+
+      sheetCourses.push({
+        sheetName: sheet.getName(),
+        courseName: b1Val,
+        students: students
+      });
+
       if (!primaryCourse && b1Val) {
         primaryCourse = b1Val;
       }
+      if (primaryStudents.length === 0 && students.length > 0) {
+        primaryStudents = students;
+      }
+      if (requestedCourse && b1Val && b1Val.toUpperCase() === requestedCourse) {
+        matchedStudents = students;
+      }
     }
+
     return ContentService.createTextOutput(JSON.stringify({
       success: true,
       courseName: primaryCourse,
+      students: matchedStudents !== null ? matchedStudents : primaryStudents,
       sheets: sheetCourses
     })).setMimeType(ContentService.MimeType.JSON);
   } catch (err) {
@@ -252,7 +285,7 @@ function doPost(e) {
               <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
                   <div className="bg-amber-100 p-1.5 rounded-lg text-amber-600 shrink-0">ℹ️</div>
                   <p className="text-[10px] text-amber-800 leading-relaxed font-bold uppercase">
-                      Sheet Placement: Course Name is read/matched on Row B1, Student Name starts at B4, Student ID starts at C4, and Weeks W1–W14 are in D3:Q3 (currently recording to {selectedWeek}). Copy the updated script code above, deploy as a Web App, and paste the URL below.
+                      Sheet Placement: Course Name is read/matched on Row B1, Student Name &amp; ID list is read/matched starting at B4 &amp; C4, and Weeks W1–W14 are in D3:Q3 (currently recording to {selectedWeek}). Copy the updated script code above, deploy as a Web App (Access: Anyone), and paste the /exec URL below.
                   </p>
               </div>
               <div>
