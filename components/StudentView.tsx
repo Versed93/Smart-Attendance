@@ -123,22 +123,39 @@ export const StudentView: React.FC<StudentViewProps> = ({
         }
 
         if (geoConstraints && !bypassRestrictions) {
+            if (typeof navigator === 'undefined' || !navigator.geolocation) {
+                setStatus('error');
+                setMessage('GPS/Location is not supported on this browser.');
+                return;
+            }
             setStatus('validating-gps');
+            const handleGpsSuccess = (pos: GeolocationPosition) => {
+                const dist = getDistanceFromLatLonInM(geoConstraints.lat, geoConstraints.lng, pos.coords.latitude, pos.coords.longitude);
+                if (dist - pos.coords.accuracy <= geoConstraints.radius) {
+                    setStatus('form');
+                } else {
+                    setStatus('error');
+                    setMessage(`Location Mismatch: ${Math.round(dist)}m away. Move closer to the classroom.`);
+                }
+            };
             navigator.geolocation.getCurrentPosition(
-                (pos) => {
-                    const dist = getDistanceFromLatLonInM(geoConstraints.lat, geoConstraints.lng, pos.coords.latitude, pos.coords.longitude);
-                    if (dist - pos.coords.accuracy <= geoConstraints.radius) {
-                        setStatus('form');
-                    } else {
-                        setStatus('error');
-                        setMessage(`Location Mismatch: ${Math.round(dist)}m away. Move closer to the classroom.`);
+                handleGpsSuccess,
+                (err) => {
+                    if (err && (err.code === 2 || err.code === 3)) {
+                        navigator.geolocation.getCurrentPosition(
+                            handleGpsSuccess,
+                            () => {
+                                setStatus('error');
+                                setMessage('GPS access is required for security verification.');
+                            },
+                            { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+                        );
+                        return;
                     }
-                },
-                () => {
                     setStatus('error');
                     setMessage('GPS access is required for security verification.');
                 },
-                { enableHighAccuracy: true, timeout: 15000 }
+                { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
             );
         } else {
             setStatus('form');

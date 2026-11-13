@@ -120,6 +120,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   };
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'teacher' | 'classroom'>('teacher');
+  const [showClassroomGeoPrompt, setShowClassroomGeoPrompt] = useState(false);
+  const [isLockingClassroomGeo, setIsLockingClassroomGeo] = useState(false);
+  const [classroomGeoError, setClassroomGeoError] = useState<string | null>(null);
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [scanResult, setScanResult] = useState<{ type: 'success' | 'error' | 'duplicate', message: string} | null>(null);
@@ -716,28 +719,59 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     }
   };
 
+  const requestCurrentPosition = (
+    onSuccess: (pos: GeolocationPosition) => void,
+    onFailure: (code: number, message: string) => void
+  ) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      onFailure(0, 'Geolocation is not supported on this browser.');
+      return;
+    }
+
+    const formatGeoFailure = (err: GeolocationPositionError): string => {
+      const detail = err?.message ? ` (${err.message})` : '';
+      if (err?.code === 1) {
+        return `Location access denied${detail}. Allow location access in browser settings or open the app in a standalone tab.`;
+      }
+      if (err?.code === 3) {
+        return 'Location request timed out. Ensure device GPS/Wi-Fi location is enabled and try again.';
+      }
+      return `Could not acquire location${detail}. Ensure device location services are enabled.`;
+    };
+
+    navigator.geolocation.getCurrentPosition(
+      onSuccess,
+      (err) => {
+        // Retry with standard network/Wi-Fi accuracy if high-accuracy GPS is unavailable or timed out
+        if (err && (err.code === 2 || err.code === 3)) {
+          navigator.geolocation.getCurrentPosition(
+            onSuccess,
+            (fallbackErr) => onFailure(fallbackErr?.code ?? err.code, formatGeoFailure(fallbackErr || err)),
+            { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+          );
+          return;
+        }
+        onFailure(err?.code ?? 0, formatGeoFailure(err));
+      },
+      { enableHighAccuracy: true, timeout: 8000, maximumAge: 30000 }
+    );
+  };
+
   const handleGeoToggle = (enabled: boolean) => {
     setIsGeoEnabled(enabled);
     if (enabled) {
         setLocationStatus('fetching');
-        navigator.geolocation.getCurrentPosition(
+        requestCurrentPosition(
             (pos) => {
                 setTeacherLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
                 setLocationStatus('success');
             },
-            (err) => {
-                console.error("Geolocation error:", err);
+            (code, msg) => {
                 setIsGeoEnabled(false);
                 setTeacherLocation(null);
-                if (err.code === err.PERMISSION_DENIED) {
-                    setLocationStatus('denied');
-                    showToast('error', 'Location access denied. Enable it in browser settings.');
-                } else {
-                    setLocationStatus('error');
-                    showToast('error', 'Could not get location. Ensure location services are enabled.');
-                }
-            },
-            { enableHighAccuracy: true, timeout: 10000 }
+                setLocationStatus(code === 1 ? 'denied' : 'error');
+                showToast('error', msg);
+            }
         );
     } else {
         setTeacherLocation(null);
@@ -769,21 +803,69 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     }
   };
 
+  const handleOpenClassroomPrompt = () => {
+    setClassroomGeoError(null);
+    setShowClassroomGeoPrompt(true);
+  };
+
+  const handleLaunchClassroomWithoutGeo = () => {
+    handleGeoToggle(false);
+    setClassroomGeoError(null);
+    setShowClassroomGeoPrompt(false);
+    void toggleClassroomView('classroom');
+  };
+
+  const handleLaunchClassroomWithGeo = () => {
+    if (isGeoEnabled && teacherLocation) {
+      setClassroomGeoError(null);
+      setShowClassroomGeoPrompt(false);
+      void toggleClassroomView('classroom');
+      return;
+    }
+    setIsLockingClassroomGeo(true);
+    setClassroomGeoError(null);
+    setIsGeoEnabled(true);
+    setLocationStatus('fetching');
+    requestCurrentPosition(
+      (pos) => {
+        setTeacherLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setLocationStatus('success');
+        setIsLockingClassroomGeo(false);
+        setShowClassroomGeoPrompt(false);
+        void toggleClassroomView('classroom');
+      },
+      (code, msg) => {
+        setIsLockingClassroomGeo(false);
+        setIsGeoEnabled(false);
+        setTeacherLocation(null);
+        setLocationStatus(code === 1 ? 'denied' : 'error');
+        setClassroomGeoError(`${msg} You can also choose "Keep Geolocation Off & Launch".`);
+      }
+    );
+  };
+
   if (viewMode === 'classroom') {
     return (
-        <div className="fixed inset-0 bg-gray-900/95 backdrop-blur-lg z-[100] flex flex-col items-center justify-center p-4 animate-in fade-in duration-300">
-            <div className="w-full max-w-2xl text-center text-white mb-8">
-                <p className="text-sm font-bold text-brand-light uppercase tracking-[0.3em] mb-2 opacity-60">Join Session</p>
-                <h2 className="text-3xl sm:text-5xl font-bold mb-4 truncate px-4">{courseName || 'General Session'}</h2>
-                <div className="flex items-center justify-center gap-3 bg-white/5 py-2 px-6 rounded-full border border-white/10 w-fit mx-auto">
-                    <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
-                    <p className="font-mono text-xl sm:text-2xl font-bold tracking-tight">{currentTime.toLocaleTimeString([], { hour12: false })}</p>
+        <div className="fixed inset-0 bg-gray-900/95 backdrop-blur-lg z-[100] flex flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto animate-in fade-in duration-300">
+            <div className="w-full max-w-4xl text-center text-white mb-6 sm:mb-8">
+                <p className="text-xs sm:text-sm font-bold text-brand-light uppercase tracking-[0.3em] mb-2 opacity-70">Join Session</p>
+                <h2 className="text-2xl sm:text-4xl lg:text-5xl font-bold mb-4 px-2 sm:px-4 break-words whitespace-normal leading-tight">
+                  {courseName || 'General Session'}
+                </h2>
+                <div className="flex items-center justify-center gap-2.5 flex-wrap">
+                  <div className="flex items-center gap-3 bg-white/5 py-2 px-5 rounded-full border border-white/10">
+                      <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+                      <p className="font-mono text-lg sm:text-2xl font-bold tracking-tight">{currentTime.toLocaleTimeString([], { hour12: false })}</p>
+                  </div>
+                  <span className="text-[11px] font-bold uppercase tracking-widest px-4 py-2 rounded-full bg-white/10 border border-white/15 text-amber-300">
+                    {selectedWeek.replace(/^W(\d+)$/i, 'WEEK $1')}
+                  </span>
                 </div>
             </div>
-            <div className="bg-white p-4 rounded-[2.5rem] shadow-2xl w-full max-w-sm sm:max-w-md aspect-square flex items-center justify-center relative border-8 border-brand-primary/10">
+            <div className="bg-white p-3.5 sm:p-4 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl w-full max-w-[290px] sm:max-w-md aspect-square flex items-center justify-center relative border-8 border-brand-primary/10 shrink-0">
                  <canvas ref={canvasRef} className="max-w-full max-h-full rounded-3xl" />
             </div>
-            <button onClick={() => toggleClassroomView('teacher')} className="mt-10 bg-white/10 border border-white/20 text-white font-bold py-4 px-12 rounded-2xl hover:bg-white/20 active:scale-95 transition-all text-sm uppercase tracking-widest">Close Classroom View</button>
+            <button onClick={() => toggleClassroomView('teacher')} className="mt-6 sm:mt-10 bg-white/10 border border-white/20 text-white font-bold py-3.5 sm:py-4 px-10 sm:px-12 rounded-2xl hover:bg-white/20 active:scale-95 transition-all text-xs sm:text-sm uppercase tracking-widest shrink-0">Close Classroom View</button>
         </div>
     );
   }
@@ -802,7 +884,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               <button onClick={() => setShowSettingsModal(true)} className="flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 rounded-xl border-2 border-gray-100 bg-gray-50 text-gray-500 hover:bg-gray-100 transition-all shrink-0 active:scale-90" title="Settings"><AdjustmentsHorizontalIcon className="w-5 h-5" /></button>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={() => toggleClassroomView('classroom')} className="flex group items-center gap-2.5 sm:gap-4 px-3.5 sm:px-5 py-2 sm:py-2.5 rounded-xl font-bold transition-all shrink-0 bg-gray-900 text-white hover:bg-black active:scale-95 shadow-lg shadow-gray-200">
+              <button onClick={handleOpenClassroomPrompt} className="flex group items-center gap-2.5 sm:gap-4 px-3.5 sm:px-5 py-2 sm:py-2.5 rounded-xl font-bold transition-all shrink-0 bg-gray-900 text-white hover:bg-black active:scale-95 shadow-lg shadow-gray-200">
                   <div className="text-right"><span className="hidden sm:block text-[9px] uppercase opacity-60 tracking-widest">Launch</span><span className="block text-[10px] sm:text-xs uppercase tracking-widest">Classroom</span></div>
                   <EyeIcon className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
@@ -1940,9 +2022,69 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   onClick={() => setShowWeekPromptModal(false)}
                   className="w-full bg-indigo-600 text-white font-bold py-4 rounded-2xl hover:bg-indigo-700 transition-all active:scale-95 shadow-lg shadow-indigo-100 uppercase tracking-widest text-xs"
                 >
-                  Confirm & Record on {selectedWeek}
+                  CONFIRM
                 </button>
             </div>
+        </div>
+      )}
+
+      {showClassroomGeoPrompt && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[220] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-3xl sm:rounded-[2.5rem] shadow-2xl p-6 sm:p-8 text-center border-t-8 border-indigo-600 animate-in zoom-in duration-200">
+            <span className="inline-block text-[10px] font-bold text-indigo-700 uppercase tracking-widest bg-indigo-50 px-3 py-1 rounded-full border border-indigo-200 mb-3">
+              Classroom Launch Setup
+            </span>
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2 tracking-tight">
+              Turn On Geolocation?
+            </h2>
+            <p className="text-xs font-bold text-gray-500 mb-4 leading-relaxed break-words">
+              Course: <span className="text-gray-900">{courseName || 'General Session'}</span> • {selectedWeek.replace(/^W(\d+)$/i, 'WEEK $1')}
+            </p>
+            <p className="text-xs font-bold text-gray-400 mb-5 leading-relaxed">
+              Turn on geolocation to verify students are within 150m of the classroom, or keep it off to allow check-ins without GPS check.
+            </p>
+
+            {isGeoEnabled && teacherLocation && (
+              <div className="mb-4 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-2xl p-3 text-xs font-bold">
+                Geolocation is currently ON and locked to this classroom.
+              </div>
+            )}
+
+            {classroomGeoError && (
+              <div className="mb-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl p-3 text-xs font-bold leading-relaxed">
+                {classroomGeoError}
+              </div>
+            )}
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  disabled={isLockingClassroomGeo}
+                  onClick={handleLaunchClassroomWithGeo}
+                  className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-2xl hover:bg-indigo-700 transition-all active:scale-95 shadow-lg shadow-indigo-100 uppercase tracking-widest text-xs disabled:opacity-60"
+                >
+                  {isLockingClassroomGeo ? 'LOCKING...' : 'ON'}
+                </button>
+                <button
+                  type="button"
+                  disabled={isLockingClassroomGeo}
+                  onClick={handleLaunchClassroomWithoutGeo}
+                  className="w-full bg-gray-900 text-white font-bold py-3.5 rounded-2xl hover:bg-black transition-all active:scale-95 uppercase tracking-widest text-xs disabled:opacity-60"
+                >
+                  OFF
+                </button>
+              </div>
+              <button
+                type="button"
+                disabled={isLockingClassroomGeo}
+                onClick={() => setShowClassroomGeoPrompt(false)}
+                className="w-full bg-gray-100 text-gray-500 font-bold py-3 rounded-2xl hover:bg-gray-200 transition-all uppercase tracking-widest text-[10px]"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
