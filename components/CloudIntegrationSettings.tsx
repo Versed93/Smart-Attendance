@@ -246,7 +246,7 @@ function doPost(e) {
   }, [airtableToken, airtableBaseId, airtableTableName]);
 
   return (
-    <div className="bg-white p-6 rounded-3xl border-2 border-gray-100 space-y-6">
+    <div className="bg-white p-4 sm:p-6 rounded-3xl border-2 border-gray-100 space-y-6">
       <div>
           <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 ml-1">Destination Type</label>
           <div className="flex bg-gray-50 p-1 rounded-xl">
@@ -324,7 +324,7 @@ function doPost(e) {
                       className="w-full border-2 border-gray-50 bg-gray-50/50 rounded-2xl p-4 text-xs font-bold outline-none focus:bg-white focus:border-brand-primary transition-all" 
                   />
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                       <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Base ID</label>
                       <input 

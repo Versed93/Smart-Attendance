@@ -50,8 +50,8 @@ export const LoginView: React.FC<LoginViewProps> = ({
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-100 p-4">
-      <div className="bg-white p-8 rounded-3xl shadow-2xl w-full max-w-md border border-gray-100 animate-in fade-in zoom-in duration-300">
+    <div className="min-h-screen flex items-center justify-center bg-gray-100 p-3 sm:p-4">
+      <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-xl w-full max-w-md border border-gray-100 animate-in fade-in zoom-in duration-300">
         <div className="flex flex-col items-center mb-6">
            <div className="flex items-center justify-center w-16 h-16 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl shadow-lg shadow-brand-primary/20 mb-4" aria-hidden="true">
              {isSignUp ? <UserPlusIcon className="w-9 h-9" /> : <ShieldCheckIcon className="w-9 h-9" />}

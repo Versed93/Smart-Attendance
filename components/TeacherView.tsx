@@ -766,22 +766,26 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   }
 
   return (
-    <div className="w-full max-w-[1600px] mx-auto p-3 sm:p-6 space-y-6 pb-24 sm:pb-6 animate-in fade-in duration-500">
-       <div className="relative z-10 flex flex-col xl:flex-row justify-between items-stretch xl:items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-4">
-         <div className="flex items-center gap-4">
-             <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl shadow-lg shrink-0"><ShieldCheckIcon className="w-7 h-7" /></div>
-             <div className="min-w-0"><h1 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight leading-none">SMART ATTENDANCE</h1><p className="text-[10px] text-gray-400 font-bold tracking-[0.2em] mt-1.5 uppercase">Lecturer Dashboard {currentAdminName ? `• User: ${currentAdminName}` : ''}</p></div>
+    <div className="w-full max-w-[1600px] mx-auto p-1 sm:p-6 space-y-4 sm:space-y-6 pb-20 sm:pb-6 animate-in fade-in duration-500">
+       <div className="relative z-10 flex flex-col xl:flex-row justify-between items-stretch xl:items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-3 sm:gap-4">
+         <div className="flex items-center gap-3 sm:gap-4">
+             <div className="flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl shadow-lg shrink-0"><ShieldCheckIcon className="w-6 h-6 sm:w-7 sm:h-7" /></div>
+             <div className="min-w-0"><h1 className="text-lg sm:text-2xl font-black text-gray-900 tracking-tight leading-none truncate">SMART ATTENDANCE</h1><p className="text-[10px] text-gray-400 font-bold tracking-[0.15em] sm:tracking-[0.2em] mt-1.5 uppercase truncate">Lecturer Dashboard {currentAdminName ? `• User: ${currentAdminName}` : ''}</p></div>
          </div>
-         <div className="flex items-center gap-2 overflow-x-auto pb-2 sm:pb-0 no-scrollbar w-full xl:w-auto">
-            <button onClick={() => setShowNewSessionModal(true)} className="flex items-center justify-center w-11 h-11 bg-gray-900 text-white rounded-xl border border-gray-800 hover:bg-black transition-all shrink-0 active:scale-90" title="Clear Session"><PlusIcon className="w-5 h-5" /></button>
-            <button onClick={() => { setShowManualModal(true); setManualId(''); setManualName(''); setManualError(''); }} className="flex items-center justify-center w-11 h-11 bg-brand-primary/5 text-brand-primary rounded-xl border-2 border-brand-primary/10 hover:bg-brand-primary/10 transition-all shrink-0 active:scale-90" title="Manual Entry"><PencilSquareIcon className="w-5 h-5" /></button>
-            <button onClick={() => setShowSettingsModal(true)} className="flex items-center justify-center w-11 h-11 rounded-xl border-2 border-gray-100 bg-gray-50 text-gray-500 hover:bg-gray-100 transition-all shrink-0 active:scale-90" title="Settings"><AdjustmentsHorizontalIcon className="w-5 h-5" /></button>
-            <button onClick={() => toggleClassroomView('classroom')} className="flex group items-center gap-4 px-5 py-2.5 rounded-xl font-bold transition-all shrink-0 bg-gray-900 text-white hover:bg-black active:scale-95 shadow-lg shadow-gray-200">
-                <div className="text-right hidden sm:block"><span className="block text-[9px] uppercase opacity-60 tracking-widest">Launch</span><span className="block text-xs uppercase tracking-widest">Classroom View</span></div>
-                <EyeIcon className="w-5 h-5" />
-            </button>
-            <div className="w-[1px] h-8 bg-gray-100 mx-2 shrink-0"></div>
-            <button onClick={onLogout} className="flex items-center justify-center w-11 h-11 bg-red-50 text-red-600 rounded-xl border-2 border-red-100 hover:bg-red-100 shrink-0 active:scale-90" title="Log Out"><LockClosedIcon className="w-5 h-5" /></button>
+         <div className="flex items-center justify-between sm:justify-end flex-wrap gap-2 w-full xl:w-auto pt-1 sm:pt-0 border-t border-gray-50 xl:border-t-0">
+            <div className="flex items-center gap-2">
+              <button onClick={() => setShowNewSessionModal(true)} className="flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 bg-gray-900 text-white rounded-xl border border-gray-800 hover:bg-black transition-all shrink-0 active:scale-90" title="Clear Session"><PlusIcon className="w-5 h-5" /></button>
+              <button onClick={() => { setShowManualModal(true); setManualId(''); setManualName(''); setManualError(''); }} className="flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 bg-brand-primary/5 text-brand-primary rounded-xl border-2 border-brand-primary/10 hover:bg-brand-primary/10 transition-all shrink-0 active:scale-90" title="Manual Entry"><PencilSquareIcon className="w-5 h-5" /></button>
+              <button onClick={() => setShowSettingsModal(true)} className="flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 rounded-xl border-2 border-gray-100 bg-gray-50 text-gray-500 hover:bg-gray-100 transition-all shrink-0 active:scale-90" title="Settings"><AdjustmentsHorizontalIcon className="w-5 h-5" /></button>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => toggleClassroomView('classroom')} className="flex group items-center gap-2.5 sm:gap-4 px-3.5 sm:px-5 py-2 sm:py-2.5 rounded-xl font-bold transition-all shrink-0 bg-gray-900 text-white hover:bg-black active:scale-95 shadow-lg shadow-gray-200">
+                  <div className="text-right"><span className="hidden sm:block text-[9px] uppercase opacity-60 tracking-widest">Launch</span><span className="block text-[10px] sm:text-xs uppercase tracking-widest">Classroom</span></div>
+                  <EyeIcon className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+              <div className="w-[1px] h-7 sm:h-8 bg-gray-100 mx-0.5 sm:mx-1 shrink-0 hidden sm:block"></div>
+              <button onClick={onLogout} className="flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 bg-red-50 text-red-600 rounded-xl border-2 border-red-100 hover:bg-red-100 shrink-0 active:scale-90" title="Log Out"><LockClosedIcon className="w-5 h-5" /></button>
+            </div>
          </div>
        </div>
 
@@ -830,35 +834,37 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
          </div>
        )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center">
-            <div className="w-full text-center mb-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
+        <div className="bg-white p-4 sm:p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center">
+            <div className="w-full text-center mb-5 sm:mb-6">
                 <div className="flex items-center justify-center gap-2 flex-wrap">
-                    <span className="text-[10px] font-bold text-brand-primary uppercase tracking-widest bg-brand-primary/5 px-4 py-1.5 rounded-full border border-brand-primary/10">Active Session Config</span>
+                    <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest bg-gray-100 px-3.5 py-1.5 rounded-full border border-gray-200">Active Session Config</span>
                     <button
                         type="button"
                         onClick={() => setShowWeekPromptModal(true)}
-                        className="text-[10px] font-bold text-indigo-700 uppercase tracking-widest bg-indigo-50 hover:bg-indigo-100 px-4 py-1.5 rounded-full border border-indigo-200 transition-colors"
-                        title="Change Google Sheet target week"
+                        className="inline-flex items-center gap-1.5 text-[10px] font-bold text-amber-800 uppercase tracking-widest bg-amber-50 hover:bg-amber-100 px-3.5 py-1.5 rounded-full border border-amber-300 shadow-sm active:scale-95 transition-all cursor-pointer"
+                        title="Click to change Google Sheet target week column"
                     >
-                        Sheet Column: {selectedWeek} (Change)
+                        <PencilSquareIcon className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                        <span>Sheet Column: {selectedWeek}</span>
+                        <span className="text-amber-600 font-black">• Edit</span>
                     </button>
                     <button
                         type="button"
                         onClick={() => fetchCourseFromB1(true)}
                         disabled={isLoadingSheetCourse}
-                        className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-full border border-emerald-200 transition-colors disabled:opacity-50"
-                        title="Read Course Name from Google Sheet Row B1"
+                        className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest bg-emerald-50 hover:bg-emerald-100 px-3.5 py-1.5 rounded-full border border-emerald-200 transition-all active:scale-95 disabled:opacity-50"
+                        title="Sync Course Name & Student List from Google Sheet (Row B1)"
                     >
-                        {isLoadingSheetCourse ? 'Reading B1...' : 'Read B1'}
+                        {isLoadingSheetCourse ? 'Syncing Course...' : 'Sync Course Name'}
                     </button>
                 </div>
                 <input 
                     type="text"
                     value={courseName}
                     onChange={(e) => setCourseName(e.target.value)}
-                    placeholder="Enter Course Name (or Read Row B1)"
-                    className="text-2xl font-bold text-gray-800 text-center w-full border-none focus:ring-0 p-3 bg-transparent placeholder-gray-300 mt-2"
+                    placeholder="Enter Course Name (or Sync from Sheet)"
+                    className="text-xl sm:text-2xl font-bold text-gray-800 text-center w-full border-none focus:ring-0 p-2.5 sm:p-3 bg-transparent placeholder-gray-300 mt-2"
                 />
                 {sheetCourseOptions.length > 1 && (
                   <div className="flex items-center justify-center gap-1.5 flex-wrap mt-1">
@@ -885,29 +891,29 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   </div>
                 )}
             </div>
-            <div className="mb-6 max-w-[320px] w-full aspect-square p-3 border-4 border-dashed border-gray-100 rounded-[2.5rem] relative flex items-center justify-center overflow-hidden">
+            <div className="mb-5 sm:mb-6 max-w-[260px] sm:max-w-[320px] w-full aspect-square p-3 border-4 border-dashed border-gray-100 rounded-[2rem] sm:rounded-[2.5rem] relative flex items-center justify-center overflow-hidden">
                 {isQrLoading && <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10"><div className="animate-spin h-8 w-8 border-4 border-brand-primary border-t-transparent rounded-full"></div></div>}
                 <canvas ref={canvasRef} className="max-w-full max-h-full rounded-2xl" />
                 <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-green-500 text-white px-3 py-1 rounded-full text-[9px] font-bold animate-pulse"><div className="w-1.5 h-1.5 bg-white rounded-full"></div>LIVE</div>
             </div>
-             <div className="flex items-center justify-center gap-3 flex-wrap">
-                <button onClick={() => onOpenKiosk()} className="flex items-center gap-2.5 bg-gray-100 text-gray-700 text-[11px] font-bold uppercase px-5 py-3 rounded-xl hover:bg-gray-200 transition-all active:scale-95"><QrCodeIcon className="w-4 h-4" /> Tablet Mode</button>
-                <button onClick={() => setShowScanner(true)} className="flex items-center gap-2.5 bg-indigo-600 text-white text-[11px] font-bold uppercase px-5 py-3 rounded-xl hover:bg-indigo-700 transition-all active:scale-95 shadow-lg shadow-indigo-100"><CameraIcon className="w-4 h-4" /> Scan Student</button>
+             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2.5 sm:gap-3 w-full sm:w-auto">
+                <button onClick={() => onOpenKiosk()} className="flex items-center justify-center gap-2.5 bg-gray-100 text-gray-700 text-[11px] font-bold uppercase px-5 py-3 rounded-xl hover:bg-gray-200 transition-all active:scale-95"><QrCodeIcon className="w-4 h-4" /> Tablet Mode</button>
+                <button onClick={() => setShowScanner(true)} className="flex items-center justify-center gap-2.5 bg-indigo-600 text-white text-[11px] font-bold uppercase px-5 py-3 rounded-xl hover:bg-indigo-700 transition-all active:scale-95 shadow-lg shadow-indigo-100"><CameraIcon className="w-4 h-4" /> Scan Student</button>
             </div>
         </div>
 
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+        <div className="bg-white p-4 sm:p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
+            <div className="flex flex-col sm:flex-row justify-between items-stretch sm:items-center mb-5 sm:mb-6 gap-3 sm:gap-4">
                 <div className="flex bg-gray-100 p-1 rounded-xl shrink-0">
                     <button 
                         onClick={() => setActiveTab('attendance')}
-                        className={`px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all ${activeTab === 'attendance' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                        className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all ${activeTab === 'attendance' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
                     >
                         Live List
                     </button>
                     <button 
                         onClick={() => setActiveTab('history')}
-                        className={`px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all ${activeTab === 'history' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                        className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all ${activeTab === 'history' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
                     >
                         History
                     </button>
@@ -922,16 +928,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </div>
 
             {activeTab === 'attendance' && (
-              <div className="flex items-center justify-between gap-3 mb-6 bg-brand-primary/5 p-3 rounded-2xl border border-brand-primary/10">
-                  <p className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] ml-2">Bulk Update</p>
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-3 mb-5 sm:mb-6 bg-brand-primary/5 p-3 rounded-2xl border border-brand-primary/10">
+                  <p className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] ml-1 sm:ml-2">Bulk Update</p>
                   <div className="flex items-center gap-2">
-                      <button onClick={() => handleMarkAll('P')} className="flex items-center gap-2 bg-white text-green-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all disabled:opacity-30 active:scale-95 uppercase border border-green-100" disabled={filteredList.length === 0}><CheckIcon className="w-3.5 h-3.5" /> All Present</button>
-                      <button onClick={() => handleMarkAll('A')} className="flex items-center gap-2 bg-white text-red-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all disabled:opacity-30 active:scale-95 uppercase border border-red-100" disabled={filteredList.length === 0}><XMarkIcon className="w-3.5 h-3.5" /> All Absent</button>
+                      <button onClick={() => handleMarkAll('P')} className="flex-1 sm:flex-initial flex items-center justify-center gap-2 bg-white text-green-600 text-[10px] font-bold px-3 sm:px-4 py-2 rounded-xl hover:shadow-md transition-all disabled:opacity-30 active:scale-95 uppercase border border-green-100" disabled={filteredList.length === 0}><CheckIcon className="w-3.5 h-3.5" /> All Present</button>
+                      <button onClick={() => handleMarkAll('A')} className="flex-1 sm:flex-initial flex items-center justify-center gap-2 bg-white text-red-600 text-[10px] font-bold px-3 sm:px-4 py-2 rounded-xl hover:shadow-md transition-all disabled:opacity-30 active:scale-95 uppercase border border-red-100" disabled={filteredList.length === 0}><XMarkIcon className="w-3.5 h-3.5" /> All Absent</button>
                   </div>
               </div>
             )}
 
-            <div className="overflow-y-auto h-[440px] pr-2 custom-scrollbar">
+            <div className="overflow-y-auto h-[340px] sm:h-[440px] pr-1 sm:pr-2 custom-scrollbar">
                 {activeTab === 'attendance' ? (
                     filteredList.length > 0 ? (
                         <ul className="space-y-3">
@@ -1015,16 +1021,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       </div>
        
       {showSettingsModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[110] flex items-center justify-center p-4 animate-in fade-in duration-300">
-            <div className="bg-white w-full max-w-2xl rounded-[2.5rem] shadow-2xl max-h-[90vh] overflow-hidden flex flex-col">
-                <div className="p-8 border-b border-gray-50 flex justify-between items-center bg-gray-50/50">
-                    <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg"><AdjustmentsHorizontalIcon className="w-6 h-6" /></div>
-                        <h2 className="text-2xl font-bold text-gray-900 tracking-tight">System Settings</h2>
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[110] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-300">
+            <div className="bg-white w-full max-w-2xl rounded-3xl sm:rounded-[2.5rem] shadow-2xl max-h-[90vh] overflow-hidden flex flex-col">
+                <div className="p-5 sm:p-8 border-b border-gray-50 flex justify-between items-center bg-gray-50/50">
+                    <div className="flex items-center gap-3 sm:gap-4">
+                        <div className="w-10 h-10 bg-indigo-600 text-white rounded-xl flex items-center justify-center shadow-lg shrink-0"><AdjustmentsHorizontalIcon className="w-6 h-6" /></div>
+                        <h2 className="text-xl sm:text-2xl font-bold text-gray-900 tracking-tight">System Settings</h2>
                     </div>
-                    <button onClick={() => setShowSettingsModal(false)} className="w-10 h-10 bg-white border border-gray-200 text-gray-400 hover:text-gray-900 transition-all rounded-full flex items-center justify-center active:scale-90"><XCircleIcon className="w-6 h-6" /></button>
+                    <button onClick={() => setShowSettingsModal(false)} className="w-10 h-10 bg-white border border-gray-200 text-gray-400 hover:text-gray-900 transition-all rounded-full flex items-center justify-center active:scale-90 shrink-0"><XCircleIcon className="w-6 h-6" /></button>
                 </div>
-                <div className="p-8 space-y-8 overflow-y-auto custom-scrollbar">
+                <div className="p-5 sm:p-8 space-y-6 sm:space-y-8 overflow-y-auto custom-scrollbar">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                         <div className="space-y-4">
                             <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] ml-1">QR Generation</h3>
@@ -1094,30 +1100,30 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     </div>
                     <div className="space-y-4">
                         <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] ml-1">Student Management</h3>
-                        <div className="bg-gray-50 p-5 rounded-3xl border border-gray-100 flex flex-col gap-4">
-                            <div className="flex items-center justify-between">
+                        <div className="bg-gray-50 p-4 sm:p-5 rounded-3xl border border-gray-100 flex flex-col gap-4">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                                 <div className="flex flex-col">
                                     <span className="text-xs font-bold text-gray-800">Import Student List</span>
                                     <span className="text-[9px] font-bold text-gray-400 uppercase">CSV Format: StudentID, Name</span>
                                 </div>
-                                <div className="flex gap-2">
+                                <div className="flex flex-wrap gap-2">
                                     <button 
                                         onClick={handleDownloadTemplate}
-                                        className="flex items-center gap-2 bg-white text-gray-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-gray-200"
+                                        className="flex items-center gap-1.5 bg-white text-gray-600 text-[10px] font-bold px-3 sm:px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-gray-200"
                                     >
                                         <ArrowDownTrayIcon className="w-3.5 h-3.5" />
                                         Template
                                     </button>
                                     <button 
                                         onClick={() => setShowStudentListModal(true)}
-                                        className="flex items-center gap-2 bg-white text-gray-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-gray-200"
+                                        className="flex items-center gap-1.5 bg-white text-gray-600 text-[10px] font-bold px-3 sm:px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-gray-200"
                                     >
                                         <ListBulletIcon className="w-3.5 h-3.5" />
                                         Manage
                                     </button>
                                     <button 
                                         onClick={() => fileInputRef.current?.click()}
-                                        className="flex items-center gap-2 bg-white text-indigo-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-indigo-100"
+                                        className="flex items-center gap-1.5 bg-white text-indigo-600 text-[10px] font-bold px-3 sm:px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-indigo-100"
                                     >
                                         <ArrowDownTrayIcon className="w-3.5 h-3.5 rotate-180" />
                                         Upload CSV
@@ -1132,22 +1138,22 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                 />
                             </div>
                             <div className="h-[1px] bg-gray-200 w-full"></div>
-                            <div className="flex items-center justify-between">
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                                 <div className="flex flex-col">
                                     <span className="text-xs font-bold text-gray-800">Data Management</span>
                                     <span className="text-[9px] font-bold text-gray-400 uppercase">Clear stored records</span>
                                 </div>
-                                <div className="flex gap-2">
+                                <div className="flex flex-wrap gap-2">
                                     <button 
                                         onClick={handleClearKnownStudents}
-                                        className="flex items-center gap-2 bg-white text-red-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-red-100"
+                                        className="flex items-center gap-1.5 bg-white text-red-600 text-[10px] font-bold px-3 sm:px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-red-100"
                                     >
                                         <TrashIcon className="w-3.5 h-3.5" />
                                         Clear List
                                     </button>
                                     <button 
                                         onClick={handleClearTeacherHistory}
-                                        className="flex items-center gap-2 bg-white text-red-600 text-[10px] font-bold px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-red-100"
+                                        className="flex items-center gap-1.5 bg-white text-red-600 text-[10px] font-bold px-3 sm:px-4 py-2 rounded-xl hover:shadow-md transition-all active:scale-95 uppercase border border-red-100"
                                     >
                                         <HistoryIcon className="w-3.5 h-3.5" />
                                         Clear History
@@ -1162,8 +1168,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       )}
 
       {showStudentListModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[130] flex items-center justify-center p-4">
-            <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-8 relative overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[130] flex items-center justify-center p-3 sm:p-4">
+            <div className="bg-white w-full max-w-md rounded-3xl sm:rounded-[2.5rem] shadow-2xl p-5 sm:p-8 relative overflow-hidden flex flex-col max-h-[90vh]">
                 <div className="flex items-center justify-between mb-6 shrink-0 gap-2">
                     <h2 className="text-2xl font-bold text-gray-900 tracking-tight">Student List</h2>
                     <div className="flex items-center gap-2">
@@ -1441,17 +1447,17 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       )}
 
       {scanResult && (
-        <div className="fixed top-8 left-1/2 -translate-x-1/2 z-[300] animate-in slide-in-from-top-10 duration-500">
-            <div className={`px-8 py-4 rounded-3xl shadow-2xl flex items-center gap-4 border-4 ${scanResult.type === 'success' ? 'bg-green-600 border-green-500 text-white' : 'bg-red-600 border-red-500 text-white'}`}>
-                <div className="bg-white/20 p-2 rounded-xl">{scanResult.type === 'success' ? <CheckIcon className="w-6 h-6" /> : <XMarkIcon className="w-6 h-6" />}</div>
-                <p className="font-bold text-sm uppercase tracking-tight">{scanResult.message}</p>
+        <div className="fixed top-6 sm:top-8 left-1/2 -translate-x-1/2 z-[300] w-[calc(100%-2rem)] sm:w-auto max-w-md animate-in slide-in-from-top-10 duration-500">
+            <div className={`px-5 sm:px-8 py-3.5 sm:py-4 rounded-3xl shadow-2xl flex items-center gap-3 sm:gap-4 border-4 ${scanResult.type === 'success' ? 'bg-green-600 border-green-500 text-white' : 'bg-red-600 border-red-500 text-white'}`}>
+                <div className="bg-white/20 p-2 rounded-xl shrink-0">{scanResult.type === 'success' ? <CheckIcon className="w-5 h-5 sm:w-6 sm:h-6" /> : <XMarkIcon className="w-5 h-5 sm:w-6 sm:h-6" />}</div>
+                <p className="font-bold text-xs sm:text-sm uppercase tracking-tight">{scanResult.message}</p>
             </div>
         </div>
       )}
 
       {pendingDeleteAction && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[210] flex items-center justify-center p-4">
-            <div className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl p-8 text-center border-t-8 border-red-500 animate-in zoom-in duration-200">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[210] flex items-center justify-center p-3 sm:p-4">
+            <div className="bg-white w-full max-w-sm rounded-3xl sm:rounded-[2.5rem] shadow-2xl p-6 sm:p-8 text-center border-t-8 border-red-500 animate-in zoom-in duration-200">
                 <div className="w-16 h-16 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center mx-auto mb-5"><TrashIcon className="w-9 h-9" /></div>
                 <h2 className="text-xl font-bold text-gray-900 mb-2">
                   {pendingDeleteAction.type === 'single' ? 'Delete Student?' :
@@ -1474,16 +1480,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       )}
 
       {showWeekPromptModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[220] flex items-center justify-center p-4 animate-in fade-in duration-200">
-            <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-8 text-center border-t-8 border-indigo-600 animate-in zoom-in duration-200">
-                <span className="inline-block text-[10px] font-bold text-indigo-600 uppercase tracking-widest bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100 mb-3">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[220] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+            <div className="bg-white w-full max-w-md rounded-3xl sm:rounded-[2.5rem] shadow-2xl p-6 sm:p-8 text-center border-t-8 border-amber-500 animate-in zoom-in duration-200 max-h-[92vh] overflow-y-auto">
+                <span className="inline-block text-[10px] font-bold text-amber-800 uppercase tracking-widest bg-amber-50 px-3 py-1 rounded-full border border-amber-200 mb-3">
                   Google Sheet Placement (D3:Q3)
                 </span>
-                <h2 className="text-2xl font-bold text-gray-900 mb-2 tracking-tight">Select Attendance Week</h2>
-                <p className="text-xs font-bold text-gray-400 mb-6 leading-relaxed">
+                <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2 tracking-tight">Select Attendance Week</h2>
+                <p className="text-xs font-bold text-gray-400 mb-5 sm:mb-6 leading-relaxed">
                   Choose which week column on the Google Sheet should record today&apos;s attendance check-ins.
                 </p>
-                <div className="grid grid-cols-7 gap-2 mb-6">
+                <div className="grid grid-cols-4 sm:grid-cols-7 gap-2 mb-5 sm:mb-6">
                   {WEEKS.map((w) => {
                     const isSelected = selectedWeek === w;
                     return (
@@ -1502,19 +1508,19 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     );
                   })}
                 </div>
-                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mb-6 text-[11px] font-bold text-gray-500 space-y-2">
+                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mb-5 sm:mb-6 text-[11px] font-bold text-gray-500 space-y-2">
                   <div>
-                    Recording to Google Sheet Column <span className="text-indigo-600 font-black">{selectedWeek}</span> (Name: B4+, ID: C4+)
+                    Recording to Google Sheet Column <span className="text-amber-700 font-black">{selectedWeek}</span> (Name: B4+, ID: C4+)
                   </div>
                   <div className="flex items-center justify-center gap-2 flex-wrap">
-                    <span>Course (B1): <strong className="text-gray-800">{courseName || 'Not set'}</strong></span>
+                    <span>Course Name (Sheet B1): <strong className="text-gray-800">{courseName || 'Not set'}</strong></span>
                     <button
                       type="button"
                       onClick={() => fetchCourseFromB1(true)}
                       disabled={isLoadingSheetCourse}
-                      className="text-[10px] text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-md border border-emerald-200"
+                      className="text-[10px] text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-md border border-emerald-200 font-bold"
                     >
-                      {isLoadingSheetCourse ? '...' : 'Read B1'}
+                      {isLoadingSheetCourse ? 'Syncing...' : 'Sync Course Name'}
                     </button>
                   </div>
                   {sheetReadError && (

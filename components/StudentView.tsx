@@ -510,12 +510,12 @@ export const StudentView: React.FC<StudentViewProps> = ({
             <h2 className="text-xl font-bold text-gray-900 mb-2">Check-in Token</h2>
             <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-6">Show this to your lecturer</p>
             <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-8">
-                <div className="bg-white p-3 rounded-3xl border-4 border-gray-100 relative min-h-[244px] min-w-[244px] flex items-center justify-center shadow-sm">
+                <div className="bg-white p-3 rounded-3xl border-4 border-gray-100 relative min-h-[228px] min-w-[228px] sm:min-h-[244px] sm:min-w-[244px] flex items-center justify-center shadow-sm">
                     {isQrLoading && <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10 rounded-xl"><div className="animate-spin h-8 w-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>}
                     <canvas ref={canvasRef} className="rounded-xl" />
                 </div>
                 <div
-                  className="bg-indigo-50/80 border border-indigo-100 rounded-2xl px-4 py-3 flex sm:flex-col items-center justify-center gap-3 sm:gap-2 min-w-[100px] shadow-sm"
+                  className="bg-indigo-50/80 border border-indigo-100 rounded-2xl px-4 py-3 flex sm:flex-col items-center justify-center gap-3 sm:gap-2 w-full max-w-[228px] sm:w-auto sm:min-w-[104px] shadow-sm"
                   aria-live="polite"
                   title={`QR code refreshes in ${qrRefreshSeconds} seconds`}
                 >

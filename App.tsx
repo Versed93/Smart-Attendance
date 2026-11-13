@@ -606,7 +606,7 @@ const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwbjXTrbFPRq
     <div className="min-h-screen bg-gray-100 flex flex-col font-sans antialiased">
        {view === 'teacher' ? (
            isAuthenticated ? (
-             <div className="flex-1 p-4 overflow-auto relative">
+             <div className="flex-1 p-2 sm:p-4 overflow-x-hidden overflow-y-auto relative">
                  <TeacherView 
                      attendanceList={attendanceList}
                      onRemoveStudents={onRemoveStudents}
@@ -635,8 +635,8 @@ const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwbjXTrbFPRq
                    onSignUp={handleSignUp} 
                />
        ) : (
-           <div className="flex-1 flex flex-col items-center justify-center p-4 bg-gray-50">
-               <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-6 border border-gray-100">
+           <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 bg-gray-100">
+               <div className="w-full max-w-md bg-white rounded-3xl shadow-xl p-5 sm:p-6 border border-gray-100">
                    <StudentView 
                        markAttendance={(name, id, email, scannedWeek) => addStudent(name, id, email, 'P', courseNameParam || 'General Session', undefined, undefined, scannedWeek || weekParam || selectedWeek)}
                        token={token || (isKioskMode ? kioskToken : '')}
