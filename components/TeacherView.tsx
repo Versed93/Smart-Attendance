@@ -107,6 +107,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [selectedStudentListIds, setSelectedStudentListIds] = useState<Set<string>>(new Set());
   const [showWeekPromptModal, setShowWeekPromptModal] = useState(true);
+  const [isLoadingSheetCourse, setIsLoadingSheetCourse] = useState(false);
+  const [sheetCourseOptions, setSheetCourseOptions] = useState<{ sheetName: string; courseName: string }[]>([]);
   const [pendingDeleteAction, setPendingDeleteAction] = useState<
     | { type: 'single'; id: string; name: string }
     | { type: 'bulk'; count: number }
@@ -128,6 +130,65 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       localStorage.setItem('attendance-course-name', courseName);
       onCourseChange(courseName);
   }, [courseName, onCourseChange]);
+
+  const fetchCourseFromB1 = async (manual = false) => {
+      const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
+      if (!scriptUrl || integrationType !== 'google_sheets') {
+          if (manual) showToast('error', 'Configure Google Sheets Apps Script URL in Settings first.');
+          return;
+      }
+      setIsLoadingSheetCourse(true);
+      try {
+          const url = `${scriptUrl}${scriptUrl.includes('?') ? '&' : '?'}action=getCourse&t=${Date.now()}`;
+          const res = await fetch(url);
+          if (!res.ok) throw new Error('Failed');
+          const data = await res.json();
+          if (data && data.success) {
+              if (Array.isArray(data.sheets)) {
+                  setSheetCourseOptions(data.sheets.filter((s: { courseName?: string }) => s.courseName));
+              }
+              if (data.courseName) {
+                  setCourseName(String(data.courseName).trim());
+                  if (manual) showToast('success', `Loaded course from B1: ${String(data.courseName).trim()}`);
+              } else if (manual) {
+                  showToast('error', 'Row B1 on the Google Sheet is empty.');
+              }
+          } else if (manual) {
+              showToast('error', 'Could not read Row B1. Re-deploy updated Apps Script.');
+          }
+      } catch {
+          if (manual) {
+              showToast('error', 'Could not read Row B1. Ensure updated Apps Script is deployed.');
+          }
+      } finally {
+          setIsLoadingSheetCourse(false);
+      }
+  };
+
+  useEffect(() => {
+      const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
+      if (!scriptUrl || integrationType !== 'google_sheets') return;
+      let cancelled = false;
+      const loadInitialCourse = async () => {
+          try {
+              const url = `${scriptUrl}${scriptUrl.includes('?') ? '&' : '?'}action=getCourse&t=${Date.now()}`;
+              const res = await fetch(url);
+              if (!res.ok) return;
+              const data = await res.json();
+              if (cancelled || !data?.success) return;
+              if (Array.isArray(data.sheets)) {
+                  setSheetCourseOptions(data.sheets.filter((s: { courseName?: string }) => s.courseName));
+              }
+              if (data.courseName) {
+                  setCourseName(prev => prev || String(data.courseName).trim());
+              }
+          } catch {
+              // Silent fallback when script doesn't yet expose doGet
+          }
+      };
+      void loadInitialCourse();
+      return () => { cancelled = true; };
+  }, [scriptUrl]);
 
   const handleScanResult = (data: string) => {
       setShowScanner(false);
@@ -609,14 +670,41 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     >
                         Sheet Column: {selectedWeek} (Change)
                     </button>
+                    <button
+                        type="button"
+                        onClick={() => fetchCourseFromB1(true)}
+                        disabled={isLoadingSheetCourse}
+                        className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest bg-emerald-50 hover:bg-emerald-100 px-3 py-1.5 rounded-full border border-emerald-200 transition-colors disabled:opacity-50"
+                        title="Read Course Name from Google Sheet Row B1"
+                    >
+                        {isLoadingSheetCourse ? 'Reading B1...' : 'Read B1'}
+                    </button>
                 </div>
                 <input 
                     type="text"
                     value={courseName}
                     onChange={(e) => setCourseName(e.target.value)}
-                    placeholder="Enter Course Name (e.g. CDM9999)"
+                    placeholder="Enter Course Name (or Read Row B1)"
                     className="text-2xl font-bold text-gray-800 text-center w-full border-none focus:ring-0 p-3 bg-transparent placeholder-gray-300 mt-2"
                 />
+                {sheetCourseOptions.length > 1 && (
+                  <div className="flex items-center justify-center gap-1.5 flex-wrap mt-1">
+                    {sheetCourseOptions.map((opt) => (
+                      <button
+                        key={opt.sheetName}
+                        type="button"
+                        onClick={() => setCourseName(opt.courseName)}
+                        className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-all ${
+                          courseName.toUpperCase() === opt.courseName.toUpperCase()
+                            ? 'bg-indigo-600 text-white border-indigo-600'
+                            : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                        }`}
+                      >
+                        {opt.courseName}
+                      </button>
+                    ))}
+                  </div>
+                )}
             </div>
             <div className="mb-6 max-w-[320px] w-full aspect-square p-3 border-4 border-dashed border-gray-100 rounded-[2.5rem] relative flex items-center justify-center overflow-hidden">
                 {isQrLoading && <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10"><div className="animate-spin h-8 w-8 border-4 border-brand-primary border-t-transparent rounded-full"></div></div>}
@@ -1165,8 +1253,21 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     );
                   })}
                 </div>
-                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mb-6 text-[11px] font-bold text-gray-500">
-                  Recording to Google Sheet Column <span className="text-indigo-600 font-black">{selectedWeek}</span> (Name: B4+, ID: C4+)
+                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mb-6 text-[11px] font-bold text-gray-500 space-y-1">
+                  <div>
+                    Recording to Google Sheet Column <span className="text-indigo-600 font-black">{selectedWeek}</span> (Name: B4+, ID: C4+)
+                  </div>
+                  <div className="flex items-center justify-center gap-2">
+                    <span>Course (B1): <strong className="text-gray-800">{courseName || 'Not set'}</strong></span>
+                    <button
+                      type="button"
+                      onClick={() => fetchCourseFromB1(true)}
+                      disabled={isLoadingSheetCourse}
+                      className="text-[10px] text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2 py-0.5 rounded-md border border-emerald-200"
+                    >
+                      {isLoadingSheetCourse ? '...' : 'Read B1'}
+                    </button>
+                  </div>
                 </div>
                 <button
                   type="button"

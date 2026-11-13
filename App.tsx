@@ -107,6 +107,7 @@ const App: React.FC = () => {
       return {
           "Student ID": r.studentId,
           "Name": r.name,
+          "Course Name": r.courseName || 'General Session',
           "Week": targetWeek,
           "Status": r.status,
           "[Course Name Here]": r.courseName || 'General Session',

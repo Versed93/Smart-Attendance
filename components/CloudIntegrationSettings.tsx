@@ -31,7 +31,30 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
   const [status, setStatus] = useState('');
   const [copied, setCopied] = useState(false);
 
-  const appScriptCode = `function doPost(e) {
+  const appScriptCode = `function doGet(e) {
+  try {
+    var doc = SpreadsheetApp.getActiveSpreadsheet();
+    var sheets = doc.getSheets();
+    var sheetCourses = [];
+    for (var i = 0; i < sheets.length; i++) {
+      var b1Val = String(sheets[i].getRange("B1").getValue() || "").trim();
+      sheetCourses.push({ sheetName: sheets[i].getName(), courseName: b1Val });
+    }
+    var primaryCourse = sheetCourses.length > 0 ? sheetCourses[0].courseName : "";
+    return ContentService.createTextOutput(JSON.stringify({
+      success: true,
+      courseName: primaryCourse,
+      sheets: sheetCourses
+    })).setMimeType(ContentService.MimeType.JSON);
+  } catch (err) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: err.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doPost(e) {
   if (!e || !e.postData || !e.postData.contents) {
     return ContentService.createTextOutput(JSON.stringify({success: false, error: "No data"})).setMimeType(ContentService.MimeType.JSON);
   }
@@ -48,10 +71,11 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
     }
 
     var doc = SpreadsheetApp.getActiveSpreadsheet();
-    var sheet = doc.getSheets()[0]; // Use the first sheet
+    var allSheets = doc.getSheets();
     var records = Array.isArray(data) ? data : [data];
 
     // Sheet Layout:
+    // Row 1 Col B (B1): Course Name
     // Row 3 (D3:Q3, cols 4..17): W1 - W14 headers
     // Row 4+ Col B (col 2): Student Name (starting B4)
     // Row 4+ Col C (col 3): Student ID (starting C4)
@@ -61,8 +85,6 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
     var WEEK_START_COL = 4; // Column D (W1)
     var WEEK_COUNT = 14;    // D3:Q3 -> W1..W14
 
-    var weekHeaders = sheet.getRange(3, WEEK_START_COL, 1, WEEK_COUNT).getValues()[0];
-
     for (var i = 0; i < records.length; i++) {
       var record = records[i];
       if (!record) continue;
@@ -71,6 +93,27 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
       var name = String(record["Name"] || "").trim();
       if (!studentId && !name) continue;
 
+      var incomingCourse = String(record["Course Name"] || record["[Course Name Here]"] || "").trim();
+      var sheet = allSheets[0];
+
+      // Find matching sheet tab by Row B1 Course Name if available
+      if (incomingCourse) {
+        for (var sIdx = 0; sIdx < allSheets.length; sIdx++) {
+          var b1Course = String(allSheets[sIdx].getRange("B1").getValue() || "").trim();
+          if (b1Course && b1Course.toUpperCase() === incomingCourse.toUpperCase()) {
+            sheet = allSheets[sIdx];
+            break;
+          }
+        }
+      }
+
+      // If B1 on target sheet is empty, populate it with incoming Course Name
+      var currentB1 = String(sheet.getRange("B1").getValue() || "").trim();
+      if (!currentB1 && incomingCourse && incomingCourse !== "General Session" && incomingCourse !== "Connectivity Test") {
+        sheet.getRange("B1").setValue(incomingCourse);
+      }
+
+      var weekHeaders = sheet.getRange(3, WEEK_START_COL, 1, WEEK_COUNT).getValues()[0];
       var targetWeek = String(record["Week"] || "W7").toUpperCase().trim();
       var statusValue = record["Status"] || record["[Status Here]"] || record[targetWeek] || "P";
 
@@ -199,7 +242,7 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
               <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
                   <div className="bg-amber-100 p-1.5 rounded-lg text-amber-600 shrink-0">ℹ️</div>
                   <p className="text-[10px] text-amber-800 leading-relaxed font-bold uppercase">
-                      Sheet Placement: Student Name starts at B4, Student ID starts at C4, and Weeks W1–W14 are in D3:Q3 (currently recording to {selectedWeek}). Copy the updated script code above, deploy as a Web App, and paste the URL below.
+                      Sheet Placement: Course Name is read/matched on Row B1, Student Name starts at B4, Student ID starts at C4, and Weeks W1–W14 are in D3:Q3 (currently recording to {selectedWeek}). Copy the updated script code above, deploy as a Web App, and paste the URL below.
                   </p>
               </div>
               <div>
