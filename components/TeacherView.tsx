@@ -64,6 +64,7 @@ interface TeacherViewProps {
   onMarkNotificationRead?: (notifId: string) => Promise<void> | void;
   onMarkAllNotificationsRead?: () => Promise<void> | void;
   onClearNotifications?: () => Promise<void> | void;
+  onSendTestAdminEmail?: (targetEmail?: string) => Promise<{ success: boolean; message: string }>;
 }
 
 const WEEKS = Array.from({ length: 14 }, (_, i) => `W${i + 1}`);
@@ -108,6 +109,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onMarkNotificationRead,
   onMarkAllNotificationsRead,
   onClearNotifications,
+  onSendTestAdminEmail,
 }) => {
   const [baseUrl] = useState<string>(() => window.location.origin + window.location.pathname);
   const [qrData, setQrData] = useState<string>('');
@@ -128,6 +130,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [activeTab, setActiveTab] = useState<'attendance' | 'history'>('attendance');
   const [adminPanelTab, setAdminPanelTab] = useState<'activity' | 'users' | 'notifications'>('activity');
   const [adminEmailInput, setAdminEmailInput] = useState(adminEmail);
+  const [isTestingAdminEmail, setIsTestingAdminEmail] = useState(false);
+  const [adminEmailTestStatus, setAdminEmailTestStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [resendingUserId, setResendingUserId] = useState<string | null>(null);
   const [manualId, setManualId] = useState('');
   const [manualName, setManualName] = useState('');
@@ -1089,29 +1093,64 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
               {adminPanelTab === 'notifications' && (
                 <div className="space-y-4">
-                  <div className="bg-gray-50 p-3.5 rounded-2xl border border-gray-100 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
-                    <div className="flex-1 min-w-0">
-                      <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">
-                        Admin Notification Email (receives new signup alerts)
-                      </label>
-                      <input
-                        type="email"
-                        value={adminEmailInput}
-                        onChange={(e) => setAdminEmailInput(e.target.value)}
-                        placeholder="admin@university.edu (or uses Google Sheet owner email)"
-                        className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800 outline-none focus:border-brand-primary"
-                      />
+                  <div className="bg-gray-50 p-3.5 rounded-2xl border border-gray-100 space-y-2.5">
+                    <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+                      <div className="flex-1 min-w-0">
+                        <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">
+                          Admin Notification Email (receives new signup alerts)
+                        </label>
+                        <input
+                          type="email"
+                          value={adminEmailInput}
+                          onChange={(e) => setAdminEmailInput(e.target.value)}
+                          placeholder="admin@university.edu (or uses Google Sheet owner email)"
+                          className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800 outline-none focus:border-brand-primary"
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onAdminEmailChange?.(adminEmailInput);
+                            showToast('success', 'Admin notification email saved to cloud.');
+                          }}
+                          className="bg-indigo-600 text-white text-[10px] font-bold uppercase tracking-wider px-4 py-2.5 rounded-xl hover:bg-indigo-700 transition-all"
+                        >
+                          Save Email
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isTestingAdminEmail}
+                          onClick={async () => {
+                            if (!onSendTestAdminEmail) return;
+                            setIsTestingAdminEmail(true);
+                            setAdminEmailTestStatus(null);
+                            try {
+                              onAdminEmailChange?.(adminEmailInput);
+                              const result = await onSendTestAdminEmail(adminEmailInput);
+                              setAdminEmailTestStatus(result);
+                              showToast(result.success ? 'success' : 'error', result.message);
+                            } finally {
+                              setIsTestingAdminEmail(false);
+                            }
+                          }}
+                          className="bg-gray-900 text-white text-[10px] font-bold uppercase tracking-wider px-4 py-2.5 rounded-xl hover:bg-black transition-all disabled:opacity-50"
+                        >
+                          {isTestingAdminEmail ? 'Testing...' : 'Test Email'}
+                        </button>
+                      </div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onAdminEmailChange?.(adminEmailInput);
-                        showToast('success', 'Admin notification email saved to cloud.');
-                      }}
-                      className="shrink-0 bg-indigo-600 text-white text-[10px] font-bold uppercase tracking-wider px-4 py-2.5 rounded-xl hover:bg-indigo-700 transition-all"
-                    >
-                      Save Email
-                    </button>
+                    {adminEmailTestStatus && (
+                      <div
+                        className={`text-[11px] font-bold px-3 py-2 rounded-xl border ${
+                          adminEmailTestStatus.success
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : 'bg-red-50 text-red-700 border-red-200'
+                        }`}
+                      >
+                        {adminEmailTestStatus.message}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between gap-2">

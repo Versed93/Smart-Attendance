@@ -872,6 +872,48 @@ const App: React.FC = () => {
     }
   }, [scriptUrl, adminEmail]);
 
+  const sendTestAdminEmail = useCallback(async (targetEmail?: string): Promise<{ success: boolean; message: string }> => {
+    const cleanUrl = scriptUrl.trim();
+    const recipient = (targetEmail ?? adminEmail).trim();
+    if (!cleanUrl || cleanUrl === DEFAULT_SCRIPT_URL || cleanUrl.endsWith('/dev')) {
+      return { success: false, message: 'Please configure a valid deployed Apps Script /exec URL in Settings first.' };
+    }
+    if (!recipient) {
+      return { success: false, message: 'Enter an Admin Notification Email first.' };
+    }
+    try {
+      const res = await fetch(cleanUrl, {
+        method: 'POST',
+        redirect: 'follow',
+        body: JSON.stringify({
+          action: 'SEND_ACTIVATION_EMAIL',
+          toEmail: recipient,
+          username: 'Admin Email Test',
+          activationUrl: `${window.location.origin}${window.location.pathname}`,
+          adminEmail: recipient,
+        }),
+      });
+      const text = await res.text();
+      if (!res.ok || text.trim().startsWith('<')) {
+        return { success: false, message: 'Apps Script returned HTML instead of JSON. Check Web App access = Anyone.' };
+      }
+      const parsed = JSON.parse(text);
+      if (parsed?.success && parsed?.emailSent !== false) {
+        return { success: true, message: `Test email sent to ${recipient}. Check Inbox/Spam!` };
+      }
+      const errText = String(parsed?.error || 'Email could not be sent.');
+      if (errText.includes('script.send_mail') || errText.includes('MailApp')) {
+        return {
+          success: false,
+          message: 'Apps Script lacks email permission (script.send_mail). Open Apps Script editor → Run a function → Review Permissions → Allow, then re-deploy.',
+        };
+      }
+      return { success: false, message: errText };
+    } catch {
+      return { success: false, message: 'Network error reaching Apps Script endpoint.' };
+    }
+  }, [scriptUrl, adminEmail]);
+
   const handleLogin = (usernameOrEmail: string, password: string): { success: boolean; message?: string } => {
     const cleanInput = usernameOrEmail.trim().toLowerCase();
     const matched = registeredUsers.find(
@@ -1457,6 +1499,7 @@ const App: React.FC = () => {
               onMarkNotificationRead={handleMarkNotificationRead}
               onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
               onClearNotifications={handleClearNotifications}
+              onSendTestAdminEmail={sendTestAdminEmail}
             />
           </div>
         ) : (
