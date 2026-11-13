@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import type { Student } from '../types';
+import type { Student, AppUser, AdminSessionActivity, AdminNotification } from '../types';
 import type { PreRegisteredStudent } from '../studentList';
 import QRCode from 'qrcode';
 import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
@@ -41,10 +41,29 @@ interface TeacherViewProps {
   onClearPendingQueue: () => Promise<{ success: boolean; message: string }>;
   onForceSync: () => Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number; }>;
   onUpdateKnownStudents: (students: PreRegisteredStudent[]) => void;
+  courseName?: string;
   onCourseChange: (courseName: string) => void;
   selectedWeek?: string;
   onWeekChange?: (week: string) => void;
   currentAdminName?: string;
+  integrationType?: 'google_sheets' | 'airtable' | 'firebase';
+  onIntegrationTypeChange?: (type: 'google_sheets' | 'airtable' | 'firebase') => void;
+  teacherHistory?: Student[];
+  onDeleteHistoryItem?: (timestamp: number, studentId: string) => void;
+  onClearTeacherHistory?: () => void;
+  registeredUsers?: AppUser[];
+  adminSessions?: AdminSessionActivity[];
+  adminNotifications?: AdminNotification[];
+  adminEmail?: string;
+  onAdminEmailChange?: (email: string) => void;
+  onDeleteUser?: (userId: string) => Promise<void> | void;
+  onActivateUser?: (userId: string) => Promise<void> | void;
+  onResendActivationEmail?: (user: AppUser) => Promise<{ sent: boolean; activationUrl: string }>;
+  onRevokeSession?: (sessionId: string) => Promise<void> | void;
+  onClearInactiveSessions?: () => Promise<void> | void;
+  onMarkNotificationRead?: (notifId: string) => Promise<void> | void;
+  onMarkAllNotificationsRead?: () => Promise<void> | void;
+  onClearNotifications?: () => Promise<void> | void;
 }
 
 const WEEKS = Array.from({ length: 14 }, (_, i) => `W${i + 1}`);
@@ -66,14 +85,37 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onClearPendingQueue,
   onForceSync,
   onUpdateKnownStudents,
+  courseName: propCourseName,
   onCourseChange,
   selectedWeek = 'W7',
   onWeekChange,
   currentAdminName = 'admin',
+  integrationType = 'google_sheets',
+  onIntegrationTypeChange,
+  teacherHistory = [],
+  onDeleteHistoryItem,
+  onClearTeacherHistory,
+  registeredUsers = [],
+  adminSessions = [],
+  adminNotifications = [],
+  adminEmail = '',
+  onAdminEmailChange,
+  onDeleteUser,
+  onActivateUser,
+  onResendActivationEmail,
+  onRevokeSession,
+  onClearInactiveSessions,
+  onMarkNotificationRead,
+  onMarkAllNotificationsRead,
+  onClearNotifications,
 }) => {
   const [baseUrl] = useState<string>(() => window.location.origin + window.location.pathname);
   const [qrData, setQrData] = useState<string>('');
-  const [courseName, setCourseName] = useState(() => localStorage.getItem('attendance-course-name') || '');
+  const courseName = propCourseName ?? '';
+  const setCourseName = (valOrUpdater: string | ((prev: string) => string)) => {
+    const next = typeof valOrUpdater === 'function' ? valOrUpdater(courseName) : valOrUpdater;
+    onCourseChange(next);
+  };
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'teacher' | 'classroom'>('teacher');
   const [isOfflineMode, setIsOfflineMode] = useState(false);
@@ -84,10 +126,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [locationStatus, setLocationStatus] = useState<'idle' | 'fetching' | 'success' | 'error' | 'denied'>('idle');
   const [showManualModal, setShowManualModal] = useState(false);
   const [activeTab, setActiveTab] = useState<'attendance' | 'history'>('attendance');
-  const [teacherHistory, setTeacherHistory] = useState<Student[]>(() => {
-    const saved = localStorage.getItem('attendance-teacher-history-v1');
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [adminPanelTab, setAdminPanelTab] = useState<'activity' | 'users' | 'notifications'>('activity');
+  const [adminEmailInput, setAdminEmailInput] = useState(adminEmail);
+  const [resendingUserId, setResendingUserId] = useState<string | null>(null);
   const [manualId, setManualId] = useState('');
   const [manualName, setManualName] = useState('');
   const [manualStatus, setManualStatus] = useState('P');
@@ -116,6 +157,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     | { type: 'bulk'; count: number }
     | { type: 'clear-list' }
     | { type: 'clear-history' }
+    | { type: 'delete-user'; id: string; username: string; email?: string }
     | null
   >(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -129,9 +171,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   }, []);
 
   useEffect(() => {
-      localStorage.setItem('attendance-course-name', courseName);
-      onCourseChange(courseName);
-  }, [courseName, onCourseChange]);
+    setAdminEmailInput(adminEmail);
+  }, [adminEmail]);
 
   const normalizeSheetStudents = (rawList: unknown): PreRegisteredStudent[] => {
       if (!Array.isArray(rawList)) return [];
@@ -195,7 +236,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   };
 
   const fetchCourseFromB1 = async (manual = false) => {
-      const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
       if (!scriptUrl || integrationType !== 'google_sheets') {
           const msg = 'Configure Google Sheets Apps Script URL in Settings first.';
           setSheetReadError(msg);
@@ -253,7 +293,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   };
 
   useEffect(() => {
-      const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
       if (!scriptUrl || integrationType !== 'google_sheets') return;
       if (scriptUrl.trim().endsWith('/dev')) {
           setSheetReadError('Apps Script URL uses /dev. Paste the deployed /exec URL in Settings.');
@@ -287,7 +326,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       void loadInitialCourse();
       return () => { cancelled = true; };
       // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scriptUrl]);
+  }, [scriptUrl, integrationType]);
 
   const handleScanResult = (data: string) => {
       setShowScanner(false);
@@ -322,26 +361,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     const interval = setInterval(updateQR, 1000);
     return () => clearInterval(interval);
   }, [baseUrl, courseName, selectedWeek, isGeoEnabled, teacherLocation, isOfflineMode]);
-
-  useEffect(() => {
-    if (attendanceList.length > 0) {
-      const newHistory = [...attendanceList];
-      // Use a timeout to avoid synchronous setState in effect
-      const timer = setTimeout(() => {
-        setTeacherHistory(prev => {
-          const combined = [...newHistory, ...prev];
-          const unique = combined.filter((item, index, self) =>
-            index === self.findIndex((t) => (
-              t.studentId === item.studentId && t.timestamp === item.timestamp
-            ))
-          ).slice(0, 200); // Keep last 200
-          localStorage.setItem('attendance-teacher-history-v1', JSON.stringify(unique));
-          return unique;
-        });
-      }, 0);
-      return () => clearTimeout(timer);
-    }
-  }, [attendanceList]);
 
   useEffect(() => {
     if (canvasRef.current && qrData) {
@@ -427,9 +446,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   };
 
   const handleDeleteHistoryItem = (timestamp: number, studentId: string) => {
-      const newHistory = teacherHistory.filter(h => !(h.timestamp === timestamp && h.studentId === studentId));
-      setTeacherHistory(newHistory);
-      localStorage.setItem('attendance-teacher-history-v1', JSON.stringify(newHistory));
+      onDeleteHistoryItem?.(timestamp, studentId);
       showToast('success', 'History record deleted.');
   };
 
@@ -464,9 +481,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           setSelectedStudentListIds(new Set());
           showToast('success', 'Student list cleared.');
       } else if (pendingDeleteAction.type === 'clear-history') {
-          setTeacherHistory([]);
-          localStorage.removeItem('attendance-teacher-history-v1');
+          onClearTeacherHistory?.();
           showToast('success', 'Scan history cleared.');
+      } else if (pendingDeleteAction.type === 'delete-user') {
+          void onDeleteUser?.(pendingDeleteAction.id);
+          showToast('success', `Removed user account "${pendingDeleteAction.username}".`);
       }
       setPendingDeleteAction(null);
   };
@@ -708,10 +727,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 setTeacherLocation(null);
                 if (err.code === err.PERMISSION_DENIED) {
                     setLocationStatus('denied');
-                    alert("Location access was denied. Please enable it in your browser settings to use this feature.");
+                    showToast('error', 'Location access denied. Enable it in browser settings.');
                 } else {
                     setLocationStatus('error');
-                    alert("Could not get location. Please ensure location services are enabled.");
+                    showToast('error', 'Could not get location. Ensure location services are enabled.');
                 }
             },
             { enableHighAccuracy: true, timeout: 10000 }
@@ -808,31 +827,368 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           </div>
        </div>
 
-       {currentAdminName?.toLowerCase() === 'admin' && (
-         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-            <div className="flex items-center justify-between mb-4">
-               <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse"></div>
-                  <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest">Admin Activity Tracker</h3>
-               </div>
-               <span className="text-[10px] bg-indigo-50 text-indigo-600 font-bold px-3 py-1 rounded-full border border-indigo-100">Secure Session Active</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-               <div className="bg-gray-50 p-3.5 rounded-xl border border-gray-100">
-                  <span className="block font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-1">Logged In User</span>
-                  <span className="font-black text-gray-900 text-sm">{currentAdminName}</span>
-               </div>
-               <div className="bg-gray-50 p-3.5 rounded-xl border border-gray-100">
-                  <span className="block font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-1">Session State</span>
-                  <span className="font-bold text-emerald-600">Active & Monitored</span>
-               </div>
-               <div className="bg-gray-50 p-3.5 rounded-xl border border-gray-100">
-                  <span className="block font-bold text-gray-400 uppercase tracking-wider text-[10px] mb-1">System Audit</span>
-                  <span className="font-bold text-gray-700">All checks passed ({attendanceList.length} records)</span>
-               </div>
-            </div>
-         </div>
-       )}
+       {currentAdminName?.toLowerCase() === 'admin' && (() => {
+         const nowMs = currentTime.getTime();
+         const ONLINE_THRESHOLD_MS = 90 * 1000;
+         const onlineSessions = adminSessions.filter(
+           s => s.status === 'active' && nowMs - (s.lastActiveTime || s.loginTime || 0) <= ONLINE_THRESHOLD_MS
+         );
+         const unreadNotifications = adminNotifications.filter(n => !n.read);
+         const pendingUsersCount = registeredUsers.filter(u => u.status === 'pending').length;
+
+         return (
+           <div className="bg-white p-4 sm:p-6 rounded-3xl shadow-sm border border-gray-100 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                 <div className="flex items-center gap-2.5 flex-wrap">
+                    <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-pulse shrink-0"></div>
+                    <h3 className="text-xs font-bold text-gray-700 uppercase tracking-widest">Admin Control Center</h3>
+                    <span className="text-[10px] bg-emerald-50 text-emerald-700 font-bold px-2.5 py-0.5 rounded-full border border-emerald-200">
+                      {onlineSessions.length} Online Now
+                    </span>
+                    {pendingUsersCount > 0 && (
+                      <span className="text-[10px] bg-amber-50 text-amber-700 font-bold px-2.5 py-0.5 rounded-full border border-amber-200">
+                        {pendingUsersCount} Pending Activation
+                      </span>
+                    )}
+                    {unreadNotifications.length > 0 && (
+                      <span className="text-[10px] bg-red-50 text-red-600 font-bold px-2.5 py-0.5 rounded-full border border-red-200 animate-pulse">
+                        {unreadNotifications.length} New Alert{unreadNotifications.length > 1 ? 's' : ''}
+                      </span>
+                    )}
+                 </div>
+
+                 <div className="flex bg-gray-100 p-1 rounded-xl shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setAdminPanelTab('activity')}
+                      className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${adminPanelTab === 'activity' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}
+                    >
+                      Live Activity ({onlineSessions.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdminPanelTab('users')}
+                      className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${adminPanelTab === 'users' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}
+                    >
+                      Users ({registeredUsers.length})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdminPanelTab('notifications')}
+                      className={`flex-1 sm:flex-initial px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all ${adminPanelTab === 'notifications' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}
+                    >
+                      Alerts {unreadNotifications.length > 0 ? `(${unreadNotifications.length})` : ''}
+                    </button>
+                 </div>
+              </div>
+
+              {unreadNotifications.length > 0 && adminPanelTab !== 'notifications' && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 text-xs font-bold text-amber-900">
+                    <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
+                    <span>
+                      New email signup: {unreadNotifications[0].username} ({unreadNotifications[0].email})
+                      {unreadNotifications.length > 1 ? ` + ${unreadNotifications.length - 1} more` : ''}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAdminPanelTab('notifications')}
+                    className="self-start sm:self-auto text-[10px] font-bold uppercase tracking-wider bg-amber-600 text-white px-3 py-1.5 rounded-xl hover:bg-amber-700 transition-all"
+                  >
+                    Review Signups
+                  </button>
+                </div>
+              )}
+
+              {adminPanelTab === 'activity' && (
+                <div className="space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] font-bold text-gray-500">
+                    <span>Showing active and recent logins across all browsers &amp; devices (auto-syncs every 6s)</span>
+                    {adminSessions.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void onClearInactiveSessions?.()}
+                        className="self-start sm:self-auto text-[10px] text-gray-600 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg uppercase tracking-wider transition-all"
+                      >
+                        Clear Signed-Out
+                      </button>
+                    )}
+                  </div>
+                  {adminSessions.length === 0 ? (
+                    <div className="bg-gray-50 rounded-2xl p-4 text-center text-xs font-bold text-gray-400">
+                      No active user sessions recorded yet.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-h-64 overflow-y-auto pr-1 custom-scrollbar">
+                      {adminSessions.slice(0, 12).map((session) => {
+                        const lastSeenMs = session.lastActiveTime || session.loginTime || 0;
+                        const isOnline = session.status === 'active' && nowMs - lastSeenMs <= ONLINE_THRESHOLD_MS;
+                        const isIdle = session.status === 'active' && !isOnline;
+                        return (
+                          <div
+                            key={session.id}
+                            className={`p-3.5 rounded-2xl border flex items-center justify-between gap-3 ${
+                              isOnline ? 'bg-emerald-50/40 border-emerald-200' : 'bg-gray-50 border-gray-100'
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span
+                                  className={`w-2 h-2 rounded-full shrink-0 ${
+                                    isOnline ? 'bg-emerald-500 animate-pulse' : isIdle ? 'bg-amber-400' : 'bg-gray-300'
+                                  }`}
+                                ></span>
+                                <span className="font-black text-xs text-gray-900 truncate">{session.adminName}</span>
+                                <span
+                                  className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${
+                                    isOnline
+                                      ? 'bg-emerald-100 text-emerald-700'
+                                      : isIdle
+                                        ? 'bg-amber-100 text-amber-700'
+                                        : 'bg-gray-200 text-gray-600'
+                                  }`}
+                                >
+                                  {isOnline ? 'Online' : isIdle ? 'Idle' : 'Signed Out'}
+                                </span>
+                              </div>
+                              <p className="text-[10px] font-bold text-gray-500 truncate mt-1">
+                                {session.device || 'Unknown Device'}{session.currentAction ? ` • ${session.currentAction}` : ''}
+                              </p>
+                              <p className="text-[10px] font-bold text-gray-400 mt-0.5 tabular-nums">
+                                Active: {lastSeenMs ? new Date(lastSeenMs).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '-'} • {session.date || '-'}
+                              </p>
+                            </div>
+                            {session.status === 'active' && session.adminName.toLowerCase() !== 'admin' && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void onRevokeSession?.(session.id);
+                                  showToast('success', `Signed out ${session.adminName} session.`);
+                                }}
+                                className="shrink-0 text-[10px] font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 px-2.5 py-1.5 rounded-xl uppercase transition-all"
+                              >
+                                Force Exit
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {adminPanelTab === 'users' && (
+                <div className="space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] font-bold text-gray-500">
+                    <span>Admin-only User Directory • Activate pending accounts or remove users for safety</span>
+                    <span className="text-[10px] text-gray-400 uppercase">{registeredUsers.length} Registered Account{registeredUsers.length === 1 ? '' : 's'}</span>
+                  </div>
+                  <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+                    {registeredUsers.map((user) => {
+                      const isBuiltInAdmin = user.role === 'admin' || user.username.toLowerCase() === 'admin';
+                      const isPending = user.status === 'pending' && !isBuiltInAdmin;
+                      const isUserOnline = adminSessions.some(
+                        s =>
+                          s.adminName.toLowerCase() === user.username.toLowerCase() &&
+                          s.status === 'active' &&
+                          nowMs - (s.lastActiveTime || s.loginTime || 0) <= ONLINE_THRESHOLD_MS
+                      );
+
+                      return (
+                        <div
+                          key={user.id}
+                          className="p-3.5 bg-gray-50 rounded-2xl border border-gray-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-black text-xs text-gray-900">{user.username}</span>
+                              <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${isBuiltInAdmin ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-200 text-gray-700'}`}>
+                                {isBuiltInAdmin ? 'Admin' : 'Lecturer'}
+                              </span>
+                              <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${isPending ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
+                                {isPending ? 'Pending Activation' : 'Active'}
+                              </span>
+                              {isUserOnline && (
+                                <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                                  Online
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-[11px] font-bold text-gray-500 truncate mt-1">
+                              {user.email || 'No email provided'}
+                            </p>
+                            <p className="text-[10px] font-bold text-gray-400 mt-0.5">
+                              {user.lastLoginAt
+                                ? `Last login: ${new Date(user.lastLoginAt).toLocaleString()}`
+                                : user.createdAt
+                                  ? `Registered: ${new Date(user.createdAt).toLocaleString()}`
+                                  : 'System Account'}
+                            </p>
+                          </div>
+
+                          {!isBuiltInAdmin ? (
+                            <div className="flex items-center gap-2 flex-wrap shrink-0">
+                              {isPending && (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      void onActivateUser?.(user.id);
+                                      showToast('success', `Activated "${user.username}".`);
+                                    }}
+                                    className="text-[10px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1.5 rounded-xl uppercase transition-all"
+                                  >
+                                    Activate
+                                  </button>
+                                  <button
+                                    type="button"
+                                    disabled={resendingUserId === user.id}
+                                    onClick={async () => {
+                                      if (!onResendActivationEmail) return;
+                                      setResendingUserId(user.id);
+                                      try {
+                                        const res = await onResendActivationEmail(user);
+                                        if (res.sent) {
+                                          showToast('success', `Activation email resent to ${user.email}.`);
+                                        } else {
+                                          await navigator.clipboard.writeText(res.activationUrl).catch(() => {});
+                                          showToast('error', 'Email service not deployed yet. Activation link copied to clipboard!');
+                                        }
+                                      } finally {
+                                        setResendingUserId(null);
+                                      }
+                                    }}
+                                    className="text-[10px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1.5 rounded-xl uppercase transition-all disabled:opacity-50"
+                                  >
+                                    {resendingUserId === user.id ? 'Sending...' : 'Resend Email'}
+                                  </button>
+                                </>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setPendingDeleteAction({ type: 'delete-user', id: user.id, username: user.username, email: user.email })}
+                                className="inline-flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 px-2.5 py-1.5 rounded-xl uppercase transition-all"
+                                title={`Remove user ${user.username}`}
+                              >
+                                <TrashIcon className="w-3.5 h-3.5" />
+                                Remove
+                              </button>
+                            </div>
+                          ) : (
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-wider shrink-0">Protected Admin</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {adminPanelTab === 'notifications' && (
+                <div className="space-y-4">
+                  <div className="bg-gray-50 p-3.5 rounded-2xl border border-gray-100 flex flex-col sm:flex-row sm:items-end justify-between gap-3">
+                    <div className="flex-1 min-w-0">
+                      <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">
+                        Admin Notification Email (receives new signup alerts)
+                      </label>
+                      <input
+                        type="email"
+                        value={adminEmailInput}
+                        onChange={(e) => setAdminEmailInput(e.target.value)}
+                        placeholder="admin@university.edu (or uses Google Sheet owner email)"
+                        className="w-full bg-white border border-gray-200 rounded-xl px-3 py-2 text-xs font-bold text-gray-800 outline-none focus:border-brand-primary"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onAdminEmailChange?.(adminEmailInput);
+                        showToast('success', 'Admin notification email saved to cloud.');
+                      }}
+                      className="shrink-0 bg-indigo-600 text-white text-[10px] font-bold uppercase tracking-wider px-4 py-2.5 rounded-xl hover:bg-indigo-700 transition-all"
+                    >
+                      Save Email
+                    </button>
+                  </div>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-bold text-gray-500">
+                      Signup Notifications ({adminNotifications.length})
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {unreadNotifications.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => void onMarkAllNotificationsRead?.()}
+                          className="text-[10px] font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 rounded-lg uppercase"
+                        >
+                          Mark All Read
+                        </button>
+                      )}
+                      {adminNotifications.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => void onClearNotifications?.()}
+                          className="text-[10px] font-bold text-red-600 bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded-lg uppercase"
+                        >
+                          Clear All
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {adminNotifications.length === 0 ? (
+                    <div className="bg-gray-50 rounded-2xl p-4 text-center text-xs font-bold text-gray-400">
+                      No signup notifications yet.
+                    </div>
+                  ) : (
+                    <div className="space-y-2 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
+                      {adminNotifications.map((notif) => (
+                        <div
+                          key={notif.id}
+                          className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                            notif.read ? 'bg-gray-50 border-gray-100' : 'bg-amber-50/60 border-amber-200'
+                          }`}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {!notif.read && <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>}
+                              <span className="font-bold text-xs text-gray-900">{notif.message}</span>
+                            </div>
+                            <div className="flex items-center gap-2 mt-1 flex-wrap">
+                              <span
+                                className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${
+                                  notif.emailSent ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'
+                                }`}
+                              >
+                                {notif.emailSent ? 'Activation Email Sent' : 'Manual Link / Re-deploy Script Needed'}
+                              </span>
+                              <span className="text-[10px] font-bold text-gray-400">
+                                {new Date(notif.createdAt).toLocaleString()}
+                              </span>
+                            </div>
+                          </div>
+                          {!notif.read && (
+                            <button
+                              type="button"
+                              onClick={() => void onMarkNotificationRead?.(notif.id)}
+                              className="self-start sm:self-auto shrink-0 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 hover:bg-gray-100 px-2.5 py-1 rounded-lg uppercase"
+                            >
+                              Mark Read
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+           </div>
+         );
+       })()}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         <div className="bg-white p-4 sm:p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center">
@@ -1096,6 +1452,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             onClearPendingQueue={onClearPendingQueue}
                             onForceSync={onForceSync} 
                             selectedWeek={selectedWeek}
+                            integrationType={integrationType}
+                            onIntegrationTypeChange={onIntegrationTypeChange}
                         />
                     </div>
                     <div className="space-y-4">
@@ -1463,13 +1821,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   {pendingDeleteAction.type === 'single' ? 'Delete Student?' :
                    pendingDeleteAction.type === 'bulk' ? `Delete ${pendingDeleteAction.count} Students?` :
                    pendingDeleteAction.type === 'clear-list' ? 'Clear Student List?' :
+                   pendingDeleteAction.type === 'delete-user' ? 'Remove User Account?' :
                    'Clear Scan History?'}
                 </h2>
                 <p className="text-xs font-bold text-gray-400 mb-7 leading-relaxed">
                   {pendingDeleteAction.type === 'single' ? `Remove ${pendingDeleteAction.name} (${pendingDeleteAction.id}) from the Student List?` :
                    pendingDeleteAction.type === 'bulk' ? `Remove ${pendingDeleteAction.count} selected student(s) from the Student List?` :
                    pendingDeleteAction.type === 'clear-list' ? 'This will remove all students from the known Student List. This cannot be undone.' :
-                   'This will remove all saved local scan history records.'}
+                   pendingDeleteAction.type === 'delete-user' ? `Permanently remove user "${pendingDeleteAction.username}"${pendingDeleteAction.email ? ` (${pendingDeleteAction.email})` : ''} and revoke any active login sessions?` :
+                   'This will remove all saved scan history records across all devices.'}
                 </p>
                 <div className="flex gap-3">
                     <button type="button" onClick={() => setPendingDeleteAction(null)} className="flex-1 px-4 py-3.5 font-bold text-gray-500 bg-gray-100 rounded-2xl hover:bg-gray-200 transition-all uppercase text-[10px] tracking-widest">Cancel</button>

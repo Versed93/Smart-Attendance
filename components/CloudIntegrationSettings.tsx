@@ -9,6 +9,8 @@ interface CloudIntegrationSettingsProps {
   onClearPendingQueue: () => Promise<{ success: boolean; message: string }>;
   onForceSync: () => Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number; }>;
   selectedWeek?: string;
+  integrationType?: 'google_sheets' | 'airtable' | 'firebase';
+  onIntegrationTypeChange?: (type: 'google_sheets' | 'airtable' | 'firebase') => void;
 }
 
 export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> = ({ 
@@ -18,11 +20,19 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
   onCheckPendingRecords, 
   onClearPendingQueue,
   onForceSync,
-  selectedWeek = 'W7'
+  selectedWeek = 'W7',
+  integrationType: propIntegrationType,
+  onIntegrationTypeChange,
 }) => {
-  const [integrationType, setIntegrationType] = useState<'google_sheets' | 'airtable' | 'firebase'>(() => {
+  const [localIntegrationType, setLocalIntegrationType] = useState<'google_sheets' | 'airtable' | 'firebase'>(() => {
       return (localStorage.getItem('attendance-integration-type') as 'google_sheets' | 'airtable' | 'firebase') || 'google_sheets';
   });
+  const integrationType = propIntegrationType ?? localIntegrationType;
+  const setIntegrationType = (next: 'google_sheets' | 'airtable' | 'firebase') => {
+      setLocalIntegrationType(next);
+      localStorage.setItem('attendance-integration-type', next);
+      onIntegrationTypeChange?.(next);
+  };
 
   const [airtableToken, setAirtableToken] = useState(() => localStorage.getItem('airtable-token') || '');
   const [airtableBaseId, setAirtableBaseId] = useState(() => localStorage.getItem('airtable-base-id') || '');
@@ -111,6 +121,35 @@ function doPost(e) {
     var data = JSON.parse(e.postData.contents);
     if (data && !Array.isArray(data) && data.action === "SYNC_QUEUE") {
       return ContentService.createTextOutput(JSON.stringify({success: true, message: "Sync acknowledged"})).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (data && !Array.isArray(data) && data.action === "SEND_ACTIVATION_EMAIL") {
+      var toEmail = String(data.toEmail || "").trim();
+      var username = String(data.username || "User").trim();
+      var activationUrl = String(data.activationUrl || "").trim();
+      var adminEmail = String(data.adminEmail || "").trim();
+      var ownerEmail = "";
+      try { ownerEmail = Session.getEffectiveUser().getEmail() || ""; } catch (e0) {}
+      var targetAdminEmail = adminEmail || ownerEmail;
+
+      if (toEmail && activationUrl) {
+        MailApp.sendEmail({
+          to: toEmail,
+          subject: "Activate Your Smart Attendance Account",
+          body: "Hello " + username + ",\\n\\nPlease activate your Smart QR Attendance account by opening the link below:\\n" + activationUrl + "\\n\\nAfter activating, you can sign in to the Lecturer Dashboard.",
+          htmlBody: "<div style='font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;'><h2 style='color:#111827;margin-bottom:8px;'>Activate Your Account</h2><p style='color:#4b5563;font-size:14px;'>Hello <strong>" + username + "</strong>,</p><p style='color:#4b5563;font-size:14px;'>Thank you for signing up for the Smart QR Attendance System. Click the button below to activate your account:</p><p style='margin:24px 0;'><a href='" + activationUrl + "' style='background:#4f46e5;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block;'>Activate Account</a></p><p style='color:#6b7280;font-size:12px;word-break:break-all;'>Or copy this link: " + activationUrl + "</p></div>"
+        });
+      }
+
+      if (targetAdminEmail) {
+        MailApp.sendEmail({
+          to: targetAdminEmail,
+          subject: "[Smart Attendance] New User Signup: " + username,
+          body: "A new user has signed up via email on the Smart QR Attendance System.\\n\\nUsername: " + username + "\\nEmail: " + toEmail + "\\nStatus: Pending Activation\\n\\nYou can view, activate, or remove this account from the Admin Dashboard."
+        });
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({success: true, emailSent: true})).setMimeType(ContentService.MimeType.JSON);
     }
 
     var doc = SpreadsheetApp.getActiveSpreadsheet();
@@ -285,7 +324,7 @@ function doPost(e) {
               <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
                   <div className="bg-amber-100 p-1.5 rounded-lg text-amber-600 shrink-0">ℹ️</div>
                   <p className="text-[10px] text-amber-800 leading-relaxed font-bold uppercase">
-                      Sheet Placement: Course Name is read/matched on Row B1, Student Name &amp; ID list is read/matched starting at B4 &amp; C4, and Weeks W1–W14 are in D3:Q3 (currently recording to {selectedWeek}). Copy the updated script code above, deploy as a Web App (Access: Anyone), and paste the /exec URL below.
+                      Sheet Placement &amp; Emails: Course Name is read/matched on Row B1, Student Name &amp; ID list at B4 &amp; C4, and Weeks W1–W14 in D3:Q3 (recording to {selectedWeek}). Re-deploy the updated script above as a Web App (Access: Anyone) to also enable automatic activation &amp; admin signup emails.
                   </p>
               </div>
               <div>
