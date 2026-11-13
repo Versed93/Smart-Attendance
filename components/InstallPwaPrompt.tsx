@@ -21,7 +21,10 @@ export const InstallPwaPrompt: React.FC = () => {
 
   useEffect(() => {
     // Check if already installed (Standalone mode)
-    const isStandaloneMode = window.matchMedia('(display-mode: standalone)').matches || ('standalone' in window.navigator && (window.navigator as { standalone?: boolean }).standalone);
+    const isStandaloneMode = Boolean(
+      window.matchMedia('(display-mode: standalone)').matches ||
+      ('standalone' in window.navigator && (window.navigator as { standalone?: boolean }).standalone)
+    );
     
     // Detect iOS
     const userAgent = window.navigator.userAgent.toLowerCase();

@@ -23,6 +23,7 @@ const App: React.FC = () => {
   const urlParams = new URLSearchParams(window.location.search);
   const token = urlParams.get('t');
   const courseNameParam = urlParams.get('c');
+  const weekParam = urlParams.get('w');
   const isOfflineScan = urlParams.get('offline') === 'true';
   
   const latParam = urlParams.get('lat');
@@ -44,6 +45,7 @@ const App: React.FC = () => {
   const [view, setView] = useState<View>(initialView);
   const [isKioskMode, setIsKioskMode] = useState(() => localStorage.getItem(KIOSK_PREF_KEY) === 'true');
   const [activeCourse, setActiveCourse] = useState(() => localStorage.getItem('attendance-course-name') || '');
+  const [selectedWeek, setSelectedWeek] = useState<string>(() => localStorage.getItem('attendance-active-week') || 'W7');
 
   const REGISTERED_USERS_KEY = 'attendance-registered-users-v1';
   const CURRENT_ADMIN_NAME_KEY = 'attendance-current-admin-name-v1';
@@ -81,34 +83,40 @@ const App: React.FC = () => {
 
   const [knownStudents, setKnownStudents] = useState<PreRegisteredStudent[]>(() => {
       const saved = localStorage.getItem(KNOWN_STUDENTS_KEY);
-      const initial = PRE_REGISTERED_STUDENTS;
-      if (saved) {
+      if (saved !== null) {
           try {
               const parsed = JSON.parse(saved);
               if (Array.isArray(parsed)) {
-                  const map = new Map();
-                  initial.forEach(s => map.set(s.id, s));
-                  parsed.forEach(s => map.set(s.id, s));
-                  return Array.from(map.values());
+                  return parsed;
               }
           } catch { console.error("Error loading known students"); }
       }
-      return initial;
+      return PRE_REGISTERED_STUDENTS;
   });
 
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
     return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbwbjXTrbFPRqVA0I-RGc1rV7K7eZ_CkgQujSBVtOtvjDCW1GJYAkxiVlXJzAB_-R_CaLA/exec';
   });
 
-  const formatCloudPayload = (r: Student) => ({
-      "Student ID": r.studentId,
-      "Name": r.name,
-      "[Course Name Here]": r.courseName || 'General Session',
-      "[Date Here 1]": new Date(r.timestamp).toLocaleDateString(),
-      "[Status Here]": r.status,
-      "Reason": r.absenceReason || "",
-      "Timestamp": new Date(r.timestamp).toISOString()
-  });
+  useEffect(() => {
+      localStorage.setItem('attendance-active-week', selectedWeek);
+  }, [selectedWeek]);
+
+  const formatCloudPayload = (r: Student) => {
+      const targetWeek = r.week || selectedWeek || 'W7';
+      return {
+          "Student ID": r.studentId,
+          "Name": r.name,
+          "Week": targetWeek,
+          "Status": r.status,
+          "[Course Name Here]": r.courseName || 'General Session',
+          "[Date Here 1]": new Date(r.timestamp).toLocaleDateString(),
+          "[Status Here]": r.status,
+          [targetWeek]: r.status,
+          "Reason": r.absenceReason || "",
+          "Timestamp": new Date(r.timestamp).toISOString()
+      };
+  };
 
   const syncToAirtable = async (records: Record<string, Student>) => {
       const type = localStorage.getItem('attendance-integration-type');
@@ -158,10 +166,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-        const shouldClear = checkAndClearForNewDay();
-        if (shouldClear) {
-            // Logic already handled inside checkAndClearForNewDay
-        }
+        checkAndClearForNewDay();
     }, 0);
     return () => clearTimeout(timer);
   }, [checkAndClearForNewDay]);
@@ -241,16 +246,6 @@ const App: React.FC = () => {
     setIsKioskMode(false);
   }, []);
 
-  const onDeleteAllSessions = () => {
-    setRegisteredUsers([{ username: 'admin', password: 'adminscm' }]);
-    localStorage.removeItem(REGISTERED_USERS_KEY);
-    handleLogout();
-  };
-
-  const onLogoutUser = (username: string) => {
-    setRegisteredUsers(prev => prev.filter(u => u.username !== username));
-  };
-
   const handleEnterKiosk = useCallback(() => {
       setIsKioskMode(true);
       setView('student');
@@ -271,7 +266,7 @@ const App: React.FC = () => {
     }
   };
 
-  const addStudent = async (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number, absenceReason?: string) => {
+  const addStudent = async (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number, absenceReason?: string, week?: string) => {
       if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) {
           return { success: false, message: "Configuration error." };
       }
@@ -293,7 +288,8 @@ const App: React.FC = () => {
       } catch { /* ignore */ }
 
       const timestamp = overrideTimestamp || Date.now();
-      const studentData: Student = { name, studentId, email, status, timestamp, courseName, absenceReason };
+      const targetWeek = week || selectedWeek || 'W7';
+      const studentData: Student = { name, studentId, email, status, timestamp, courseName, absenceReason, week: targetWeek };
       
       setAttendanceList(prev => [{ ...studentData }, ...prev.filter(s => s.studentId !== studentId)]);
 
@@ -335,7 +331,7 @@ const App: React.FC = () => {
       if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
       setAttendanceList(prev => prev.filter(s => !ids.includes(s.studentId)));
       const now = Date.now();
-      const promises: Promise<Response>[] = [];
+      const promises: Promise<unknown>[] = [];
       const path = courseName ? `${SESSION_ID}_${sanitize(courseName)}` : SESSION_ID;
       for (const id of ids) {
         const student = attendanceList.find(s => s.studentId === id) || knownStudents.find(k => k.id === id);
@@ -346,7 +342,8 @@ const App: React.FC = () => {
           status: 'A',
           timestamp: now,
           courseName,
-          absenceReason: 'Lecturer Override'
+          absenceReason: 'Lecturer Override',
+          week: selectedWeek || 'W7'
         };
         promises.push(
           fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(removalData) }),
@@ -364,7 +361,7 @@ const App: React.FC = () => {
   };
 
   const onBulkStatusUpdate = async (ids: string[], status: string, courseName: string, absenceReason?: string) => {
-      setAttendanceList(prev => prev.map(s => ids.includes(s.studentId) ? { ...s, status, absenceReason } : s));
+      setAttendanceList(prev => prev.map(s => ids.includes(s.studentId) ? { ...s, status, absenceReason, week: selectedWeek } : s));
       const now = Date.now();
       const updatePayload: Record<string, Student> = {};
       const path = courseName ? `${SESSION_ID}_${sanitize(courseName)}` : SESSION_ID;
@@ -372,7 +369,7 @@ const App: React.FC = () => {
       for (const id of ids) {
         const student = attendanceList.find(s => s.studentId === id);
         if (student) {
-           const updateData: Student = { ...student, status, timestamp: now, courseName, absenceReason };
+           const updateData: Student = { ...student, status, timestamp: now, courseName, absenceReason, week: selectedWeek || 'W7' };
            updatePayload[id] = updateData;
            promises.push(
                fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) }),
@@ -392,7 +389,7 @@ const App: React.FC = () => {
 
   const handleSendTestRecord = async (courseName: string): Promise<{ success: boolean; message: string }> => {
     if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return { success: false, message: "Firebase URL missing." };
-    const testRecord: Student = { name: 'CONNECTION TEST', studentId: 'TEST999', email: 'test@student.edu.my', status: 'P', timestamp: Date.now(), courseName: courseName || 'Connectivity Test', absenceReason: '' };
+    const testRecord: Student = { name: 'CONNECTION TEST', studentId: 'TEST999', email: 'test@student.edu.my', status: 'P', timestamp: Date.now(), courseName: courseName || 'Connectivity Test', absenceReason: '', week: selectedWeek || 'W7' };
     try {
       await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending/TEST999.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(testRecord) });
       
@@ -403,17 +400,32 @@ const App: React.FC = () => {
           await syncToAirtable({ 'TEST999': testRecord });
       }
       
-      return { success: true, message: "Test signal sent to Cloud." };
+      return { success: true, message: `Test signal sent to Cloud (${selectedWeek}).` };
     } catch { return { success: false, message: "Cloud test failed." }; }
   };
 
   const handleCheckPendingRecords = async (): Promise<{ success: boolean; message: string; count: number }> => {
     if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return { success: false, message: "Firebase URL missing.", count: 0 };
     try {
-      const res = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+      const baseDbUrl = FIREBASE_CONFIG.DATABASE_URL.replace(/\/+$/, '');
+      const res = await fetch(`${baseDbUrl}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
       const data = await res.json();
       return { success: true, message: data ? `Queue length: ${Object.keys(data).length}` : "Synchronization queue is empty.", count: data ? Object.keys(data).length : 0 };
     } catch { return { success: false, message: "Status check failed.", count: 0 }; }
+  };
+
+  const handleClearPendingQueue = async (): Promise<{ success: boolean; message: string }> => {
+    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return { success: false, message: "Firebase URL missing." };
+    try {
+      const baseDbUrl = FIREBASE_CONFIG.DATABASE_URL.replace(/\/+$/, '');
+      const res = await fetch(`${baseDbUrl}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) return { success: false, message: "Failed to clear queue." };
+      return { success: true, message: "Queue cleared. Queue length: 0" };
+    } catch {
+      return { success: false, message: "Failed to clear queue." };
+    }
   };
   
   const handleForceSync = async (): Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number }> => {
@@ -425,7 +437,8 @@ const App: React.FC = () => {
     
     if (integrationType === 'airtable') {
         try {
-            const res = await fetch(`${FIREBASE_CONFIG.DATABASE_URL}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+            const baseDbUrl = FIREBASE_CONFIG.DATABASE_URL.replace(/\/+$/, '');
+            const res = await fetch(`${baseDbUrl}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
             const data = await res.json();
             if (data) {
                 await syncToAirtable(data);
@@ -439,8 +452,17 @@ const App: React.FC = () => {
 
     if (!scriptUrl) return { success: false, message: "Script Endpoint missing.", syncedCount: 0, errorCount: 0, total: 0 };
     try {
-        await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ "action": "SYNC_QUEUE" }) });
-        return { success: true, message: "Cloud synchronization command triggered.", syncedCount: 0, errorCount: 0, total: 0 };
+        const baseDbUrl = FIREBASE_CONFIG.DATABASE_URL.replace(/\/+$/, '');
+        const pendingRes = await fetch(`${baseDbUrl}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+        const pendingData = pendingRes.ok ? await pendingRes.json() : null;
+        if (pendingData && Object.keys(pendingData).length > 0) {
+            const records = Object.values(pendingData) as Student[];
+            const bulkPayload = records.map(r => formatCloudPayload({ ...r, week: r.week || selectedWeek }));
+            await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(bulkPayload) });
+            return { success: true, message: `Synced ${records.length} record(s) to ${selectedWeek}.`, syncedCount: records.length, errorCount: 0, total: records.length };
+        }
+        await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ "action": "SYNC_QUEUE", "week": selectedWeek }) });
+        return { success: true, message: `Cloud sync triggered (${selectedWeek}).`, syncedCount: 0, errorCount: 0, total: 0 };
     } catch { return { success: false, message: "Trigger failed.", syncedCount: 0, errorCount: 0, total: 0 }; }
   };
 
@@ -465,34 +487,29 @@ const App: React.FC = () => {
                      knownStudents={knownStudents}
                      onSendTestRecord={handleSendTestRecord}
                      onCheckPendingRecords={handleCheckPendingRecords}
+                     onClearPendingQueue={handleClearPendingQueue}
                      onForceSync={handleForceSync}
-                     onUpdateKnownStudents={(students) => setKnownStudents(prev => {
-                         const map = new Map();
-                         prev.forEach(s => map.set(s.id, s));
-                         students.forEach(s => map.set(s.id, s));
-                         return Array.from(map.values());
-                     })}
+                     onUpdateKnownStudents={(students) => setKnownStudents(students)}
                      onCourseChange={setActiveCourse}
+                     selectedWeek={selectedWeek}
+                     onWeekChange={setSelectedWeek}
                      currentAdminName={currentAdminName}
                  />
              </div>
            ) : <LoginView 
                    onLogin={handleLogin} 
                    onSignUp={handleSignUp} 
-                   registeredUsers={registeredUsers} 
-                   onDeleteAllSessions={onDeleteAllSessions} 
-                   onLogoutUser={onLogoutUser} 
                />
        ) : (
            <div className="flex-1 flex flex-col items-center justify-center p-4 bg-gray-50">
                <div className="w-full max-w-md bg-white rounded-xl shadow-lg p-6 border border-gray-100">
                    <StudentView 
-                       markAttendance={(name, id, email) => addStudent(name, id, email, 'P', courseNameParam || 'General Session')}
+                       markAttendance={(name, id, email, scannedWeek) => addStudent(name, id, email, 'P', courseNameParam || 'General Session', undefined, undefined, scannedWeek || weekParam || selectedWeek)}
                        token={token || (isKioskMode ? kioskToken : '')}
                        courseName={courseNameParam || undefined}
+                       week={weekParam || selectedWeek}
                        geoConstraints={latParam && lngParam ? { lat: parseFloat(latParam), lng: parseFloat(lngParam), radius: radParam ? parseFloat(radParam) : 150 } : undefined}
                        bypassRestrictions={isKioskMode}
-                       onExit={handleLogout}
                        isOfflineScan={isOfflineScan}
                        knownStudents={knownStudents}
                        onSwitchToTeacher={() => setView('teacher')}

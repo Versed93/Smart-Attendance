@@ -6,7 +6,9 @@ interface CloudIntegrationSettingsProps {
   onScriptUrlChange: (url: string) => void;
   onSendTestRecord: () => Promise<{ success: boolean; message: string }>;
   onCheckPendingRecords: () => Promise<{ success: boolean; message: string; count: number }>;
+  onClearPendingQueue: () => Promise<{ success: boolean; message: string }>;
   onForceSync: () => Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number; }>;
+  selectedWeek?: string;
 }
 
 export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> = ({ 
@@ -14,7 +16,9 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
   onScriptUrlChange, 
   onSendTestRecord, 
   onCheckPendingRecords, 
-  onForceSync 
+  onClearPendingQueue,
+  onForceSync,
+  selectedWeek = 'W7'
 }) => {
   const [integrationType, setIntegrationType] = useState<'google_sheets' | 'airtable' | 'firebase'>(() => {
       return (localStorage.getItem('attendance-integration-type') as 'google_sheets' | 'airtable' | 'firebase') || 'google_sheets';
@@ -39,75 +43,102 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
   
   try {
     var data = JSON.parse(e.postData.contents);
+    if (data && !Array.isArray(data) && data.action === "SYNC_QUEUE") {
+      return ContentService.createTextOutput(JSON.stringify({success: true, message: "Sync acknowledged"})).setMimeType(ContentService.MimeType.JSON);
+    }
+
     var doc = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = doc.getSheets()[0]; // Use the first sheet
-    
     var records = Array.isArray(data) ? data : [data];
-    
-    var headersRange = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), 1));
-    var headers = headersRange.getValues()[0];
-    
+
+    // Sheet Layout:
+    // Row 3 (D3:Q3, cols 4..17): W1 - W14 headers
+    // Row 4+ Col B (col 2): Student Name (starting B4)
+    // Row 4+ Col C (col 3): Student ID (starting C4)
+    var START_ROW = 4;
+    var NAME_COL = 2; // Column B
+    var ID_COL = 3;   // Column C
+    var WEEK_START_COL = 4; // Column D (W1)
+    var WEEK_COUNT = 14;    // D3:Q3 -> W1..W14
+
+    var weekHeaders = sheet.getRange(3, WEEK_START_COL, 1, WEEK_COUNT).getValues()[0];
+
     for (var i = 0; i < records.length; i++) {
       var record = records[i];
-      var studentId = record["Student ID"];
-      var name = record["Name"];
-      
-      var idCol = headers.indexOf("Student ID") + 1;
-      var nameCol = headers.indexOf("Name") + 1;
-      
+      if (!record) continue;
+
+      var studentId = String(record["Student ID"] || "").trim();
+      var name = String(record["Name"] || "").trim();
+      if (!studentId && !name) continue;
+
+      var targetWeek = String(record["Week"] || "W7").toUpperCase().trim();
+      var statusValue = record["Status"] || record["[Status Here]"] || record[targetWeek] || "P";
+
+      // Resolve target week column in D3:Q3 (cols 4..17)
+      var weekCol = -1;
+      for (var w = 0; w < weekHeaders.length; w++) {
+        var headerVal = String(weekHeaders[w] || "").toUpperCase().trim();
+        if (headerVal === targetWeek) {
+          weekCol = WEEK_START_COL + w;
+          break;
+        }
+      }
+      if (weekCol === -1) {
+        var match = targetWeek.match(/^W(\\d+)$/);
+        var weekNum = match ? parseInt(match[1], 10) : 7;
+        if (weekNum < 1) weekNum = 1;
+        if (weekNum > 14) weekNum = 14;
+        weekCol = WEEK_START_COL + weekNum - 1;
+        if (!String(sheet.getRange(3, weekCol).getValue() || "").trim()) {
+          sheet.getRange(3, weekCol).setValue("W" + weekNum);
+        }
+      }
+
+      // Search students starting from Row 4 (B4: Name, C4: Student ID)
+      var lastRow = Math.max(sheet.getLastRow(), START_ROW - 1);
+      var numDataRows = lastRow >= START_ROW ? (lastRow - START_ROW + 1) : 0;
       var studentRow = -1;
-      
-      // 1. Try to find the student by Student ID
-      if (idCol > 0 && studentId) {
-        var idValues = sheet.getRange(1, idCol, Math.max(sheet.getLastRow(), 1), 1).getValues();
-        for (var r = 1; r < idValues.length; r++) {
-          if (String(idValues[r][0]).toUpperCase().trim() === String(studentId).toUpperCase().trim()) {
-            studentRow = r + 1;
+      var firstEmptyRow = -1;
+
+      if (numDataRows > 0) {
+        var nameAndIdValues = sheet.getRange(START_ROW, NAME_COL, numDataRows, 2).getValues();
+        for (var r = 0; r < nameAndIdValues.length; r++) {
+          var rowName = String(nameAndIdValues[r][0] || "").toUpperCase().trim();
+          var rowId = String(nameAndIdValues[r][1] || "").toUpperCase().trim();
+
+          if (!rowName && !rowId && firstEmptyRow === -1) {
+            firstEmptyRow = START_ROW + r;
+          }
+          if (studentId && rowId === studentId.toUpperCase()) {
+            studentRow = START_ROW + r;
             break;
           }
         }
-      }
-      
-      // 2. If not found by ID, try to find by Name
-      if (studentRow === -1 && nameCol > 0 && name) {
-        var nameValues = sheet.getRange(1, nameCol, Math.max(sheet.getLastRow(), 1), 1).getValues();
-        for (var r = 1; r < nameValues.length; r++) {
-          if (String(nameValues[r][0]).toUpperCase().trim() === String(name).toUpperCase().trim()) {
-            studentRow = r + 1;
-            break;
+
+        // Fallback match by Name in Column B if ID didn't match
+        if (studentRow === -1 && name) {
+          for (var r2 = 0; r2 < nameAndIdValues.length; r2++) {
+            var rowName2 = String(nameAndIdValues[r2][0] || "").toUpperCase().trim();
+            if (rowName2 === name.toUpperCase()) {
+              studentRow = START_ROW + r2;
+              if (studentId && !String(nameAndIdValues[r2][1] || "").trim()) {
+                sheet.getRange(studentRow, ID_COL).setValue(studentId);
+              }
+              break;
+            }
           }
         }
       }
-      
-      // 3. If still not found, append a new row
+
+      // Append new student starting from row 4 (B4 = Name, C4 = Student ID)
       if (studentRow === -1) {
-        studentRow = sheet.getLastRow() + 1;
-        if (idCol === 0) {
-          idCol = headers.length + 1;
-          headers.push("Student ID");
-          sheet.getRange(1, idCol).setValue("Student ID");
-        }
-        sheet.getRange(studentRow, idCol).setValue(studentId);
+        studentRow = firstEmptyRow !== -1 ? firstEmptyRow : Math.max(lastRow + 1, START_ROW);
+        if (name) sheet.getRange(studentRow, NAME_COL).setValue(name);
+        if (studentId) sheet.getRange(studentRow, ID_COL).setValue(studentId);
       }
-      
-      // 4. Dynamically update all columns based on the keys provided in the payload
-      var keys = Object.keys(record);
-      for (var k = 0; k < keys.length; k++) {
-        var key = keys[k];
-        if (key === "Student ID") continue; // Already handled
-        
-        var colIdx = headers.indexOf(key) + 1;
-        
-        // If the column doesn't exist, create it
-        if (colIdx === 0) {
-          colIdx = headers.length + 1;
-          headers.push(key);
-          sheet.getRange(1, colIdx).setValue(key);
-        }
-        
-        // Write the value to the correct column for this student
-        sheet.getRange(studentRow, colIdx).setValue(record[key]);
-      }
+
+      // Record attendance status into the selected week cell (e.g. J4+ for W7)
+      sheet.getRange(studentRow, weekCol).setValue(statusValue);
     }
     
     return ContentService.createTextOutput(JSON.stringify({success:true})).setMimeType(ContentService.MimeType.JSON);
@@ -168,7 +199,7 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
               <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
                   <div className="bg-amber-100 p-1.5 rounded-lg text-amber-600 shrink-0">ℹ️</div>
                   <p className="text-[10px] text-amber-800 leading-relaxed font-bold uppercase">
-                      Copy the script code above, deploy it as a Web App in Google Apps Script, and paste the URL below.
+                      Sheet Placement: Student Name starts at B4, Student ID starts at C4, and Weeks W1–W14 are in D3:Q3 (currently recording to {selectedWeek}). Copy the updated script code above, deploy as a Web App, and paste the URL below.
                   </p>
               </div>
               <div>
@@ -247,10 +278,11 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
           </div>
       )}
 
-      <div className="grid grid-cols-3 gap-3 pt-4 border-t border-gray-50">
-        <button onClick={async () => { setStatus('Checking...'); const r = await onCheckPendingRecords(); setStatus(r.message); }} className="bg-gray-100 text-gray-800 font-bold py-3 rounded-xl text-[10px] hover:bg-gray-200 uppercase tracking-widest active:scale-95 transition-all">Check Queue</button>
-        <button onClick={async () => { setStatus('Syncing...'); await onForceSync(); setStatus('Sync Complete'); }} className="bg-gray-100 text-gray-800 font-bold py-3 rounded-xl text-[10px] hover:bg-gray-200 uppercase tracking-widest active:scale-95 transition-all">Force Sync</button>
-        <button onClick={async () => { setStatus('Testing...'); const r = await onSendTestRecord(); setStatus(r.message); }} className="bg-gray-900 text-white font-bold py-3 rounded-xl text-[10px] hover:bg-black uppercase tracking-widest active:scale-95 transition-all">Test Sync</button>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 border-t border-gray-50">
+        <button type="button" onClick={async () => { setStatus('Checking...'); const r = await onCheckPendingRecords(); setStatus(r.message); }} className="bg-gray-100 text-gray-800 font-bold py-3 rounded-xl text-[10px] hover:bg-gray-200 uppercase tracking-widest active:scale-95 transition-all">Check Queue</button>
+        <button type="button" onClick={async () => { setStatus('Clearing...'); const r = await onClearPendingQueue(); setStatus(r.message); }} className="bg-red-50 text-red-600 border border-red-100 font-bold py-3 rounded-xl text-[10px] hover:bg-red-100 uppercase tracking-widest active:scale-95 transition-all">Clear Queue</button>
+        <button type="button" onClick={async () => { setStatus('Syncing...'); const r = await onForceSync(); setStatus(r.message || 'Sync Complete'); }} className="bg-gray-100 text-gray-800 font-bold py-3 rounded-xl text-[10px] hover:bg-gray-200 uppercase tracking-widest active:scale-95 transition-all">Force Sync</button>
+        <button type="button" onClick={async () => { setStatus('Testing...'); const r = await onSendTestRecord(); setStatus(r.message); }} className="bg-gray-900 text-white font-bold py-3 rounded-xl text-[10px] hover:bg-black uppercase tracking-widest active:scale-95 transition-all">Test Sync</button>
       </div>
       
       {status && <p className="text-[10px] text-center font-bold text-indigo-600 uppercase tracking-widest">{status}</p>}

@@ -8,6 +8,9 @@ import { CameraIcon } from './icons/CameraIcon';
 import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
 import { HistoryIcon } from './icons/HistoryIcon';
 import { TrashIcon } from './icons/TrashIcon';
+import type { PreRegisteredStudent } from '../studentList';
+
+const QR_REFRESH_INTERVAL = 15;
 
 export interface ScanHistory {
   id: string;
@@ -18,9 +21,10 @@ export interface ScanHistory {
 }
 
 interface StudentViewProps {
-  markAttendance: (name: string, studentId: string, email: string) => Promise<{ success: boolean, message: string }>;
+  markAttendance: (name: string, studentId: string, email: string, week?: string) => Promise<{ success: boolean, message: string }>;
   token: string;
   courseName?: string;
+  week?: string;
   geoConstraints?: { lat: number; lng: number; radius: number };
   bypassRestrictions?: boolean;
   isOfflineScan?: boolean;
@@ -49,6 +53,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   markAttendance, 
   token: initialToken, 
   courseName: initialCourseName, 
+  week: initialWeek,
   geoConstraints, 
   bypassRestrictions = false, 
   isOfflineScan = false,
@@ -64,8 +69,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [studentQrData, setStudentQrData] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [isQrLoading, setIsQrLoading] = useState(false);
+  const [qrRefreshSeconds, setQrRefreshSeconds] = useState(QR_REFRESH_INTERVAL);
   const [token, setToken] = useState(initialToken);
   const [courseName, setCourseName] = useState(initialCourseName);
+  const [scannedWeek, setScannedWeek] = useState(initialWeek);
   const [history, setHistory] = useState<ScanHistory[]>(() => {
     const saved = localStorage.getItem(STUDENT_HISTORY_KEY);
     return saved ? JSON.parse(saved) : [];
@@ -139,12 +146,47 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   useEffect(() => {
     if (status === 'show-student-qr' && canvasRef.current && studentQrData) {
-        QRCode.toCanvas(canvasRef.current, studentQrData, { width: 320, margin: 2 }, (err) => {
+        QRCode.toCanvas(canvasRef.current, studentQrData, { width: 220, margin: 2 }, (err) => {
             if (err) console.error(err);
             setIsQrLoading(false);
         });
     }
   }, [status, studentQrData]);
+
+  useEffect(() => {
+    if (status !== 'show-student-qr') return;
+
+    const resetTimer = setTimeout(() => {
+      setQrRefreshSeconds(QR_REFRESH_INTERVAL);
+    }, 0);
+
+    const interval = setInterval(() => {
+      setQrRefreshSeconds((prev) => {
+        if (prev <= 1) {
+          setStudentQrData((currentData) => {
+            try {
+              const parsed = JSON.parse(currentData);
+              return JSON.stringify({ ...parsed, timestamp: Date.now() });
+            } catch {
+              return JSON.stringify({
+                name,
+                studentId,
+                email: `${studentId}@student.edu.my`,
+                timestamp: Date.now(),
+              });
+            }
+          });
+          return QR_REFRESH_INTERVAL;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => {
+      clearTimeout(resetTimer);
+      clearInterval(interval);
+    };
+  }, [status, name, studentId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -168,7 +210,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
     }
 
     setStatus('submitting');
-    const result = await markAttendance(name, studentId, `${studentId}@student.edu.my`);
+    const result = await markAttendance(name, studentId, `${studentId}@student.edu.my`, scannedWeek);
     if (result.success) {
       setStatus('success');
       addHistory({ courseName: courseName || 'General Session', timestamp: Date.now(), type: 'online' });
@@ -204,9 +246,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
           const url = new URL(data);
           const t = url.searchParams.get('t');
           const c = url.searchParams.get('c');
+          const w = url.searchParams.get('w');
           if (t) {
               setToken(t);
               if (c) setCourseName(c);
+              if (w) setScannedWeek(w);
               setStatus('validating');
           } else {
               setStatus('error');
@@ -367,13 +411,61 @@ export const StudentView: React.FC<StudentViewProps> = ({
   }
 
   if (status === 'show-student-qr') {
+    const radius = 22;
+    const circumference = 2 * Math.PI * radius;
+    const strokeDashoffset = circumference * (1 - qrRefreshSeconds / QR_REFRESH_INTERVAL);
+
     return (
         <div className="text-center py-6">
             <h2 className="text-xl font-bold text-gray-900 mb-2">Check-in Token</h2>
             <p className="text-xs text-gray-400 font-bold uppercase tracking-widest mb-6">Show this to your lecturer</p>
-            <div className="bg-white p-4 rounded-3xl border-4 border-gray-100 inline-block mb-8 relative min-h-[320px] min-w-[320px] flex items-center justify-center">
-                {isQrLoading && <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10 rounded-xl"><div className="animate-spin h-8 w-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>}
-                <canvas ref={canvasRef} className="rounded-xl" />
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-4 mb-8">
+                <div className="bg-white p-3 rounded-3xl border-4 border-gray-100 relative min-h-[244px] min-w-[244px] flex items-center justify-center shadow-sm">
+                    {isQrLoading && <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10 rounded-xl"><div className="animate-spin h-8 w-8 border-4 border-indigo-600 border-t-transparent rounded-full"></div></div>}
+                    <canvas ref={canvasRef} className="rounded-xl" />
+                </div>
+                <div
+                  className="bg-indigo-50/80 border border-indigo-100 rounded-2xl px-4 py-3 flex sm:flex-col items-center justify-center gap-3 sm:gap-2 min-w-[100px] shadow-sm"
+                  aria-live="polite"
+                  title={`QR code refreshes in ${qrRefreshSeconds} seconds`}
+                >
+                  <div className="relative w-14 h-14 flex items-center justify-center">
+                    <svg className="w-14 h-14 -rotate-90" viewBox="0 0 56 56">
+                      <circle
+                        cx="28"
+                        cy="28"
+                        r={radius}
+                        fill="none"
+                        stroke="#e0e7ff"
+                        strokeWidth="4.5"
+                      />
+                      <circle
+                        cx="28"
+                        cy="28"
+                        r={radius}
+                        fill="none"
+                        stroke="#4f46e5"
+                        strokeWidth="4.5"
+                        strokeLinecap="round"
+                        strokeDasharray={circumference}
+                        strokeDashoffset={strokeDashoffset}
+                        className="transition-all duration-1000 ease-linear"
+                      />
+                    </svg>
+                    <span className="absolute text-sm font-black text-indigo-700 tabular-nums">
+                      {qrRefreshSeconds}s
+                    </span>
+                  </div>
+                  <div className="text-left sm:text-center">
+                    <div className="flex items-center justify-start sm:justify-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                      <span className="text-[10px] font-bold text-indigo-900 uppercase tracking-wider">Refresh</span>
+                    </div>
+                    <p className="text-[9px] font-bold text-indigo-400 uppercase tracking-tight mt-0.5">
+                      Every {QR_REFRESH_INTERVAL}s
+                    </p>
+                  </div>
+                </div>
             </div>
             <div className="space-y-3">
                 <p className="text-sm font-bold text-gray-900 leading-none">{name}</p>

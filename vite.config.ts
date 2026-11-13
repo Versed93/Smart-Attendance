@@ -8,10 +8,10 @@ export default defineConfig({
   base: '/',
   server: {
     host: '0.0.0.0', // Listen on all network interfaces
-    port: 5173,      // Ensure consistent port
+    port: 3000,      // Ensure consistent port
   },
   preview: {
     host: '0.0.0.0',
-    port: 5173,
+    port: 3000,
   }
 })

@@ -15,6 +15,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
 }) => {
   const [isSignUp, setIsSignUp] = useState(false);
   const [username, setUsername] = useState('');
+  const [showUsername, setShowUsername] = useState(true);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
@@ -80,16 +81,26 @@ export const LoginView: React.FC<LoginViewProps> = ({
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="login-username" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5 ml-1">User Name</label>
-            <input 
-              id="login-username"
-              type="text" 
-              value={username} 
-              onChange={(e) => setUsername(e.target.value)} 
-              className="block w-full border-2 border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-brand-primary transition-colors text-gray-900 font-bold placeholder-gray-300 text-sm"
-              placeholder="Your Name"
-              autoFocus
-              required
-            />
+            <div className="relative">
+              <input 
+                id="login-username"
+                type={showUsername ? "text" : "password"} 
+                value={username} 
+                onChange={(e) => setUsername(e.target.value)} 
+                className="block w-full border-2 border-gray-200 rounded-xl px-4 py-3 pr-12 outline-none focus:border-brand-primary transition-colors text-gray-900 font-bold placeholder-gray-300 text-sm"
+                placeholder="Your Name"
+                autoFocus
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowUsername(!showUsername)}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none p-1"
+                title={showUsername ? "Hide User Name" : "Show User Name"}
+              >
+                {showUsername ? <EyeSlashIcon className="w-5 h-5" /> : <EyeIcon className="w-5 h-5" />}
+              </button>
+            </div>
           </div>
 
           <div>

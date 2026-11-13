@@ -38,11 +38,16 @@ interface TeacherViewProps {
   knownStudents: PreRegisteredStudent[];
   onSendTestRecord: (courseName: string) => Promise<{ success: boolean; message: string }>;
   onCheckPendingRecords: () => Promise<{ success: boolean; message: string; count: number }>;
+  onClearPendingQueue: () => Promise<{ success: boolean; message: string }>;
   onForceSync: () => Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number; }>;
   onUpdateKnownStudents: (students: PreRegisteredStudent[]) => void;
   onCourseChange: (courseName: string) => void;
+  selectedWeek?: string;
+  onWeekChange?: (week: string) => void;
   currentAdminName?: string;
 }
+
+const WEEKS = Array.from({ length: 14 }, (_, i) => `W${i + 1}`);
 
 export const TeacherView: React.FC<TeacherViewProps> = ({ 
   attendanceList, 
@@ -58,9 +63,12 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   knownStudents,
   onSendTestRecord,
   onCheckPendingRecords,
+  onClearPendingQueue,
   onForceSync,
   onUpdateKnownStudents,
   onCourseChange,
+  selectedWeek = 'W7',
+  onWeekChange,
   currentAdminName = 'admin',
 }) => {
   const [baseUrl] = useState<string>(() => window.location.origin + window.location.pathname);
@@ -98,6 +106,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [studentListFilter, setStudentListFilter] = useState('');
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [selectedStudentListIds, setSelectedStudentListIds] = useState<Set<string>>(new Set());
+  const [showWeekPromptModal, setShowWeekPromptModal] = useState(true);
+  const [pendingDeleteAction, setPendingDeleteAction] = useState<
+    | { type: 'single'; id: string; name: string }
+    | { type: 'bulk'; count: number }
+    | { type: 'clear-list' }
+    | { type: 'clear-history' }
+    | null
+  >(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -128,13 +144,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   
   useEffect(() => {
     const updateQR = () => {
-        let params = `t=${Date.now()}`;
+        let params = `t=${Date.now()}&w=${encodeURIComponent(selectedWeek)}`;
         if (courseName) params += `&c=${encodeURIComponent(courseName)}`;
         if (isOfflineMode) params += `&offline=true`;
         if (isGeoEnabled && teacherLocation) params += `&lat=${teacherLocation.lat.toFixed(6)}&lng=${teacherLocation.lng.toFixed(6)}&rad=150`;
         
         // Only show loading if configuration changes (not just timestamp)
-        const configString = `${courseName}-${isOfflineMode}-${isGeoEnabled}-${teacherLocation?.lat}-${teacherLocation?.lng}`;
+        const configString = `${courseName}-${selectedWeek}-${isOfflineMode}-${isGeoEnabled}-${teacherLocation?.lat}-${teacherLocation?.lng}`;
         if (configString !== lastConfigRef.current) {
             setIsQrLoading(true);
             lastConfigRef.current = configString;
@@ -145,7 +161,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     updateQR();
     const interval = setInterval(updateQR, 1000);
     return () => clearInterval(interval);
-  }, [baseUrl, courseName, isGeoEnabled, teacherLocation, isOfflineMode]);
+  }, [baseUrl, courseName, selectedWeek, isGeoEnabled, teacherLocation, isOfflineMode]);
 
   useEffect(() => {
     if (attendanceList.length > 0) {
@@ -193,15 +209,19 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   }, [attendanceList, listSearchTerm]);
 
   const handleExportCSV = () => {
-      if (filteredList.length === 0) return alert("No data to export.");
-      const headers = ["Student ID", "Name", "[Course Name Here]", "[Date Here 1]", "[Status Here]", "Reason", "Time"];
+      if (filteredList.length === 0) {
+        showToast('error', 'No data to export.');
+        return;
+      }
+      const headers = ["Student ID", "Name", "[Course Name Here]", "Week", "[Date Here 1]", "[Status Here]", "Reason", "Time"];
       const rows = [headers.join(',')];
       filteredList.forEach(s => {
           const ts = new Date(s.timestamp);
           const name = `"${s.name.replace(/"/g, '""')}"`;
           const reason = `"${(s.absenceReason || '').replace(/"/g, '""')}"`;
           const course = `"${(courseName || 'General Session').replace(/"/g, '""')}"`;
-          rows.push([s.studentId, name, course, ts.toLocaleDateString(), s.status, reason, ts.toLocaleTimeString()].join(','));
+          const weekVal = s.week || selectedWeek;
+          rows.push([s.studentId, name, course, weekVal, ts.toLocaleDateString(), s.status, reason, ts.toLocaleTimeString()].join(','));
       });
       const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);
@@ -233,43 +253,62 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     link.click();
   };
 
+  const showToast = (type: 'success' | 'error' | 'duplicate', message: string) => {
+    setScanResult({ type, message });
+    setTimeout(() => setScanResult(null), 2500);
+  };
+
   const handleClearKnownStudents = () => {
-    if (window.confirm("Are you sure you want to clear the entire student list? This cannot be undone.")) {
-      onUpdateKnownStudents([]);
-      alert("Student list cleared.");
-    }
+    setPendingDeleteAction({ type: 'clear-list' });
   };
 
   const handleClearTeacherHistory = () => {
-    if (window.confirm("Are you sure you want to clear your local scan history?")) {
-      setTeacherHistory([]);
-      localStorage.removeItem('attendance-teacher-history-v1');
-      alert("Scan history cleared.");
-    }
+    setPendingDeleteAction({ type: 'clear-history' });
   };
 
   const handleDeleteHistoryItem = (timestamp: number, studentId: string) => {
-      if (window.confirm("Delete this history record?")) {
-          const newHistory = teacherHistory.filter(h => !(h.timestamp === timestamp && h.studentId === studentId));
-          setTeacherHistory(newHistory);
-          localStorage.setItem('attendance-teacher-history-v1', JSON.stringify(newHistory));
-      }
+      const newHistory = teacherHistory.filter(h => !(h.timestamp === timestamp && h.studentId === studentId));
+      setTeacherHistory(newHistory);
+      localStorage.setItem('attendance-teacher-history-v1', JSON.stringify(newHistory));
+      showToast('success', 'History record deleted.');
   };
 
-  const handleDeleteKnownStudent = (id: string) => {
-      if (window.confirm(`Remove student ${id} from the known list?`)) {
-          const newList = knownStudents.filter(s => s.id !== id);
-          onUpdateKnownStudents(newList);
-      }
+  const handleDeleteKnownStudent = (id: string, name: string) => {
+      setPendingDeleteAction({ type: 'single', id, name });
   };
 
   const handleBulkDeleteKnownStudents = () => {
       if (selectedStudentListIds.size === 0) return;
-      if (window.confirm(`Are you sure you want to delete ${selectedStudentListIds.size} selected students?`)) {
+      setPendingDeleteAction({ type: 'bulk', count: selectedStudentListIds.size });
+  };
+
+  const executePendingDeleteAction = () => {
+      if (!pendingDeleteAction) return;
+      if (pendingDeleteAction.type === 'single') {
+          const newList = knownStudents.filter(s => s.id !== pendingDeleteAction.id);
+          onUpdateKnownStudents(newList);
+          setSelectedStudentListIds(prev => {
+              const next = new Set(prev);
+              next.delete(pendingDeleteAction.id);
+              return next;
+          });
+          showToast('success', `Removed ${pendingDeleteAction.id} from Student List.`);
+      } else if (pendingDeleteAction.type === 'bulk') {
+          const count = selectedStudentListIds.size;
           const newList = knownStudents.filter(s => !selectedStudentListIds.has(s.id));
           onUpdateKnownStudents(newList);
           setSelectedStudentListIds(new Set());
+          showToast('success', `Removed ${count} student(s) from Student List.`);
+      } else if (pendingDeleteAction.type === 'clear-list') {
+          onUpdateKnownStudents([]);
+          setSelectedStudentListIds(new Set());
+          showToast('success', 'Student list cleared.');
+      } else if (pendingDeleteAction.type === 'clear-history') {
+          setTeacherHistory([]);
+          localStorage.removeItem('attendance-teacher-history-v1');
+          showToast('success', 'Scan history cleared.');
       }
+      setPendingDeleteAction(null);
   };
 
   const toggleGroup = (groupKey: string) => {
@@ -391,10 +430,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       }
 
       if (newStudents.length > 0) {
-        onUpdateKnownStudents(newStudents);
-        alert(`Successfully imported ${newStudents.length} students.`);
+        const mergedMap = new Map<string, PreRegisteredStudent>();
+        knownStudents.forEach(s => mergedMap.set(s.id, s));
+        newStudents.forEach(s => mergedMap.set(s.id, s));
+        onUpdateKnownStudents(Array.from(mergedMap.values()));
+        showToast('success', `Successfully imported ${newStudents.length} students.`);
       } else {
-        alert("No valid student records found. Please ensure the CSV has columns for Student ID and Name.");
+        showToast('error', 'No valid student records found. Check CSV columns.');
       }
       
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -557,7 +599,17 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center">
             <div className="w-full text-center mb-6">
-                <span className="text-[10px] font-bold text-brand-primary uppercase tracking-widest bg-brand-primary/5 px-4 py-1.5 rounded-full border border-brand-primary/10">Active Session Config</span>
+                <div className="flex items-center justify-center gap-2 flex-wrap">
+                    <span className="text-[10px] font-bold text-brand-primary uppercase tracking-widest bg-brand-primary/5 px-4 py-1.5 rounded-full border border-brand-primary/10">Active Session Config</span>
+                    <button
+                        type="button"
+                        onClick={() => setShowWeekPromptModal(true)}
+                        className="text-[10px] font-bold text-indigo-700 uppercase tracking-widest bg-indigo-50 hover:bg-indigo-100 px-4 py-1.5 rounded-full border border-indigo-200 transition-colors"
+                        title="Change Google Sheet target week"
+                    >
+                        Sheet Column: {selectedWeek} (Change)
+                    </button>
+                </div>
                 <input 
                     type="text"
                     value={courseName}
@@ -768,7 +820,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             onScriptUrlChange={onScriptUrlChange} 
                             onSendTestRecord={() => onSendTestRecord(courseName)} 
                             onCheckPendingRecords={onCheckPendingRecords} 
+                            onClearPendingQueue={onClearPendingQueue}
                             onForceSync={onForceSync} 
+                            selectedWeek={selectedWeek}
                         />
                     </div>
                     <div className="space-y-4">
@@ -973,7 +1027,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                                     <p className="font-mono text-[10px] text-gray-400 group-hover:text-brand-primary transition-colors">{s.id}</p>
                                                 </div>
                                             </div>
-                                            <button onClick={() => handleDeleteKnownStudent(s.id)} className="text-gray-300 hover:text-red-500 p-2 transition-colors"><TrashIcon className="w-4 h-4" /></button>
+                                            <button type="button" onClick={() => handleDeleteKnownStudent(s.id, s.name)} className="text-gray-400 hover:text-red-500 p-2 transition-colors" title={`Delete ${s.name}`} aria-label={`Delete ${s.name}`}><TrashIcon className="w-4 h-4" /></button>
                                         </div>
                                     ))}
                                 </div>
@@ -1054,6 +1108,73 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             <div className={`px-8 py-4 rounded-3xl shadow-2xl flex items-center gap-4 border-4 ${scanResult.type === 'success' ? 'bg-green-600 border-green-500 text-white' : 'bg-red-600 border-red-500 text-white'}`}>
                 <div className="bg-white/20 p-2 rounded-xl">{scanResult.type === 'success' ? <CheckIcon className="w-6 h-6" /> : <XMarkIcon className="w-6 h-6" />}</div>
                 <p className="font-bold text-sm uppercase tracking-tight">{scanResult.message}</p>
+            </div>
+        </div>
+      )}
+
+      {pendingDeleteAction && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[210] flex items-center justify-center p-4">
+            <div className="bg-white w-full max-w-sm rounded-[2.5rem] shadow-2xl p-8 text-center border-t-8 border-red-500 animate-in zoom-in duration-200">
+                <div className="w-16 h-16 bg-red-50 text-red-500 rounded-3xl flex items-center justify-center mx-auto mb-5"><TrashIcon className="w-9 h-9" /></div>
+                <h2 className="text-xl font-bold text-gray-900 mb-2">
+                  {pendingDeleteAction.type === 'single' ? 'Delete Student?' :
+                   pendingDeleteAction.type === 'bulk' ? `Delete ${pendingDeleteAction.count} Students?` :
+                   pendingDeleteAction.type === 'clear-list' ? 'Clear Student List?' :
+                   'Clear Scan History?'}
+                </h2>
+                <p className="text-xs font-bold text-gray-400 mb-7 leading-relaxed">
+                  {pendingDeleteAction.type === 'single' ? `Remove ${pendingDeleteAction.name} (${pendingDeleteAction.id}) from the Student List?` :
+                   pendingDeleteAction.type === 'bulk' ? `Remove ${pendingDeleteAction.count} selected student(s) from the Student List?` :
+                   pendingDeleteAction.type === 'clear-list' ? 'This will remove all students from the known Student List. This cannot be undone.' :
+                   'This will remove all saved local scan history records.'}
+                </p>
+                <div className="flex gap-3">
+                    <button type="button" onClick={() => setPendingDeleteAction(null)} className="flex-1 px-4 py-3.5 font-bold text-gray-500 bg-gray-100 rounded-2xl hover:bg-gray-200 transition-all uppercase text-[10px] tracking-widest">Cancel</button>
+                    <button type="button" onClick={executePendingDeleteAction} className="flex-1 px-4 py-3.5 font-bold text-white bg-red-600 rounded-2xl hover:bg-red-700 transition-all uppercase text-[10px] tracking-widest shadow-lg shadow-red-100">Delete</button>
+                </div>
+            </div>
+        </div>
+      )}
+
+      {showWeekPromptModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[220] flex items-center justify-center p-4 animate-in fade-in duration-200">
+            <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-8 text-center border-t-8 border-indigo-600 animate-in zoom-in duration-200">
+                <span className="inline-block text-[10px] font-bold text-indigo-600 uppercase tracking-widest bg-indigo-50 px-3 py-1 rounded-full border border-indigo-100 mb-3">
+                  Google Sheet Placement (D3:Q3)
+                </span>
+                <h2 className="text-2xl font-bold text-gray-900 mb-2 tracking-tight">Select Attendance Week</h2>
+                <p className="text-xs font-bold text-gray-400 mb-6 leading-relaxed">
+                  Choose which week column on the Google Sheet should record today&apos;s attendance check-ins.
+                </p>
+                <div className="grid grid-cols-7 gap-2 mb-6">
+                  {WEEKS.map((w) => {
+                    const isSelected = selectedWeek === w;
+                    return (
+                      <button
+                        key={w}
+                        type="button"
+                        onClick={() => onWeekChange?.(w)}
+                        className={`py-2.5 rounded-xl text-xs font-bold transition-all active:scale-95 ${
+                          isSelected
+                            ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200 ring-2 ring-indigo-300'
+                            : 'bg-gray-50 text-gray-600 hover:bg-gray-100 border border-gray-200'
+                        }`}
+                      >
+                        {w}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mb-6 text-[11px] font-bold text-gray-500">
+                  Recording to Google Sheet Column <span className="text-indigo-600 font-black">{selectedWeek}</span> (Name: B4+, ID: C4+)
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowWeekPromptModal(false)}
+                  className="w-full bg-indigo-600 text-white font-bold py-4 rounded-2xl hover:bg-indigo-700 transition-all active:scale-95 shadow-lg shadow-indigo-100 uppercase tracking-widest text-xs"
+                >
+                  Confirm & Record on {selectedWeek}
+                </button>
             </div>
         </div>
       )}

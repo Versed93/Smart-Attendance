@@ -72,6 +72,7 @@ export const QrScanner: React.FC<QrScannerProps> = ({ onScan, onClose }) => {
       }
     };
 
+    const videoEl = videoRef.current;
     startCamera();
 
     return () => {
@@ -80,8 +81,8 @@ export const QrScanner: React.FC<QrScannerProps> = ({ onScan, onClose }) => {
       if (stream) {
         stream.getTracks().forEach(track => track.stop());
       }
-      if (videoRef.current) {
-        videoRef.current.srcObject = null;
+      if (videoEl) {
+        videoEl.srcObject = null;
       }
     };
   }, [onScan]);

@@ -7,4 +7,5 @@ export interface Student {
   status: string;
   courseName: string;
   absenceReason?: string;
+  week?: string;
 }
