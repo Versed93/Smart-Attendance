@@ -36,11 +36,21 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
     var doc = SpreadsheetApp.getActiveSpreadsheet();
     var sheets = doc.getSheets();
     var sheetCourses = [];
+    var primaryCourse = "";
     for (var i = 0; i < sheets.length; i++) {
-      var b1Val = String(sheets[i].getRange("B1").getValue() || "").trim();
+      var b1Range = sheets[i].getRange("B1");
+      var b1Val = String(b1Range.getDisplayValue() || "").trim();
+      if (!b1Val && b1Range.isPartOfMerge()) {
+        var merged = b1Range.getMergedRanges();
+        if (merged && merged.length > 0) {
+          b1Val = String(merged[0].getCell(1, 1).getDisplayValue() || "").trim();
+        }
+      }
       sheetCourses.push({ sheetName: sheets[i].getName(), courseName: b1Val });
+      if (!primaryCourse && b1Val) {
+        primaryCourse = b1Val;
+      }
     }
-    var primaryCourse = sheetCourses.length > 0 ? sheetCourses[0].courseName : "";
     return ContentService.createTextOutput(JSON.stringify({
       success: true,
       courseName: primaryCourse,
@@ -254,6 +264,11 @@ function doPost(e) {
                       placeholder="https://script.google.com/macros/s/.../exec" 
                       className="w-full border-2 border-gray-50 bg-gray-50/50 rounded-2xl p-4 text-xs font-bold outline-none focus:bg-white focus:border-brand-primary transition-all" 
                   />
+                  {scriptUrl.trim().endsWith('/dev') && (
+                    <p className="mt-2 text-[10px] font-bold text-red-600 uppercase">
+                      Warning: URL ends in /dev. Use the deployed /exec URL with "Who has access: Anyone" so it works after deployment.
+                    </p>
+                  )}
               </div>
           </div>
       )}

@@ -93,7 +93,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [manualStatus, setManualStatus] = useState('P');
   const [manualReason, setManualReason] = useState('');
   const [manualError, setManualError] = useState('');
-  const [manualIsNew, setManualIsNew] = useState(false);
+  const [manualSuggestionField, setManualSuggestionField] = useState<'id' | 'name' | null>(null);
+  const manualAutoFillRef = useRef<{ id?: string; name?: string }>({});
   const [isQrLoading, setIsQrLoading] = useState(true);
   const qrErrorCorrection = (localStorage.getItem('qr-error-correction') as 'L' | 'M' | 'Q' | 'H') || 'M';
   const qrMargin = parseInt(localStorage.getItem('qr-margin') || '2', 10);
@@ -109,6 +110,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [showWeekPromptModal, setShowWeekPromptModal] = useState(true);
   const [isLoadingSheetCourse, setIsLoadingSheetCourse] = useState(false);
   const [sheetCourseOptions, setSheetCourseOptions] = useState<{ sheetName: string; courseName: string }[]>([]);
+  const [sheetReadError, setSheetReadError] = useState<string | null>(null);
   const [pendingDeleteAction, setPendingDeleteAction] = useState<
     | { type: 'single'; id: string; name: string }
     | { type: 'bulk'; count: number }
@@ -134,31 +136,58 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const fetchCourseFromB1 = async (manual = false) => {
       const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
       if (!scriptUrl || integrationType !== 'google_sheets') {
-          if (manual) showToast('error', 'Configure Google Sheets Apps Script URL in Settings first.');
+          const msg = 'Configure Google Sheets Apps Script URL in Settings first.';
+          setSheetReadError(msg);
+          if (manual) showToast('error', msg);
+          return;
+      }
+      if (scriptUrl.trim().endsWith('/dev')) {
+          const msg = 'Apps Script URL uses /dev. Deploy as Web App and paste the /exec URL in Settings.';
+          setSheetReadError(msg);
+          if (manual) showToast('error', msg);
           return;
       }
       setIsLoadingSheetCourse(true);
+      setSheetReadError(null);
       try {
-          const url = `${scriptUrl}${scriptUrl.includes('?') ? '&' : '?'}action=getCourse&t=${Date.now()}`;
-          const res = await fetch(url);
-          if (!res.ok) throw new Error('Failed');
-          const data = await res.json();
+          const url = `${scriptUrl.trim()}${scriptUrl.includes('?') ? '&' : '?'}action=getCourse&t=${Date.now()}`;
+          const res = await fetch(url, { method: 'GET', redirect: 'follow' });
+          const rawText = await res.text();
+          if (res.status === 404 || rawText.trim().startsWith('<')) {
+              const msg = res.status === 404
+                  ? 'Apps Script URL returned 404. Paste your deployed /exec URL in Settings.'
+                  : 'Apps Script returned HTML instead of JSON. Set Web App access to "Anyone" and use the /exec URL.';
+              setSheetReadError(msg);
+              if (manual) showToast('error', msg);
+              return;
+          }
+          const data = JSON.parse(rawText);
           if (data && data.success) {
               if (Array.isArray(data.sheets)) {
                   setSheetCourseOptions(data.sheets.filter((s: { courseName?: string }) => s.courseName));
               }
-              if (data.courseName) {
-                  setCourseName(String(data.courseName).trim());
-                  if (manual) showToast('success', `Loaded course from B1: ${String(data.courseName).trim()}`);
-              } else if (manual) {
-                  showToast('error', 'Row B1 on the Google Sheet is empty.');
+              const firstNonEmpty = Array.isArray(data.sheets)
+                  ? data.sheets.find((s: { courseName?: string }) => s.courseName && String(s.courseName).trim())?.courseName
+                  : '';
+              const resolvedCourse = String(data.courseName || firstNonEmpty || '').trim();
+              if (resolvedCourse) {
+                  setCourseName(resolvedCourse);
+                  setSheetReadError(null);
+                  if (manual) showToast('success', `Loaded course from B1: ${resolvedCourse}`);
+              } else {
+                  setSheetReadError('Row B1 on the Google Sheet is empty.');
+                  if (manual) showToast('error', 'Row B1 on the Google Sheet is empty.');
               }
-          } else if (manual) {
-              showToast('error', 'Could not read Row B1. Re-deploy updated Apps Script.');
+          } else {
+              const msg = data?.error ? `Sheet error: ${data.error}` : 'Could not read Row B1. Re-deploy updated Apps Script.';
+              setSheetReadError(msg);
+              if (manual) showToast('error', msg);
           }
       } catch {
+          const msg = 'Could not read Row B1. Check Apps Script URL in Settings (must be /exec with access = Anyone).';
+          setSheetReadError(msg);
           if (manual) {
-              showToast('error', 'Could not read Row B1. Ensure updated Apps Script is deployed.');
+              showToast('error', msg);
           }
       } finally {
           setIsLoadingSheetCourse(false);
@@ -168,22 +197,42 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   useEffect(() => {
       const integrationType = localStorage.getItem('attendance-integration-type') || 'google_sheets';
       if (!scriptUrl || integrationType !== 'google_sheets') return;
+      if (scriptUrl.trim().endsWith('/dev')) {
+          setSheetReadError('Apps Script URL uses /dev. Paste the deployed /exec URL in Settings.');
+          return;
+      }
       let cancelled = false;
       const loadInitialCourse = async () => {
           try {
-              const url = `${scriptUrl}${scriptUrl.includes('?') ? '&' : '?'}action=getCourse&t=${Date.now()}`;
-              const res = await fetch(url);
-              if (!res.ok) return;
-              const data = await res.json();
+              const url = `${scriptUrl.trim()}${scriptUrl.includes('?') ? '&' : '?'}action=getCourse&t=${Date.now()}`;
+              const res = await fetch(url, { method: 'GET', redirect: 'follow' });
+              const rawText = await res.text();
+              if (cancelled) return;
+              if (res.status === 404 || rawText.trim().startsWith('<')) {
+                  setSheetReadError(
+                      res.status === 404
+                          ? 'Apps Script URL returned 404. Paste your deployed /exec URL in Settings.'
+                          : 'Apps Script returned HTML instead of JSON. Ensure Web App access is "Anyone" and use /exec URL.'
+                  );
+                  return;
+              }
+              const data = JSON.parse(rawText);
               if (cancelled || !data?.success) return;
+              setSheetReadError(null);
               if (Array.isArray(data.sheets)) {
                   setSheetCourseOptions(data.sheets.filter((s: { courseName?: string }) => s.courseName));
               }
-              if (data.courseName) {
-                  setCourseName(prev => prev || String(data.courseName).trim());
+              const firstNonEmpty = Array.isArray(data.sheets)
+                  ? data.sheets.find((s: { courseName?: string }) => s.courseName && String(s.courseName).trim())?.courseName
+                  : '';
+              const resolvedCourse = String(data.courseName || firstNonEmpty || '').trim();
+              if (resolvedCourse) {
+                  setCourseName(prev => (!prev || prev === 'General Session') ? resolvedCourse : prev);
               }
           } catch {
-              // Silent fallback when script doesn't yet expose doGet
+              if (!cancelled) {
+                  setSheetReadError('Could not connect to Apps Script URL. Check Settings → Apps Script URL.');
+              }
           }
       };
       void loadInitialCourse();
@@ -512,12 +561,86 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       else setManualError(result.message);
   };
 
+  const normalizeStudentId = (val: string) => val.trim().replace(/\s+/g, '').toUpperCase();
+  const normalizeStudentName = (val: string) => val.trim().replace(/\s+/g, ' ').toUpperCase();
+
+  const manualIdSuggestions = useMemo(() => {
+    const query = normalizeStudentId(manualId);
+    if (manualSuggestionField !== 'id' || query.length < 2) return [];
+    return knownStudents
+      .filter((s) => {
+        const sId = normalizeStudentId(s.id);
+        return sId.includes(query) && sId !== query;
+      })
+      .slice(0, 5);
+  }, [knownStudents, manualId, manualSuggestionField]);
+
+  const manualNameSuggestions = useMemo(() => {
+    const query = normalizeStudentName(manualName);
+    if (manualSuggestionField !== 'name' || query.length < 2) return [];
+    const tokens = query.split(' ').filter(Boolean);
+    return knownStudents
+      .filter((s) => {
+        const sName = normalizeStudentName(s.name);
+        if (sName === query && normalizeStudentId(s.id) === normalizeStudentId(manualId)) return false;
+        return tokens.every((t) => sName.includes(t));
+      })
+      .slice(0, 5);
+  }, [knownStudents, manualName, manualId, manualSuggestionField]);
+
+  const selectManualSuggestedStudent = (student: PreRegisteredStudent) => {
+    const cleanId = student.id.toUpperCase();
+    const cleanName = student.name.toUpperCase();
+    setManualId(cleanId);
+    setManualName(cleanName);
+    manualAutoFillRef.current = { id: cleanId, name: cleanName };
+    setManualError('');
+    setManualSuggestionField(null);
+  };
+
   const handleManualIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value.toUpperCase().trim();
+    const val = normalizeStudentId(e.target.value);
     setManualId(val);
-    const matched = knownStudents.find(s => s.id === val);
-    if (matched) { setManualName(matched.name); setManualIsNew(false); setManualError(''); } 
-    else { if (!manualIsNew) setManualName(''); setManualIsNew(true); }
+    setManualSuggestionField(val.length >= 2 ? 'id' : null);
+
+    const matched = knownStudents.find((s) => normalizeStudentId(s.id) === val);
+    if (matched) {
+      const cleanId = matched.id.toUpperCase();
+      const cleanName = matched.name.toUpperCase();
+      setManualId(cleanId);
+      setManualName(cleanName);
+      manualAutoFillRef.current = { id: cleanId, name: cleanName };
+      setManualError('');
+      setManualSuggestionField(null);
+    } else {
+      if (manualAutoFillRef.current.name && normalizeStudentName(manualName) === normalizeStudentName(manualAutoFillRef.current.name)) {
+        setManualName('');
+      }
+      manualAutoFillRef.current = {};
+    }
+  };
+
+  const handleManualNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawUpper = e.target.value.toUpperCase();
+    setManualName(rawUpper);
+    const norm = normalizeStudentName(rawUpper);
+    setManualSuggestionField(norm.length >= 2 ? 'name' : null);
+
+    const exactMatches = norm ? knownStudents.filter((s) => normalizeStudentName(s.name) === norm) : [];
+    if (exactMatches.length === 1) {
+      const matched = exactMatches[0];
+      const cleanId = matched.id.toUpperCase();
+      const cleanName = matched.name.toUpperCase();
+      setManualId(cleanId);
+      manualAutoFillRef.current = { id: cleanId, name: cleanName };
+      setManualError('');
+      setManualSuggestionField(null);
+    } else {
+      if (manualAutoFillRef.current.id && normalizeStudentId(manualId) === normalizeStudentId(manualAutoFillRef.current.id)) {
+        setManualId('');
+      }
+      manualAutoFillRef.current = {};
+    }
   };
 
   const handleGeoToggle = (enabled: boolean) => {
@@ -1136,8 +1259,68 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             <button onClick={() => setShowManualModal(false)} className="absolute top-6 right-6 text-gray-300 hover:text-gray-900 transition-all active:scale-90"><XCircleIcon className="w-8 h-8"/></button>
             <h2 className="text-2xl font-bold text-gray-900 mb-6 tracking-tight">Manual Entry</h2>
             <div className="space-y-5">
-               <div><label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Student ID</label><input type="text" value={manualId} onChange={handleManualIdChange} placeholder="Enter Student ID" className="w-full border-2 border-gray-50 bg-gray-50/50 rounded-2xl p-4 font-mono font-bold uppercase focus:bg-white focus:border-brand-primary transition-all outline-none placeholder:font-sans placeholder:text-gray-400 placeholder:text-xs placeholder:normal-case" /></div>
-               <div><label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Full Name</label><input type="text" value={manualName} onChange={(e) => setManualName(e.target.value.toUpperCase())} placeholder="Enter Full Name" className="w-full border-2 border-gray-50 bg-gray-50/50 rounded-2xl p-4 font-bold uppercase focus:bg-white focus:border-brand-primary transition-all outline-none placeholder:text-gray-400 placeholder:text-xs placeholder:normal-case" /></div>
+               <div className="relative">
+                 <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Student ID</label>
+                 <input
+                   type="text"
+                   value={manualId}
+                   onChange={handleManualIdChange}
+                   onFocus={() => { if (normalizeStudentId(manualId).length >= 2) setManualSuggestionField('id'); }}
+                   onBlur={() => setTimeout(() => setManualSuggestionField((prev) => (prev === 'id' ? null : prev)), 150)}
+                   placeholder="Enter Student ID (auto-fills name)"
+                   className="w-full border-2 border-gray-50 bg-gray-50/50 rounded-2xl p-4 font-mono font-bold uppercase focus:bg-white focus:border-brand-primary transition-all outline-none placeholder:font-sans placeholder:text-gray-400 placeholder:text-xs placeholder:normal-case"
+                 />
+                 {manualIdSuggestions.length > 0 && (
+                   <ul className="absolute z-30 left-0 right-0 mt-1 bg-white border-2 border-indigo-100 rounded-2xl shadow-xl max-h-40 overflow-y-auto divide-y divide-gray-50">
+                     {manualIdSuggestions.map((s) => (
+                       <li key={s.id}>
+                         <button
+                           type="button"
+                           onMouseDown={(e) => {
+                             e.preventDefault();
+                             selectManualSuggestedStudent(s);
+                           }}
+                           className="w-full text-left px-4 py-2 hover:bg-indigo-50 flex items-center justify-between gap-2"
+                         >
+                           <span className="text-xs font-bold text-gray-900 truncate">{s.name}</span>
+                           <span className="text-[11px] font-mono font-bold text-indigo-600 shrink-0">{s.id}</span>
+                         </button>
+                       </li>
+                     ))}
+                   </ul>
+                 )}
+               </div>
+               <div className="relative">
+                 <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Full Name</label>
+                 <input
+                   type="text"
+                   value={manualName}
+                   onChange={handleManualNameChange}
+                   onFocus={() => { if (normalizeStudentName(manualName).length >= 2) setManualSuggestionField('name'); }}
+                   onBlur={() => setTimeout(() => setManualSuggestionField((prev) => (prev === 'name' ? null : prev)), 150)}
+                   placeholder="Enter Full Name (auto-fills Student ID)"
+                   className="w-full border-2 border-gray-50 bg-gray-50/50 rounded-2xl p-4 font-bold uppercase focus:bg-white focus:border-brand-primary transition-all outline-none placeholder:text-gray-400 placeholder:text-xs placeholder:normal-case"
+                 />
+                 {manualNameSuggestions.length > 0 && (
+                   <ul className="absolute z-30 left-0 right-0 mt-1 bg-white border-2 border-indigo-100 rounded-2xl shadow-xl max-h-40 overflow-y-auto divide-y divide-gray-50">
+                     {manualNameSuggestions.map((s) => (
+                       <li key={s.id}>
+                         <button
+                           type="button"
+                           onMouseDown={(e) => {
+                             e.preventDefault();
+                             selectManualSuggestedStudent(s);
+                           }}
+                           className="w-full text-left px-4 py-2 hover:bg-indigo-50 flex items-center justify-between gap-2"
+                         >
+                           <span className="text-xs font-bold text-gray-900 truncate">{s.name}</span>
+                           <span className="text-[11px] font-mono font-bold text-indigo-600 shrink-0">{s.id}</span>
+                         </button>
+                       </li>
+                     ))}
+                   </ul>
+                 )}
+               </div>
                <div>
                   <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Status</label>
                   <select value={manualStatus} onChange={(e) => setManualStatus(e.target.value)} className="w-full border-2 border-gray-50 bg-gray-50/50 rounded-2xl p-4 font-bold focus:bg-white focus:border-brand-primary transition-all outline-none appearance-none">
@@ -1253,11 +1436,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     );
                   })}
                 </div>
-                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mb-6 text-[11px] font-bold text-gray-500 space-y-1">
+                <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mb-6 text-[11px] font-bold text-gray-500 space-y-2">
                   <div>
                     Recording to Google Sheet Column <span className="text-indigo-600 font-black">{selectedWeek}</span> (Name: B4+, ID: C4+)
                   </div>
-                  <div className="flex items-center justify-center gap-2">
+                  <div className="flex items-center justify-center gap-2 flex-wrap">
                     <span>Course (B1): <strong className="text-gray-800">{courseName || 'Not set'}</strong></span>
                     <button
                       type="button"
@@ -1268,6 +1451,18 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                       {isLoadingSheetCourse ? '...' : 'Read B1'}
                     </button>
                   </div>
+                  {sheetReadError && (
+                    <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-2.5 text-[10px] leading-relaxed">
+                      <p>{sheetReadError}</p>
+                      <button
+                        type="button"
+                        onClick={() => { setShowWeekPromptModal(false); setShowSettingsModal(true); }}
+                        className="mt-1.5 inline-block text-indigo-700 bg-white border border-indigo-200 hover:bg-indigo-50 px-2.5 py-1 rounded-lg uppercase tracking-wider"
+                      >
+                        Open Cloud Settings
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <button
                   type="button"

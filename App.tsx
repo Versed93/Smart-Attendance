@@ -94,9 +94,90 @@ const App: React.FC = () => {
       return PRE_REGISTERED_STUDENTS;
   });
 
+const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwbjXTrbFPRqVA0I-RGc1rV7K7eZ_CkgQujSBVtOtvjDCW1GJYAkxiVlXJzAB_-R_CaLA/exec';
+
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || 'https://script.google.com/macros/s/AKfycbwbjXTrbFPRqVA0I-RGc1rV7K7eZ_CkgQujSBVtOtvjDCW1GJYAkxiVlXJzAB_-R_CaLA/exec';
+    return localStorage.getItem(SCRIPT_URL_KEY) || DEFAULT_SCRIPT_URL;
   });
+
+  useEffect(() => {
+    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
+    let cancelled = false;
+    const syncScriptUrlConfig = async () => {
+      try {
+        const baseDbUrl = FIREBASE_CONFIG.DATABASE_URL.replace(/\/+$/, '');
+        const configEndpoint = `${baseDbUrl}/app_config/script_url.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`;
+        const res = await fetch(configEndpoint);
+        if (!res.ok || cancelled) return;
+        const remoteUrl = await res.json();
+        const localSaved = localStorage.getItem(SCRIPT_URL_KEY);
+
+        if (typeof remoteUrl === 'string' && remoteUrl.trim().startsWith('https://script.google.com/')) {
+          const cleanRemote = remoteUrl.trim();
+          if (!localSaved || localSaved === DEFAULT_SCRIPT_URL) {
+            setScriptUrl(cleanRemote);
+            localStorage.setItem(SCRIPT_URL_KEY, cleanRemote);
+          }
+        } else if (localSaved && localSaved !== DEFAULT_SCRIPT_URL && localSaved.startsWith('https://script.google.com/')) {
+          await fetch(configEndpoint, {
+            method: 'PUT',
+            body: JSON.stringify(localSaved),
+          });
+        }
+      } catch {
+        // Ignore network errors during initial config sync
+      }
+    };
+    void syncScriptUrlConfig();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleScriptUrlChange = useCallback((nextUrl: string) => {
+    const trimmed = nextUrl.trim();
+    setScriptUrl(trimmed);
+    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET && trimmed.startsWith('https://script.google.com/')) {
+      const baseDbUrl = FIREBASE_CONFIG.DATABASE_URL.replace(/\/+$/, '');
+      void fetch(`${baseDbUrl}/app_config/script_url.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
+        method: 'PUT',
+        body: JSON.stringify(trimmed),
+      }).catch(() => { /* ignore */ });
+    }
+  }, []);
+
+  const syncKnownStudentsToCloud = useCallback((students: PreRegisteredStudent[]) => {
+    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
+    const baseDbUrl = FIREBASE_CONFIG.DATABASE_URL.replace(/\/+$/, '');
+    void fetch(`${baseDbUrl}/app_config/known_students.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
+      method: 'PUT',
+      body: JSON.stringify(students),
+    }).catch(() => { /* ignore */ });
+  }, []);
+
+  const handleUpdateKnownStudents = useCallback((students: PreRegisteredStudent[]) => {
+    setKnownStudents(students);
+    syncKnownStudentsToCloud(students);
+  }, [syncKnownStudentsToCloud]);
+
+  useEffect(() => {
+    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
+    if (isAuthenticated && localStorage.getItem(KNOWN_STUDENTS_KEY) !== null) return;
+    let cancelled = false;
+    const loadCloudKnownStudents = async () => {
+      try {
+        const baseDbUrl = FIREBASE_CONFIG.DATABASE_URL.replace(/\/+$/, '');
+        const res = await fetch(`${baseDbUrl}/app_config/known_students.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`);
+        if (!res.ok || cancelled) return;
+        const remote = await res.json();
+        if (!cancelled && Array.isArray(remote)) {
+          setKnownStudents(remote);
+        }
+      } catch {
+        // Ignore network errors
+      }
+    };
+    void loadCloudKnownStudents();
+    return () => { cancelled = true; };
+  }, [isAuthenticated]);
 
   useEffect(() => {
       localStorage.setItem('attendance-active-week', selectedWeek);
@@ -318,8 +399,19 @@ const App: React.FC = () => {
               await syncToAirtable({ [studentId]: studentData });
           }
           setKnownStudents(prev => {
-             if (!prev.some(s => s.id === studentId)) return [...prev, { id: studentId, name }];
-             return prev;
+             const cleanId = studentId.trim().toUpperCase();
+             const cleanName = name.trim().toUpperCase();
+             const existingIdx = prev.findIndex(s => s.id.trim().toUpperCase() === cleanId);
+             let next: PreRegisteredStudent[];
+             if (existingIdx === -1) {
+               next = [...prev, { id: cleanId, name: cleanName }];
+             } else if (prev[existingIdx].name.trim().toUpperCase() !== cleanName) {
+               next = prev.map((s, idx) => (idx === existingIdx ? { ...s, name: cleanName } : s));
+             } else {
+               return prev;
+             }
+             syncKnownStudentsToCloud(next);
+             return next;
           });
           localStorage.setItem(LAST_SCAN_DATE_KEY, new Date().toISOString().slice(0, 10));
           return { success: true, message: "Record submitted successfully." };
@@ -480,7 +572,7 @@ const App: React.FC = () => {
                      onBulkStatusUpdate={onBulkStatusUpdate}
                      onNewSession={handleNewSession}
                      scriptUrl={scriptUrl}
-                     onScriptUrlChange={setScriptUrl}
+                     onScriptUrlChange={handleScriptUrlChange}
                      onOpenKiosk={handleEnterKiosk}
                      onManualAdd={(name, id, email, status, courseName, reason) => addStudent(name, id, email, status, courseName, undefined, reason)}
                      addStudent={addStudent}
@@ -490,7 +582,7 @@ const App: React.FC = () => {
                      onCheckPendingRecords={handleCheckPendingRecords}
                      onClearPendingQueue={handleClearPendingQueue}
                      onForceSync={handleForceSync}
-                     onUpdateKnownStudents={(students) => setKnownStudents(students)}
+                     onUpdateKnownStudents={handleUpdateKnownStudents}
                      onCourseChange={setActiveCourse}
                      selectedWeek={selectedWeek}
                      onWeekChange={setSelectedWeek}

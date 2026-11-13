@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import QRCode from 'qrcode';
 import { CheckCircleIcon } from './icons/CheckCircleIcon';
 import { LockClosedIcon } from './icons/LockClosedIcon';
@@ -62,7 +62,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
 }) => {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
-  const [isNewStudent, setIsNewStudent] = useState(false);
   const [status, setStatus] = useState<Status>('validating');
   const [message, setMessage] = useState('');
   const [formError, setFormError] = useState('');
@@ -79,6 +78,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
   });
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const autoFillRef = useRef<{ id?: string; name?: string }>({});
+  const [activeSuggestionField, setActiveSuggestionField] = useState<'id' | 'name' | null>(null);
+
+  const normalizeId = (val: string) => val.trim().replace(/\s+/g, '').toUpperCase();
+  const normalizeName = (val: string) => val.trim().replace(/\s+/g, ' ').toUpperCase();
   
   useEffect(() => {
     const savedProfile = localStorage.getItem(STUDENT_PROFILE_KEY);
@@ -87,8 +91,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
             const { name: sName, studentId: sId } = JSON.parse(savedProfile);
             // Use timeout to avoid synchronous setState in effect
             setTimeout(() => {
-                if (sName) setName(sName);
-                if (sId) setStudentId(sId);
+                if (sName) setName(String(sName).toUpperCase());
+                if (sId) setStudentId(String(sId).toUpperCase());
             }, 0);
         } catch { /* ignore */ }
     }
@@ -226,17 +230,103 @@ export const StudentView: React.FC<StudentViewProps> = ({
     }
   };
 
+  const matchedStudent = useMemo(() => {
+    const cleanId = normalizeId(studentId);
+    const cleanName = normalizeName(name);
+    if (!cleanId || !cleanName) return undefined;
+    return knownStudents.find(
+      (s) => normalizeId(s.id) === cleanId && normalizeName(s.name) === cleanName
+    );
+  }, [knownStudents, studentId, name]);
+
+  const idSuggestions = useMemo(() => {
+    const query = normalizeId(studentId);
+    if (activeSuggestionField !== 'id' || query.length < 2) return [];
+    return knownStudents
+      .filter((s) => {
+        const sId = normalizeId(s.id);
+        return sId.includes(query) && sId !== query;
+      })
+      .sort((a, b) => {
+        const aStarts = normalizeId(a.id).startsWith(query) ? 0 : 1;
+        const bStarts = normalizeId(b.id).startsWith(query) ? 0 : 1;
+        return aStarts - bStarts || a.id.localeCompare(b.id);
+      })
+      .slice(0, 6);
+  }, [knownStudents, studentId, activeSuggestionField]);
+
+  const nameSuggestions = useMemo(() => {
+    const query = normalizeName(name);
+    if (activeSuggestionField !== 'name' || query.length < 2) return [];
+    const tokens = query.split(' ').filter(Boolean);
+    return knownStudents
+      .filter((s) => {
+        const sName = normalizeName(s.name);
+        if (sName === query && normalizeId(s.id) === normalizeId(studentId)) return false;
+        return tokens.every((t) => sName.includes(t));
+      })
+      .sort((a, b) => {
+        const aStarts = normalizeName(a.name).startsWith(query) ? 0 : 1;
+        const bStarts = normalizeName(b.name).startsWith(query) ? 0 : 1;
+        return aStarts - bStarts || a.name.localeCompare(b.name);
+      })
+      .slice(0, 6);
+  }, [knownStudents, name, studentId, activeSuggestionField]);
+
+  const selectSuggestedStudent = (student: PreRegisteredStudent) => {
+    const cleanId = student.id.toUpperCase();
+    const cleanName = student.name.toUpperCase();
+    setStudentId(cleanId);
+    setName(cleanName);
+    autoFillRef.current = { id: cleanId, name: cleanName };
+    setFormError('');
+    setActiveSuggestionField(null);
+  };
+
   const handleIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const val = e.target.value.toUpperCase().trim();
+    const val = normalizeId(e.target.value);
     setStudentId(val);
-    const matched = knownStudents.find(s => s.id === val);
-    if (matched) { 
-        setName(matched.name); 
-        setIsNewStudent(false); 
-        setFormError(''); 
-    } else { 
-        if (!isNewStudent) setName(''); 
-        setIsNewStudent(true); 
+    setActiveSuggestionField(val.length >= 2 ? 'id' : null);
+
+    const matched = knownStudents.find((s) => normalizeId(s.id) === val);
+    if (matched) {
+      const cleanId = matched.id.toUpperCase();
+      const cleanName = matched.name.toUpperCase();
+      setStudentId(cleanId);
+      setName(cleanName);
+      autoFillRef.current = { id: cleanId, name: cleanName };
+      setFormError('');
+      setActiveSuggestionField(null);
+    } else {
+      if (autoFillRef.current.name && normalizeName(name) === normalizeName(autoFillRef.current.name)) {
+        setName('');
+      }
+      autoFillRef.current = {};
+    }
+  };
+
+  const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const rawUpper = e.target.value.toUpperCase();
+    setName(rawUpper);
+    const norm = normalizeName(rawUpper);
+    setActiveSuggestionField(norm.length >= 2 ? 'name' : null);
+
+    const exactMatches = norm
+      ? knownStudents.filter((s) => normalizeName(s.name) === norm)
+      : [];
+    if (exactMatches.length === 1) {
+      const matched = exactMatches[0];
+      const cleanId = matched.id.toUpperCase();
+      const cleanName = matched.name.toUpperCase();
+      setStudentId(cleanId);
+      autoFillRef.current = { id: cleanId, name: cleanName };
+      setFormError('');
+      setActiveSuggestionField(null);
+    } else {
+      if (autoFillRef.current.id && normalizeId(studentId) === normalizeId(autoFillRef.current.id)) {
+        setStudentId('');
+      }
+      autoFillRef.current = {};
     }
   };
 
@@ -513,30 +603,79 @@ export const StudentView: React.FC<StudentViewProps> = ({
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-5">
-        <div>
-          <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Student ID</label>
+        <div className="relative">
+          <div className="flex items-center justify-between mb-1 ml-1">
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest">Student ID</label>
+            {matchedStudent && (
+              <span className="text-[10px] font-bold text-emerald-600 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                ✓ Profile Auto-Filled
+              </span>
+            )}
+          </div>
           <input 
             type="text" 
             value={studentId} 
             onChange={handleIdChange}
+            onFocus={() => { if (normalizeId(studentId).length >= 2 && !matchedStudent) setActiveSuggestionField('id'); }}
+            onBlur={() => setTimeout(() => setActiveSuggestionField((prev) => (prev === 'id' ? null : prev)), 150)}
             className="w-full border-2 border-gray-100 bg-gray-50 rounded-2xl p-4 font-mono font-bold uppercase focus:bg-white focus:border-indigo-600 transition-all outline-none placeholder:font-sans placeholder:text-gray-400 placeholder:text-xs placeholder:normal-case" 
-            placeholder="Enter Student ID"
+            placeholder="Enter Student ID (auto-fills name)"
             required
             autoComplete="off"
           />
+          {idSuggestions.length > 0 && (
+            <ul className="absolute z-20 left-0 right-0 mt-1.5 bg-white border-2 border-indigo-100 rounded-2xl shadow-xl max-h-48 overflow-y-auto divide-y divide-gray-50">
+              {idSuggestions.map((s) => (
+                <li key={s.id}>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      selectSuggestedStudent(s);
+                    }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-indigo-50 transition-colors flex items-center justify-between gap-2"
+                  >
+                    <span className="text-xs font-bold text-gray-900 truncate">{s.name}</span>
+                    <span className="text-[11px] font-mono font-bold text-indigo-600 shrink-0">{s.id}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
-        <div>
+        <div className="relative">
           <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Full Name</label>
           <input 
             type="text" 
             value={name} 
-            onChange={(e) => setName(e.target.value.toUpperCase())}
+            onChange={handleNameChange}
+            onFocus={() => { if (normalizeName(name).length >= 2 && !matchedStudent) setActiveSuggestionField('name'); }}
+            onBlur={() => setTimeout(() => setActiveSuggestionField((prev) => (prev === 'name' ? null : prev)), 150)}
             className="w-full border-2 border-gray-100 bg-gray-50 rounded-2xl p-4 font-bold uppercase focus:bg-white focus:border-indigo-600 transition-all outline-none placeholder:text-gray-400 placeholder:text-xs placeholder:normal-case" 
-            placeholder="Enter Full Name"
+            placeholder="Enter Full Name (auto-fills Student ID)"
             required
             autoComplete="name"
           />
+          {nameSuggestions.length > 0 && (
+            <ul className="absolute z-20 left-0 right-0 mt-1.5 bg-white border-2 border-indigo-100 rounded-2xl shadow-xl max-h-48 overflow-y-auto divide-y divide-gray-50">
+              {nameSuggestions.map((s) => (
+                <li key={s.id}>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      selectSuggestedStudent(s);
+                    }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-indigo-50 transition-colors flex items-center justify-between gap-2"
+                  >
+                    <span className="text-xs font-bold text-gray-900 truncate">{s.name}</span>
+                    <span className="text-[11px] font-mono font-bold text-indigo-600 shrink-0">{s.id}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
         </div>
 
         <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100 flex items-start gap-3">
