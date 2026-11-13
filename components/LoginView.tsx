@@ -198,7 +198,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
             disabled={isSubmitting}
             className="w-full bg-brand-primary text-white font-bold py-3.5 rounded-xl shadow-lg shadow-brand-primary/20 hover:bg-brand-secondary active:scale-[0.98] transition-all focus:ring-4 focus:ring-brand-primary/50 focus:outline-none text-sm uppercase tracking-wider disabled:opacity-60"
           >
-            {isSubmitting ? 'Creating Account...' : isSignUp ? 'Sign Up & Send Activation' : 'Login to Dashboard'}
+            {isSubmitting ? 'Creating Account...' : isSignUp ? 'SIGN UP' : 'Login to Dashboard'}
           </button>
         </form>
       </div>
