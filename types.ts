@@ -20,7 +20,9 @@ export interface CourseProfile {
   sheetName?: string;
   selectedWeek: string;
   students: CourseStudentRef[];
+  ownerId?: string;
   createdBy?: string;
+  sharedWith?: string[];
   createdAt: number;
   updatedAt: number;
 }
@@ -31,7 +33,7 @@ export interface AppUser {
   id: string;
   username: string;
   email: string;
-  password: string;
+  password?: string;
   role: 'admin' | 'lecturer';
   status: 'active' | 'pending';
   activationToken?: string;
@@ -68,3 +70,13 @@ export interface AdminNotification {
   message: string;
   reason?: string;
 }
+
+export type EmailProviderType = 'resend' | 'smtp' | 'apps_script' | 'none';
+
+export interface EmailDeliveryStatus {
+  provider: EmailProviderType;
+  label: string;
+  configured: boolean;
+  fromAddress?: string;
+}
+

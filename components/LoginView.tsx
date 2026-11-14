@@ -5,7 +5,7 @@ import { EyeIcon } from './icons/EyeIcon';
 import { EyeSlashIcon } from './icons/EyeSlashIcon';
 
 interface LoginViewProps {
-  onLogin: (usernameOrEmail: string, password: string) => { success: boolean; message?: string };
+  onLogin: (usernameOrEmail: string, password: string) => Promise<{ success: boolean; message?: string }> | { success: boolean; message?: string };
   onSignUp?: (username: string, email: string, password: string) => Promise<{ success: boolean; message: string }>;
   onRequestAccountDeletion?: (params: { usernameOrEmail: string; reason: string }) => Promise<{ success: boolean; message: string }>;
   activationNotice?: { type: 'success' | 'error'; message: string } | null;
@@ -105,10 +105,15 @@ export const LoginView: React.FC<LoginViewProps> = ({
         }
       }
     } else {
-      const result = onLogin(username.trim(), password);
-      if (!result.success) {
-        setError(result.message || 'Invalid User Name or Password.');
-        setPassword('');
+      setIsSubmitting(true);
+      try {
+        const result = await onLogin(username.trim(), password);
+        if (!result.success) {
+          setError(result.message || 'Invalid User Name or Password.');
+          setPassword('');
+        }
+      } finally {
+        setIsSubmitting(false);
       }
     }
   };
@@ -304,7 +309,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
             {isSubmitting
               ? isDeleteRequest
                 ? 'Sending Request...'
-                : 'Creating Account...'
+                : isSignUp
+                  ? 'Creating Account...'
+                  : 'Signing In...'
               : isDeleteRequest
                 ? 'Request Account Deletion'
                 : isSignUp

@@ -2,24 +2,24 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { TeacherView } from './components/TeacherView';
 import { StudentView } from './components/StudentView';
 import { LoginView } from './components/LoginView';
-import type { Student, AppUser, AdminSessionActivity, AdminNotification, CourseProfile } from './types';
+import type { Student, AppUser, AdminSessionActivity, AdminNotification, CourseProfile, EmailDeliveryStatus } from './types';
 import { PRE_REGISTERED_STUDENTS, PreRegisteredStudent } from './studentList';
-import { FIREBASE_CONFIG } from './firebaseConfig';
 
 type View = 'teacher' | 'student';
 type IntegrationType = 'google_sheets' | 'airtable' | 'firebase';
 
 const SCRIPT_URL_KEY = 'attendance-script-url-v58';
 const AUTH_KEY = 'attendance-lecturer-auth-v1';
+const AUTH_TOKEN_KEY = 'attendance-auth-token-v1';
 const VIEW_PREF_KEY = 'attendance-view-pref-v1';
 const KIOSK_PREF_KEY = 'attendance-kiosk-pref-v1';
 const KNOWN_STUDENTS_KEY = 'attendance-known-students-v2';
 const LEGACY_KNOWN_STUDENTS_KEY = 'attendance-known-students-v1';
-const LECTURER_PASSWORD = 'adminscm';
+const LEGACY_REGISTERED_USERS_KEY = 'attendance-registered-users-v1';
 const LAST_SCAN_DATE_KEY = 'attendance-last-scan-date-v1';
-const REGISTERED_USERS_KEY = 'attendance-registered-users-v1';
 const CURRENT_ADMIN_NAME_KEY = 'attendance-current-admin-name-v1';
 const CURRENT_USER_ID_KEY = 'attendance-current-user-id-v1';
+const CURRENT_USER_ROLE_KEY = 'attendance-current-user-role-v1';
 const ACTIVE_SESSION_ID_KEY = 'attendance-active-session-id-v1';
 const TEACHER_HISTORY_KEY = 'attendance-teacher-history-v1';
 const ADMIN_EMAIL_KEY = 'attendance-admin-email-v1';
@@ -28,63 +28,28 @@ const COURSES_KEY = 'attendance-courses-v1';
 
 const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwbjXTrbFPRqVA0I-RGc1rV7K7eZ_CkgQujSBVtOtvjDCW1GJYAkxiVlXJzAB_-R_CaLA/exec';
 
-const SESSION_ID = new Date().toISOString().slice(0, 10);
-
-const DEFAULT_ADMIN_USER: AppUser = {
-  id: 'admin',
-  username: 'admin',
-  email: '',
-  password: LECTURER_PASSWORD,
-  role: 'admin',
-  status: 'active',
-  createdAt: 0,
-};
-
-const getBaseDbUrl = () => FIREBASE_CONFIG.DATABASE_URL.replace(/\/+$/, '');
-
-const buildDbUrl = (path: string) => {
-  const cleanPath = path.replace(/^\/+/, '');
-  return `${getBaseDbUrl()}/${cleanPath}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}&_ts=${Date.now()}`;
-};
-
-const getDeviceLabel = (): string => {
-  const ua = navigator.userAgent || '';
-  let os = 'Desktop';
-  if (/iPhone/i.test(ua)) os = 'iPhone';
-  else if (/iPad/i.test(ua)) os = 'iPad';
-  else if (/Android/i.test(ua)) os = 'Android';
-  else if (/Windows/i.test(ua)) os = 'Windows';
-  else if (/Mac OS X|Macintosh/i.test(ua)) os = 'macOS';
-  else if (/Linux/i.test(ua)) os = 'Linux';
-
-  let browser = 'Browser';
-  if (/Edg\//i.test(ua)) browser = 'Edge';
-  else if (/OPR\/|Opera/i.test(ua)) browser = 'Opera';
-  else if (/Chrome\//i.test(ua) && !/Edg\//i.test(ua)) browser = 'Chrome';
-  else if (/Firefox\//i.test(ua)) browser = 'Firefox';
-  else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
-
-  return `${browser} • ${os}`;
-};
-
-const generateToken = () => {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID().replace(/-/g, '');
-  }
-  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
-};
-
-const toFirebaseKey = (raw: string) => raw.replace(/[^a-zA-Z0-9_-]/g, '_');
-
 const getPublicAppUrl = () => {
   const publicOrigin = window.location.origin.replace(/^https:\/\/ais-dev-/i, 'https://ais-pre-');
   return `${publicOrigin}${window.location.pathname}`;
+};
+
+const normalizeCourses = (list: unknown): CourseProfile[] => {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((c): c is CourseProfile => Boolean(c && typeof c === 'object' && (c as CourseProfile).id && (c as CourseProfile).courseName))
+    .map(c => ({
+      ...c,
+      selectedWeek: c.selectedWeek || 'W1',
+      students: Array.isArray(c.students) ? c.students : [],
+      sharedWith: Array.isArray(c.sharedWith) ? c.sharedWith : [],
+    }));
 };
 
 const App: React.FC = () => {
   const [initialUrlParams] = useState(() => new URLSearchParams(window.location.search));
   const token = initialUrlParams.get('t');
   const courseNameParam = initialUrlParams.get('c');
+  const courseIdParam = initialUrlParams.get('cid');
   const weekParam = initialUrlParams.get('w');
   const isOfflineScan = initialUrlParams.get('offline') === 'true';
   const activateTokenParam = initialUrlParams.get('activate');
@@ -95,11 +60,17 @@ const App: React.FC = () => {
   const lngParam = initialUrlParams.get('lng');
   const radParam = initialUrlParams.get('rad');
 
+  const [authToken, setAuthToken] = useState<string>(() => {
+    localStorage.removeItem(LEGACY_REGISTERED_USERS_KEY);
+    return localStorage.getItem(AUTH_TOKEN_KEY) || '';
+  });
+
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     if ((activateTokenParam && activateUserParam) || testEmailParam === 'verified') return false;
     const auth = localStorage.getItem(AUTH_KEY) === 'true';
+    const savedToken = localStorage.getItem(AUTH_TOKEN_KEY);
     const kiosk = localStorage.getItem(KIOSK_PREF_KEY) === 'true';
-    return auth && !kiosk;
+    return auth && Boolean(savedToken) && !kiosk;
   });
 
   const savedView = localStorage.getItem(VIEW_PREF_KEY) as View;
@@ -122,32 +93,9 @@ const App: React.FC = () => {
     return (localStorage.getItem('attendance-integration-type') as IntegrationType) || 'google_sheets';
   });
   const [adminEmail, setAdminEmail] = useState<string>(() => localStorage.getItem(ADMIN_EMAIL_KEY) || '');
+  const [emailDelivery, setEmailDelivery] = useState<EmailDeliveryStatus | undefined>(undefined);
 
-  const [registeredUsers, setRegisteredUsers] = useState<AppUser[]>(() => {
-    const saved = localStorage.getItem(REGISTERED_USERS_KEY);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.map((u: Partial<AppUser> & { username?: string; password?: string }) => ({
-            id: u.id || toFirebaseKey((u.username || 'user').toLowerCase()),
-            username: u.username || 'user',
-            email: u.email || '',
-            password: u.password || '',
-            role: u.username?.toLowerCase() === 'admin' ? 'admin' : (u.role || 'lecturer'),
-            status: u.status || 'active',
-            activationToken: u.activationToken,
-            createdAt: u.createdAt || Date.now(),
-            activatedAt: u.activatedAt,
-            lastLoginAt: u.lastLoginAt,
-          }));
-        }
-      } catch { /* ignore */ }
-    }
-    return [DEFAULT_ADMIN_USER];
-  });
-
-  const [hasLoadedCloudUsers, setHasLoadedCloudUsers] = useState(false);
+  const [registeredUsers, setRegisteredUsers] = useState<AppUser[]>([]);
   const [adminSessions, setAdminSessions] = useState<AdminSessionActivity[]>([]);
   const [adminNotifications, setAdminNotifications] = useState<AdminNotification[]>([]);
   const [activationNotice, setActivationNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(() =>
@@ -164,6 +112,11 @@ const App: React.FC = () => {
   });
   const [currentUserId, setCurrentUserId] = useState(() => {
     return localStorage.getItem(CURRENT_USER_ID_KEY) || '';
+  });
+  const [currentUserRole, setCurrentUserRole] = useState<'admin' | 'lecturer'>(() => {
+    const savedRole = localStorage.getItem(CURRENT_USER_ROLE_KEY);
+    if (savedRole === 'admin' || savedRole === 'lecturer') return savedRole;
+    return localStorage.getItem(CURRENT_ADMIN_NAME_KEY)?.toLowerCase() === 'admin' ? 'admin' : 'lecturer';
   });
   const [activeSessionId, setActiveSessionId] = useState(() => {
     return localStorage.getItem(ACTIVE_SESSION_ID_KEY) || '';
@@ -201,16 +154,7 @@ const App: React.FC = () => {
     const saved = localStorage.getItem(COURSES_KEY);
     if (saved) {
       try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          return parsed
-            .filter((c): c is CourseProfile => Boolean(c && c.id && c.courseName))
-            .map(c => ({
-              ...c,
-              selectedWeek: c.selectedWeek || 'W1',
-              students: Array.isArray(c.students) ? c.students : [],
-            }));
-        }
+        return normalizeCourses(JSON.parse(saved));
       } catch { /* ignore */ }
     }
     const initialCourse = localStorage.getItem('attendance-course-name')?.trim();
@@ -221,6 +165,7 @@ const App: React.FC = () => {
         courseName: initialCourse,
         selectedWeek: localStorage.getItem(ACTIVE_WEEK_KEY) || 'W1',
         students: [],
+        sharedWith: [],
         createdAt: now,
         updatedAt: now,
       }];
@@ -237,6 +182,7 @@ const App: React.FC = () => {
   const hasInitializedUserPrefRef = useRef<boolean>(false);
   const coursesRef = useRef<CourseProfile[]>(courses);
   const activeCourseRef = useRef<string>(activeCourse);
+  const authTokenRef = useRef<string>(authToken);
 
   useEffect(() => {
     coursesRef.current = courses;
@@ -246,15 +192,19 @@ const App: React.FC = () => {
     activeCourseRef.current = activeCourse;
   }, [activeCourse]);
 
-  const sanitize = (str: string) => str.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
+  useEffect(() => {
+    authTokenRef.current = authToken;
+  }, [authToken]);
+
   const toCourseKey = useCallback((name: string) => {
     const clean = name.trim();
     return clean ? clean.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase() : 'GENERAL_SESSION';
   }, []);
 
   useEffect(() => {
-    localStorage.setItem(REGISTERED_USERS_KEY, JSON.stringify(registeredUsers));
-  }, [registeredUsers]);
+    if (authToken) localStorage.setItem(AUTH_TOKEN_KEY, authToken);
+    else localStorage.removeItem(AUTH_TOKEN_KEY);
+  }, [authToken]);
 
   useEffect(() => {
     if (currentAdminName) localStorage.setItem(CURRENT_ADMIN_NAME_KEY, currentAdminName);
@@ -265,6 +215,10 @@ const App: React.FC = () => {
     if (currentUserId) localStorage.setItem(CURRENT_USER_ID_KEY, currentUserId);
     else localStorage.removeItem(CURRENT_USER_ID_KEY);
   }, [currentUserId]);
+
+  useEffect(() => {
+    localStorage.setItem(CURRENT_USER_ROLE_KEY, currentUserRole);
+  }, [currentUserRole]);
 
   useEffect(() => {
     if (activeSessionId) localStorage.setItem(ACTIVE_SESSION_ID_KEY, activeSessionId);
@@ -313,215 +267,192 @@ const App: React.FC = () => {
     localStorage.setItem(KIOSK_PREF_KEY, isKioskMode.toString());
   }, [isKioskMode]);
 
-  const handleLogout = useCallback(() => {
-    const sid = localStorage.getItem(ACTIVE_SESSION_ID_KEY) || activeSessionId;
-    if (sid && FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      void fetch(buildDbUrl(`admin_logins/${sid}`), {
-        method: 'PATCH',
-        body: JSON.stringify({
-          status: 'signed_out',
-          lastActiveTime: Date.now(),
-          currentAction: 'Signed Out',
-        }),
-      }).catch(() => { /* ignore */ });
-    }
+  const clearClientSession = useCallback((noticeMessage?: string) => {
     setIsAuthenticated(false);
+    setAuthToken('');
     setCurrentAdminName('');
     setCurrentUserId('');
+    setCurrentUserRole('lecturer');
     setActiveSessionId('');
+    setRegisteredUsers([]);
+    setAdminSessions([]);
+    setAdminNotifications([]);
+    setAttendanceList([]);
     hasInitializedUserPrefRef.current = false;
     courseEditedAtRef.current = 0;
     localStorage.removeItem(AUTH_KEY);
+    localStorage.removeItem(AUTH_TOKEN_KEY);
     localStorage.removeItem(CURRENT_ADMIN_NAME_KEY);
     localStorage.removeItem(CURRENT_USER_ID_KEY);
+    localStorage.removeItem(CURRENT_USER_ROLE_KEY);
     localStorage.removeItem(ACTIVE_SESSION_ID_KEY);
     localStorage.removeItem(KIOSK_PREF_KEY);
+    if (noticeMessage) {
+      setActivationNotice({ type: 'error', message: noticeMessage });
+    }
     setView('student');
     setIsKioskMode(false);
-  }, [activeSessionId]);
+  }, []);
+
+  const handleLogout = useCallback(() => {
+    const activeToken = authTokenRef.current || localStorage.getItem(AUTH_TOKEN_KEY);
+    if (activeToken) {
+      void fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${activeToken}` },
+      }).catch(() => { /* ignore */ });
+    }
+    clearClientSession();
+  }, [clearClientSession]);
+
+  const apiFetch = useCallback(
+    async (url: string, options: RequestInit = {}): Promise<Response> => {
+      const activeToken = authTokenRef.current || localStorage.getItem(AUTH_TOKEN_KEY) || '';
+      const headers = new Headers(options.headers || {});
+      if (activeToken) {
+        headers.set('Authorization', `Bearer ${activeToken}`);
+      }
+      if (options.body && !headers.has('Content-Type')) {
+        headers.set('Content-Type', 'application/json');
+      }
+      const res = await fetch(url, { ...options, headers });
+      if (res.status === 401 && activeToken) {
+        let msg = 'Your session expired or was revoked by the Administrator.';
+        try {
+          const body = (await res.clone().json()) as { error?: string };
+          if (body?.error) msg = body.error;
+        } catch { /* ignore */ }
+        clearClientSession(msg);
+      }
+      return res;
+    },
+    [clearClientSession]
+  );
+
+  // Load public non-secret configuration on boot
+  useEffect(() => {
+    let cancelled = false;
+    const loadPublicCfg = async () => {
+      try {
+        const res = await fetch('/api/config/public', { cache: 'no-store' });
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        if (cancelled || !data) return;
+        if (typeof data.scriptUrl === 'string' && data.scriptUrl.startsWith('https://script.google.com/')) {
+          setScriptUrl(data.scriptUrl);
+        }
+        if (
+          data.integrationType === 'google_sheets' ||
+          data.integrationType === 'airtable' ||
+          data.integrationType === 'firebase'
+        ) {
+          setIntegrationType(data.integrationType);
+        }
+      } catch { /* ignore */ }
+    };
+    void loadPublicCfg();
+    return () => { cancelled = true; };
+  }, []);
 
   const syncAllCloudState = useCallback(async () => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
+    const activeToken = authTokenRef.current || localStorage.getItem(AUTH_TOKEN_KEY);
+    if (!isAuthenticated || !activeToken) return;
     try {
-      const uid = currentUserId || (currentAdminName ? toFirebaseKey(currentAdminName.toLowerCase()) : '');
-      const requests: Promise<Response>[] = [
-        fetch(buildDbUrl('app_config'), { cache: 'no-store' }),
-        fetch(buildDbUrl('app_users'), { cache: 'no-store' }),
-        fetch(buildDbUrl('admin_logins'), { cache: 'no-store' }),
-        fetch(buildDbUrl('admin_notifications'), { cache: 'no-store' }),
-        fetch(buildDbUrl('attendance_history'), { cache: 'no-store' }),
-        fetch(buildDbUrl('courses'), { cache: 'no-store' }),
-      ];
-      if (isAuthenticated && uid) {
-        requests.push(fetch(buildDbUrl(`user_preferences/${uid}`), { cache: 'no-store' }));
+      const res = await apiFetch('/api/dashboard/sync', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data?.success) return;
+
+      if (data.user) {
+        if (data.user.role === 'admin' || data.user.role === 'lecturer') {
+          setCurrentUserRole(data.user.role);
+        }
+        if (data.user.username) setCurrentAdminName(data.user.username);
+        if (data.user.id) setCurrentUserId(data.user.id);
       }
 
-      const [configRes, usersRes, sessionsRes, notifsRes, historyRes, coursesRes, userPrefRes] = await Promise.all(requests);
+      if (data.config) {
+        if (typeof data.config.scriptUrl === 'string' && data.config.scriptUrl.startsWith('https://script.google.com/')) {
+          setScriptUrl(data.config.scriptUrl);
+        }
+        if (
+          data.config.integrationType === 'google_sheets' ||
+          data.config.integrationType === 'airtable' ||
+          data.config.integrationType === 'firebase'
+        ) {
+          setIntegrationType(data.config.integrationType);
+        }
+        if (typeof data.config.adminEmail === 'string') {
+          setAdminEmail(data.config.adminEmail);
+        }
+        if (data.config.emailDelivery && typeof data.config.emailDelivery === 'object') {
+          setEmailDelivery(data.config.emailDelivery as EmailDeliveryStatus);
+        }
+      }
 
-      // 1. Sync app_config (script_url, integration_type, admin_email, fallback known_students_v2)
-      if (configRes.ok) {
-        const cfg = await configRes.json();
-        if (cfg && typeof cfg === 'object') {
-          if (typeof cfg.script_url === 'string' && cfg.script_url.trim().startsWith('https://script.google.com/')) {
-            const cleanRemote = cfg.script_url.trim();
-            const localSaved = localStorage.getItem(SCRIPT_URL_KEY);
-            if (!localSaved || localSaved === DEFAULT_SCRIPT_URL || cleanRemote !== localSaved) {
-              setScriptUrl(cleanRemote);
+      const loadedCourses = normalizeCourses(data.courses);
+      if (Date.now() - courseEditedAtRef.current > 4000) {
+        setCourses(loadedCourses);
+      }
+
+      if (data.userPref && typeof data.userPref === 'object' && Date.now() - courseEditedAtRef.current > 3000) {
+        const pref = data.userPref as { activeCourse?: string; selectedWeek?: string };
+        if (!hasInitializedUserPrefRef.current) {
+          hasInitializedUserPrefRef.current = true;
+          if (typeof pref.activeCourse === 'string' && pref.activeCourse.trim()) {
+            const matchedCourse = loadedCourses.find(
+              c => c.courseName.trim().toUpperCase() === pref.activeCourse!.trim().toUpperCase()
+            );
+            if (matchedCourse) {
+              setActiveCourse(matchedCourse.courseName);
+              setKnownStudents(matchedCourse.students || []);
+            } else if (loadedCourses.length > 0) {
+              setActiveCourse(loadedCourses[0].courseName);
+              setKnownStudents(loadedCourses[0].students || []);
+            } else {
+              setActiveCourse('');
             }
+          } else if (loadedCourses.length > 0) {
+            setActiveCourse(loadedCourses[0].courseName);
+            setKnownStudents(loadedCourses[0].students || []);
           } else {
-            const localSaved = localStorage.getItem(SCRIPT_URL_KEY);
-            if (localSaved && localSaved !== DEFAULT_SCRIPT_URL && localSaved.startsWith('https://script.google.com/')) {
-              void fetch(buildDbUrl('app_config/script_url'), {
-                method: 'PUT',
-                body: JSON.stringify(localSaved),
-              }).catch(() => { /* ignore */ });
-            }
+            setActiveCourse('');
           }
-
-          if (cfg.integration_type === 'google_sheets' || cfg.integration_type === 'airtable' || cfg.integration_type === 'firebase') {
-            setIntegrationType(cfg.integration_type);
-          }
-          if (typeof cfg.admin_email === 'string') {
-            setAdminEmail(cfg.admin_email);
-          }
-          if (!activeCourseRef.current && Array.isArray(cfg.known_students_v2) && cfg.known_students_v2.length > 0) {
-            setKnownStudents(cfg.known_students_v2);
+        }
+        if (typeof pref.selectedWeek === 'string' && /^W\d+$/i.test(pref.selectedWeek)) {
+          setSelectedWeek(pref.selectedWeek);
+        }
+      } else if (!hasInitializedUserPrefRef.current) {
+        hasInitializedUserPrefRef.current = true;
+        if (loadedCourses.length > 0) {
+          const currentMatches = loadedCourses.find(
+            c => c.courseName.trim().toUpperCase() === activeCourseRef.current.trim().toUpperCase()
+          );
+          if (currentMatches) {
+            setKnownStudents(currentMatches.students || []);
+          } else {
+            setActiveCourse(loadedCourses[0].courseName);
+            setKnownStudents(loadedCourses[0].students || []);
           }
         }
       }
 
-      // 1b. Sync courses list across devices/users
-      let loadedCourses: CourseProfile[] = [];
-      if (coursesRes && coursesRes.ok) {
-        const coursesObj = await coursesRes.json();
-        if (coursesObj && typeof coursesObj === 'object') {
-          loadedCourses = (Object.values(coursesObj) as CourseProfile[])
-            .filter(c => c && c.id && c.courseName)
-            .map(c => ({
-              ...c,
-              selectedWeek: c.selectedWeek || 'W1',
-              students: Array.isArray(c.students) ? c.students : [],
-            }))
-            .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-          if (Date.now() - courseEditedAtRef.current > 4000) {
-            setCourses(loadedCourses);
-          }
-        }
+      if (Array.isArray(data.history)) {
+        setTeacherHistory(data.history);
       }
-
-      // 1c. Sync per-user active course & week preference (only if user hasn't edited locally in last 3s)
-      if (userPrefRes && userPrefRes.ok && Date.now() - courseEditedAtRef.current > 3000) {
-        const pref = await userPrefRes.json();
-        if (pref && typeof pref === 'object') {
-          if (typeof pref.activeCourse === 'string' && pref.activeCourse.trim() && !hasInitializedUserPrefRef.current) {
-            hasInitializedUserPrefRef.current = true;
-            setActiveCourse(pref.activeCourse);
-            const matchedCourse = loadedCourses.find(c => c.courseName.toUpperCase() === pref.activeCourse.trim().toUpperCase());
-            if (matchedCourse && Array.isArray(matchedCourse.students)) {
-              setKnownStudents(matchedCourse.students);
-            }
-          }
-          if (typeof pref.selectedWeek === 'string' && /^W\d+$/i.test(pref.selectedWeek)) {
-            setSelectedWeek(pref.selectedWeek);
-          }
-        }
+      if (Array.isArray(data.users)) {
+        setRegisteredUsers(data.users);
       }
-
-      // 2. Sync app_users
-      if (usersRes.ok) {
-        const usersObj = await usersRes.json();
-        const remoteList: AppUser[] = usersObj && typeof usersObj === 'object'
-          ? (Object.values(usersObj) as AppUser[]).filter(u => u && u.id && u.username)
-          : [];
-
-        const hasAdmin = remoteList.some(u => u.username.toLowerCase() === 'admin' || u.id === 'admin');
-        if (!hasAdmin) {
-          await fetch(buildDbUrl(`app_users/${DEFAULT_ADMIN_USER.id}`), {
-            method: 'PUT',
-            body: JSON.stringify(DEFAULT_ADMIN_USER),
-          }).catch(() => { /* ignore */ });
-          remoteList.unshift(DEFAULT_ADMIN_USER);
-        }
-
-        // Seed any legacy local-only accounts once if cloud had none besides admin
-        if (remoteList.length <= 1) {
-          const localSaved = localStorage.getItem(REGISTERED_USERS_KEY);
-          if (localSaved) {
-            try {
-              const parsed = JSON.parse(localSaved) as Partial<AppUser>[];
-              for (const lu of parsed) {
-                if (lu.username && lu.username.toLowerCase() !== 'admin' && lu.password) {
-                  const migratedId = lu.id || toFirebaseKey(lu.username.toLowerCase());
-                  if (!remoteList.some(r => r.id === migratedId || r.username.toLowerCase() === lu.username?.toLowerCase())) {
-                    const newUser: AppUser = {
-                      id: migratedId,
-                      username: lu.username,
-                      email: lu.email || '',
-                      password: lu.password,
-                      role: 'lecturer',
-                      status: lu.status || 'active',
-                      createdAt: lu.createdAt || Date.now(),
-                    };
-                    remoteList.push(newUser);
-                    void fetch(buildDbUrl(`app_users/${migratedId}`), {
-                      method: 'PUT',
-                      body: JSON.stringify(newUser),
-                    }).catch(() => { /* ignore */ });
-                  }
-                }
-              }
-            } catch { /* ignore */ }
-          }
-        }
-
-        const sortedUsers = [...remoteList].sort((a, b) => {
-          if (a.role === 'admin') return -1;
-          if (b.role === 'admin') return 1;
-          return (b.createdAt || 0) - (a.createdAt || 0);
-        });
-        setRegisteredUsers(sortedUsers);
-        setHasLoadedCloudUsers(true);
+      if (Array.isArray(data.sessions)) {
+        setAdminSessions(data.sessions);
       }
-
-      // 3. Sync admin_logins (activity sessions)
-      if (sessionsRes.ok) {
-        const sessionsObj = await sessionsRes.json();
-        const sessionList: AdminSessionActivity[] = sessionsObj && typeof sessionsObj === 'object'
-          ? (Object.values(sessionsObj) as AdminSessionActivity[])
-              .filter(s => s && s.id && s.adminName)
-              .sort((a, b) => (b.lastActiveTime || b.loginTime || 0) - (a.lastActiveTime || a.loginTime || 0))
-          : [];
-        setAdminSessions(sessionList);
-      }
-
-      // 4. Sync admin_notifications
-      if (notifsRes.ok) {
-        const notifsObj = await notifsRes.json();
-        const notifList: AdminNotification[] = notifsObj && typeof notifsObj === 'object'
-          ? (Object.values(notifsObj) as AdminNotification[])
-              .filter(n => n && n.id)
-              .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
-          : [];
-        setAdminNotifications(notifList);
-      }
-
-      // 5. Sync attendance_history
-      if (historyRes.ok) {
-        const histData = await historyRes.json();
-        if (Array.isArray(histData)) {
-          setTeacherHistory(histData);
-        } else if (histData && typeof histData === 'object') {
-          const histArray = (Object.values(histData) as Student[])
-            .filter(h => h && h.studentId && h.timestamp)
-            .sort((a, b) => b.timestamp - a.timestamp)
-            .slice(0, 200);
-          setTeacherHistory(histArray);
-        }
+      if (Array.isArray(data.notifications)) {
+        setAdminNotifications(data.notifications);
       }
     } catch {
-      // Ignore transient network errors during background sync
+      // Ignore transient network errors
     }
-  }, [currentUserId, currentAdminName, isAuthenticated]);
+  }, [isAuthenticated, apiFetch]);
 
   // Handle email activation link (?activate=TOKEN&user=USER_ID) and test email verification (?test_email=verified)
   useEffect(() => {
@@ -536,54 +467,20 @@ const App: React.FC = () => {
 
     const processActivation = async () => {
       try {
-        if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) {
-          setActivationNotice({ type: 'error', message: 'Cloud database is not configured for activation.' });
-          return;
-        }
-        const res = await fetch(buildDbUrl(`app_users/${toFirebaseKey(activateUserParam)}`), { cache: 'no-store' });
-        if (cancelled) return;
-        if (!res.ok) {
-          setActivationNotice({ type: 'error', message: 'Could not verify activation link. Please try again.' });
-          return;
-        }
-        const userRecord = (await res.json()) as AppUser | null;
-        if (cancelled) return;
-        if (!userRecord || !userRecord.id) {
-          setActivationNotice({ type: 'error', message: 'Activation failed: Account no longer exists or was removed by Admin.' });
-          return;
-        }
-        if (userRecord.status === 'active') {
-          setActivationNotice({ type: 'success', message: `Account "${userRecord.username}" is already active. You can sign in now.` });
-          if (window.location.search) {
-            window.history.replaceState({}, '', window.location.pathname);
-          }
-          return;
-        }
-        if (userRecord.activationToken !== activateTokenParam) {
-          setActivationNotice({ type: 'error', message: 'Invalid or expired activation link. Contact Admin to resend.' });
-          return;
-        }
-
-        const patchRes = await fetch(buildDbUrl(`app_users/${userRecord.id}`), {
-          method: 'PATCH',
-          body: JSON.stringify({
-            status: 'active',
-            activatedAt: Date.now(),
-          }),
+        const res = await fetch('/api/auth/activate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: activateTokenParam, userId: activateUserParam }),
         });
+        const data = await res.json();
         if (cancelled) return;
-        if (!patchRes.ok) {
-          setActivationNotice({ type: 'error', message: 'Failed to update account activation status. Please try again.' });
-          return;
-        }
         setActivationNotice({
-          type: 'success',
-          message: `Account "${userRecord.username}" has been activated! Please sign in below.`,
+          type: data?.success ? 'success' : 'error',
+          message: data?.message || 'Could not verify activation link.',
         });
-        if (window.location.search) {
+        if (data?.success && window.location.search) {
           window.history.replaceState({}, '', window.location.pathname);
         }
-        void syncAllCloudState();
       } catch {
         if (!cancelled) {
           setActivationNotice({ type: 'error', message: 'Network error while activating account.' });
@@ -593,17 +490,18 @@ const App: React.FC = () => {
 
     void processActivation();
     return () => { cancelled = true; };
-  }, [activateTokenParam, activateUserParam, testEmailParam, syncAllCloudState]);
+  }, [activateTokenParam, activateUserParam, testEmailParam]);
 
-  // Initial sync + cross-browser / cross-device live sync listeners (focus, visibilitychange, online, polling)
+  // Initial sync + cross-device polling when authenticated
   useEffect(() => {
+    if (!isAuthenticated || !authToken) return;
     const initialTimer = setTimeout(() => {
       void syncAllCloudState();
     }, 0);
 
     const pollInterval = setInterval(() => {
       void syncAllCloudState();
-    }, isAuthenticated && view === 'teacher' ? 6000 : 20000);
+    }, view === 'teacher' ? 6000 : 20000);
 
     const handleVisibilityOrFocus = () => {
       if (document.visibilityState === 'visible') {
@@ -622,70 +520,16 @@ const App: React.FC = () => {
       window.removeEventListener('online', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
-  }, [syncAllCloudState, isAuthenticated, view]);
-
-  // Safety enforcement: auto-logout if admin deletes account or revokes active session
-  useEffect(() => {
-    if (!isAuthenticated || !hasLoadedCloudUsers) return;
-    const isBuiltInAdmin = currentAdminName.toLowerCase() === 'admin';
-    if (!isBuiltInAdmin) {
-      const matched = registeredUsers.find(
-        u => (currentUserId && u.id === currentUserId) || u.username.toLowerCase() === currentAdminName.toLowerCase()
-      );
-      if (!matched || matched.status !== 'active') {
-        const t = setTimeout(() => {
-          setActivationNotice({
-            type: 'error',
-            message: 'Your account access was removed or deactivated by the Administrator.',
-          });
-          handleLogout();
-        }, 0);
-        return () => clearTimeout(t);
-      }
-    }
-
-    if (activeSessionId && adminSessions.length > 0) {
-      const currentSession = adminSessions.find(s => s.id === activeSessionId);
-      if (currentSession && currentSession.status === 'signed_out') {
-        const t = setTimeout(() => {
-          setActivationNotice({
-            type: 'error',
-            message: 'Your session was signed out by the Administrator.',
-          });
-          handleLogout();
-        }, 0);
-        return () => clearTimeout(t);
-      }
-    }
-  }, [isAuthenticated, hasLoadedCloudUsers, currentAdminName, currentUserId, registeredUsers, activeSessionId, adminSessions, handleLogout]);
+  }, [syncAllCloudState, isAuthenticated, authToken, view]);
 
   // Activity Heartbeat for currently logged-in user
   useEffect(() => {
-    if (!isAuthenticated || !currentAdminName || !FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
+    if (!isAuthenticated || !authToken) return;
 
-    let sessionId = activeSessionId;
-    if (!sessionId) {
-      sessionId = `${toFirebaseKey(currentAdminName.toLowerCase())}_${Date.now()}`;
-      const timer = setTimeout(() => setActiveSessionId(sessionId), 0);
-      return () => clearTimeout(timer);
-    }
-
-    const matchedUser = registeredUsers.find(u => u.username.toLowerCase() === currentAdminName.toLowerCase());
     const sendHeartbeat = () => {
-      const now = Date.now();
-      const payload: Partial<AdminSessionActivity> = {
-        id: sessionId,
-        adminName: currentAdminName,
-        email: matchedUser?.email || '',
-        device: getDeviceLabel(),
-        date: new Date(now).toISOString().slice(0, 10),
-        lastActiveTime: now,
-        status: 'active',
-        currentAction: view === 'teacher' ? 'Dashboard' : 'Kiosk',
-      };
-      void fetch(buildDbUrl(`admin_logins/${sessionId}`), {
-        method: 'PATCH',
-        body: JSON.stringify(payload),
+      void apiFetch('/api/auth/heartbeat', {
+        method: 'POST',
+        body: JSON.stringify({ currentAction: view === 'teacher' ? 'Dashboard' : 'Kiosk' }),
       }).catch(() => { /* ignore */ });
     };
 
@@ -694,14 +538,10 @@ const App: React.FC = () => {
 
     const handlePageHide = () => {
       try {
-        void fetch(buildDbUrl(`admin_logins/${sessionId}`), {
-          method: 'PATCH',
+        void fetch('/api/auth/logout', {
+          method: 'POST',
           keepalive: true,
-          body: JSON.stringify({
-            status: 'signed_out',
-            lastActiveTime: Date.now(),
-            currentAction: 'Closed Tab',
-          }),
+          headers: { Authorization: `Bearer ${authToken}` },
         });
       } catch { /* ignore */ }
     };
@@ -711,35 +551,34 @@ const App: React.FC = () => {
       clearInterval(hbInterval);
       window.removeEventListener('pagehide', handlePageHide);
     };
-  }, [isAuthenticated, currentAdminName, activeSessionId, view, registeredUsers]);
+  }, [isAuthenticated, authToken, view, apiFetch]);
 
   const handleScriptUrlChange = useCallback((nextUrl: string) => {
     const trimmed = nextUrl.trim();
     setScriptUrl(trimmed);
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET && trimmed.startsWith('https://script.google.com/')) {
-      void fetch(buildDbUrl('app_config/script_url'), {
-        method: 'PUT',
-        body: JSON.stringify(trimmed),
+    if (trimmed.startsWith('https://script.google.com/')) {
+      void apiFetch('/api/admin/config', {
+        method: 'PATCH',
+        body: JSON.stringify({ scriptUrl: trimmed }),
       }).catch(() => { /* ignore */ });
     }
-  }, []);
+  }, [apiFetch]);
 
   const saveUserCoursePref = useCallback((nextCourse: string, nextWeek: string) => {
-    const uid = currentUserId || (currentAdminName ? toFirebaseKey(currentAdminName.toLowerCase()) : '');
-    if (!uid || !FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
-    void fetch(buildDbUrl(`user_preferences/${uid}`), {
-      method: 'PATCH',
-      body: JSON.stringify({ activeCourse: nextCourse, selectedWeek: nextWeek, updatedAt: Date.now() }),
+    if (!authTokenRef.current) return;
+    void apiFetch('/api/user/preferences', {
+      method: 'PUT',
+      body: JSON.stringify({ activeCourse: nextCourse, selectedWeek: nextWeek }),
     }).catch(() => { /* ignore */ });
-  }, [currentUserId, currentAdminName]);
+  }, [apiFetch]);
 
-  const upsertCourseInCloud = useCallback((course: CourseProfile) => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
-    void fetch(buildDbUrl(`courses/${course.id}`), {
+  const persistCourseToServer = useCallback((course: CourseProfile) => {
+    if (!authTokenRef.current) return;
+    void apiFetch(`/api/courses/${encodeURIComponent(course.id)}`, {
       method: 'PUT',
       body: JSON.stringify(course),
     }).catch(() => { /* ignore */ });
-  }, []);
+  }, [apiFetch]);
 
   const handleCourseChange = useCallback((courseName: string) => {
     courseEditedAtRef.current = Date.now();
@@ -747,7 +586,7 @@ const App: React.FC = () => {
     setActiveCourse(courseName);
     const trimmed = courseName.trim();
     if (trimmed) {
-      const matched = courses.find(c => c.courseName.toUpperCase() === trimmed.toUpperCase());
+      const matched = coursesRef.current.find(c => c.courseName.toUpperCase() === trimmed.toUpperCase());
       if (matched) {
         setKnownStudents(matched.students || []);
       }
@@ -756,7 +595,7 @@ const App: React.FC = () => {
     courseDebounceRef.current = setTimeout(() => {
       saveUserCoursePref(courseName, selectedWeek);
     }, 450);
-  }, [courses, saveUserCoursePref, selectedWeek]);
+  }, [saveUserCoursePref, selectedWeek]);
 
   const handleSelectCourse = useCallback((course: CourseProfile) => {
     courseEditedAtRef.current = Date.now();
@@ -772,42 +611,77 @@ const App: React.FC = () => {
   const handleAddCourse = useCallback((rawCourseName: string, initialStudents: PreRegisteredStudent[] = []): CourseProfile | null => {
     const cleanName = rawCourseName.trim();
     if (!cleanName) return null;
-    const existing = courses.find(c => c.courseName.trim().toUpperCase() === cleanName.toUpperCase());
+    const existing = coursesRef.current.find(c => c.courseName.trim().toUpperCase() === cleanName.toUpperCase());
     if (existing) {
+      if (initialStudents.length > 0) {
+        const mergedMap = new Map<string, PreRegisteredStudent>();
+        (existing.students || []).forEach(s => mergedMap.set(s.id, s));
+        initialStudents.forEach(s => mergedMap.set(s.id, s));
+        const updated: CourseProfile = {
+          ...existing,
+          students: Array.from(mergedMap.values()),
+          updatedAt: Date.now(),
+        };
+        courseEditedAtRef.current = Date.now();
+        setCourses(prev => prev.map(c => (c.id === updated.id ? updated : c)));
+        handleSelectCourse(updated);
+        persistCourseToServer(updated);
+        return updated;
+      }
       handleSelectCourse(existing);
       return existing;
     }
     const now = Date.now();
-    const newCourse: CourseProfile = {
-      id: toCourseKey(cleanName),
+    const uidSuffix = currentUserId ? `__${currentUserId}` : '';
+    const tempId = `${toCourseKey(cleanName)}${uidSuffix}`;
+    const optimisticCourse: CourseProfile = {
+      id: tempId,
       courseName: cleanName,
       selectedWeek: 'W1',
       students: initialStudents,
-      createdBy: currentAdminName || 'admin',
+      ownerId: currentUserId || undefined,
+      createdBy: currentAdminName || 'lecturer',
+      sharedWith: [],
       createdAt: now,
       updatedAt: now,
     };
-    setCourses(prev => [...prev, newCourse]);
-    upsertCourseInCloud(newCourse);
+
     courseEditedAtRef.current = Date.now();
     hasInitializedUserPrefRef.current = true;
-    setActiveCourse(newCourse.courseName);
+    setCourses(prev => [...prev, optimisticCourse]);
+    setActiveCourse(optimisticCourse.courseName);
     setSelectedWeek('W1');
-    setKnownStudents(newCourse.students);
+    setKnownStudents(optimisticCourse.students);
     setAttendanceList([]);
-    saveUserCoursePref(newCourse.courseName, 'W1');
-    return newCourse;
-  }, [courses, currentAdminName, handleSelectCourse, saveUserCoursePref, toCourseKey, upsertCourseInCloud]);
+
+    void apiFetch('/api/courses', {
+      method: 'POST',
+      body: JSON.stringify({
+        courseName: cleanName,
+        selectedWeek: 'W1',
+        students: initialStudents,
+      }),
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then((resData: { course?: CourseProfile } | null) => {
+        if (resData?.course) {
+          const saved = normalizeCourses([resData.course])[0];
+          setCourses(prev => prev.map(c => (c.id === tempId || c.id === saved.id ? saved : c)));
+        }
+      })
+      .catch(() => { /* ignore */ });
+
+    return optimisticCourse;
+  }, [apiFetch, currentAdminName, currentUserId, handleSelectCourse, persistCourseToServer, toCourseKey]);
 
   const handleDeleteCourse = useCallback(async (courseId: string) => {
     courseEditedAtRef.current = Date.now();
-    const remaining = courses.filter(c => c.id !== courseId);
-    const deletedCourse = courses.find(c => c.id === courseId);
+    const remaining = coursesRef.current.filter(c => c.id !== courseId);
+    const deletedCourse = coursesRef.current.find(c => c.id === courseId);
     setCourses(remaining);
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      await fetch(buildDbUrl(`courses/${courseId}`), { method: 'DELETE' }).catch(() => { /* ignore */ });
-    }
-    if (deletedCourse && activeCourse.trim().toUpperCase() === deletedCourse.courseName.trim().toUpperCase()) {
+    await apiFetch(`/api/courses/${encodeURIComponent(courseId)}`, { method: 'DELETE' }).catch(() => { /* ignore */ });
+
+    if (deletedCourse && activeCourseRef.current.trim().toUpperCase() === deletedCourse.courseName.trim().toUpperCase()) {
       const next = remaining[0];
       if (next) {
         handleSelectCourse(next);
@@ -815,46 +689,48 @@ const App: React.FC = () => {
         setActiveCourse('');
         setKnownStudents([]);
         setAttendanceList([]);
+        saveUserCoursePref('', selectedWeek);
       }
     }
-  }, [courses, activeCourse, handleSelectCourse]);
+  }, [apiFetch, handleSelectCourse, saveUserCoursePref, selectedWeek]);
 
   const handleSyncSheetCourses = useCallback((sheetTabs: Array<{ sheetName: string; courseName: string; students: PreRegisteredStudent[] }>) => {
     if (!Array.isArray(sheetTabs) || sheetTabs.length === 0) return;
     courseEditedAtRef.current = Date.now();
-    const now = Date.now();
-    const nextMap = new Map<string, CourseProfile>();
-    coursesRef.current.forEach(c => nextMap.set(c.courseName.trim().toUpperCase(), c));
-    const toPersist: CourseProfile[] = [];
-    for (const tab of sheetTabs) {
-      const cleanName = tab.courseName.trim();
-      if (!cleanName) continue;
-      const key = cleanName.toUpperCase();
-      const existing = nextMap.get(key);
-      const updated: CourseProfile = existing
-        ? {
-            ...existing,
-            sheetName: tab.sheetName || existing.sheetName,
-            students: tab.students.length > 0 ? tab.students : existing.students,
-            updatedAt: now,
-          }
-        : {
-            id: toCourseKey(cleanName),
-            courseName: cleanName,
-            sheetName: tab.sheetName,
-            selectedWeek: 'W1',
-            students: tab.students,
-            createdBy: currentAdminName || 'system',
-            createdAt: now,
-            updatedAt: now,
-          };
-      nextMap.set(key, updated);
-      toPersist.push(updated);
-    }
-    const nextList = Array.from(nextMap.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-    setCourses(nextList);
-    toPersist.forEach(c => upsertCourseInCloud(c));
-  }, [currentAdminName, toCourseKey, upsertCourseInCloud]);
+    void apiFetch('/api/courses/sync-tabs', {
+      method: 'POST',
+      body: JSON.stringify({ tabs: sheetTabs }),
+    })
+      .then(r => (r.ok ? r.json() : null))
+      .then((resData: { courses?: CourseProfile[] } | null) => {
+        if (resData?.courses) {
+          const syncedList = normalizeCourses(resData.courses);
+          setCourses(prev => {
+            const byId = new Map<string, CourseProfile>();
+            prev.forEach(c => byId.set(c.id, c));
+            syncedList.forEach(c => byId.set(c.id, c));
+            return Array.from(byId.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+          });
+        }
+      })
+      .catch(() => { /* ignore */ });
+  }, [apiFetch]);
+
+  const handleAssignCourseOwner = useCallback(async (courseId: string, ownerId: string) => {
+    courseEditedAtRef.current = Date.now();
+    try {
+      const res = await apiFetch(`/api/courses/${encodeURIComponent(courseId)}/owner`, {
+        method: 'PATCH',
+        body: JSON.stringify({ ownerId }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data?.course) {
+        const updated = normalizeCourses([data.course])[0];
+        setCourses(prev => prev.map(c => (c.id === updated.id ? updated : c)));
+      }
+    } catch { /* ignore */ }
+  }, [apiFetch]);
 
   const handleWeekChange = useCallback((week: string) => {
     courseEditedAtRef.current = Date.now();
@@ -865,174 +741,108 @@ const App: React.FC = () => {
       if (matched) {
         const updated: CourseProfile = { ...matched, selectedWeek: week, updatedAt: Date.now() };
         setCourses(prev => prev.map(c => (c.id === matched.id ? updated : c)));
-        upsertCourseInCloud(updated);
+        persistCourseToServer(updated);
       }
     }
-  }, [activeCourse, saveUserCoursePref, upsertCourseInCloud]);
+  }, [activeCourse, persistCourseToServer, saveUserCoursePref]);
 
   const handleIntegrationTypeChange = useCallback((nextType: IntegrationType) => {
     setIntegrationType(nextType);
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      void fetch(buildDbUrl('app_config/integration_type'), {
-        method: 'PUT',
-        body: JSON.stringify(nextType),
-      }).catch(() => { /* ignore */ });
-    }
-  }, []);
+    void apiFetch('/api/admin/config', {
+      method: 'PATCH',
+      body: JSON.stringify({ integrationType: nextType }),
+    }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
 
   const handleAdminEmailChange = useCallback((email: string) => {
     const trimmed = email.trim();
     setAdminEmail(trimmed);
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      void fetch(buildDbUrl('app_config/admin_email'), {
-        method: 'PUT',
-        body: JSON.stringify(trimmed),
-      }).catch(() => { /* ignore */ });
-    }
-  }, []);
+    void apiFetch('/api/admin/config', {
+      method: 'PATCH',
+      body: JSON.stringify({ adminEmail: trimmed }),
+    }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
 
   const syncKnownStudentsToCloud = useCallback((students: PreRegisteredStudent[], targetCourseName?: string) => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
+    if (!authTokenRef.current) return;
     const courseLabel = (targetCourseName ?? activeCourseRef.current).trim();
-    if (courseLabel) {
-      const courseId = toCourseKey(courseLabel);
-      const existing = coursesRef.current.find(c => c.id === courseId || c.courseName.trim().toUpperCase() === courseLabel.toUpperCase());
-      const now = Date.now();
-      const updatedCourse: CourseProfile = existing
-        ? { ...existing, students, updatedAt: now }
-        : {
-            id: courseId,
-            courseName: courseLabel,
-            selectedWeek: selectedWeek || 'W1',
-            students,
-            createdBy: currentAdminName || 'admin',
-            createdAt: now,
-            updatedAt: now,
-          };
-      setCourses(prev => {
-        const idx = prev.findIndex(c => c.id === updatedCourse.id);
-        if (idx === -1) return [...prev, updatedCourse];
-        return prev.map((c, i) => (i === idx ? updatedCourse : c));
-      });
-      upsertCourseInCloud(updatedCourse);
+    if (!courseLabel) return;
+    const existing = coursesRef.current.find(
+      c => c.courseName.trim().toUpperCase() === courseLabel.toUpperCase()
+    );
+    const now = Date.now();
+    if (existing) {
+      const updatedCourse: CourseProfile = { ...existing, students, updatedAt: now };
+      setCourses(prev => prev.map(c => (c.id === updatedCourse.id ? updatedCourse : c)));
+      persistCourseToServer(updatedCourse);
+    } else {
+      void apiFetch('/api/courses', {
+        method: 'POST',
+        body: JSON.stringify({
+          courseName: courseLabel,
+          selectedWeek: selectedWeek || 'W1',
+          students,
+        }),
+      })
+        .then(r => (r.ok ? r.json() : null))
+        .then((resData: { course?: CourseProfile } | null) => {
+          if (resData?.course) {
+            const saved = normalizeCourses([resData.course])[0];
+            setCourses(prev => [...prev.filter(c => c.id !== saved.id), saved]);
+          }
+        })
+        .catch(() => { /* ignore */ });
     }
-    void fetch(buildDbUrl('app_config/known_students_v2'), {
-      method: 'PUT',
-      body: JSON.stringify(students),
-    }).catch(() => { /* ignore */ });
-  }, [currentAdminName, selectedWeek, toCourseKey, upsertCourseInCloud]);
+  }, [apiFetch, persistCourseToServer, selectedWeek]);
 
   const handleUpdateKnownStudents = useCallback((students: PreRegisteredStudent[]) => {
     setKnownStudents(students);
     syncKnownStudentsToCloud(students);
   }, [syncKnownStudentsToCloud]);
 
-  const syncHistoryToCloud = useCallback((historyList: Student[]) => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
-    void fetch(buildDbUrl('attendance_history'), {
-      method: 'PUT',
-      body: JSON.stringify(historyList.slice(0, 200)),
-    }).catch(() => { /* ignore */ });
-  }, []);
-
   const handleDeleteHistoryItem = useCallback((timestamp: number, studentId: string) => {
-    setTeacherHistory(prev => {
-      const next = prev.filter(h => !(h.timestamp === timestamp && h.studentId === studentId));
-      syncHistoryToCloud(next);
-      return next;
-    });
-  }, [syncHistoryToCloud]);
+    setTeacherHistory(prev => prev.filter(h => !(h.timestamp === timestamp && h.studentId === studentId)));
+    void apiFetch(`/api/history/item?timestamp=${encodeURIComponent(timestamp)}&studentId=${encodeURIComponent(studentId)}`, {
+      method: 'DELETE',
+    }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
 
   const handleClearTeacherHistory = useCallback(() => {
     setTeacherHistory([]);
-    syncHistoryToCloud([]);
-  }, [syncHistoryToCloud]);
+    void apiFetch('/api/history', { method: 'DELETE' }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
 
+  // Load course roster when viewing Student QR check-in or switching active course
   useEffect(() => {
     let cancelled = false;
-    const loadStudentsFromSheetOrCloud = async () => {
-      const cleanScriptUrl = scriptUrl.trim();
-      const canFetchSheet =
-        integrationType === 'google_sheets' &&
-        cleanScriptUrl &&
-        cleanScriptUrl !== DEFAULT_SCRIPT_URL &&
-        !cleanScriptUrl.endsWith('/dev');
-
+    const loadRoster = async () => {
       const courseFilter = courseNameParam || activeCourse || '';
+      const cidFilter = courseIdParam || coursesRef.current.find(c => c.courseName.trim().toUpperCase() === courseFilter.trim().toUpperCase())?.id || '';
+      if (!courseFilter && !cidFilter) return;
 
-      if (canFetchSheet) {
-        try {
-          const sheetUrl = `${cleanScriptUrl}${cleanScriptUrl.includes('?') ? '&' : '?'}action=getCourse${courseFilter ? `&course=${encodeURIComponent(courseFilter)}` : ''}&t=${Date.now()}`;
-          const res = await fetch(sheetUrl, { method: 'GET', redirect: 'follow' });
-          const rawText = await res.text();
-          if (!cancelled && res.ok && !rawText.trim().startsWith('<')) {
-            const data = JSON.parse(rawText);
-            if (data?.success) {
-              const sheetsArr = Array.isArray(data.sheets) ? data.sheets : [];
-              const normalizedCourseFilter = courseFilter.trim().toUpperCase();
-              const matchedTab = normalizedCourseFilter
-                ? sheetsArr.find((s: { courseName?: unknown }) => String(s?.courseName || '').trim().toUpperCase() === normalizedCourseFilter)
-                : undefined;
-              const rawStudents = normalizedCourseFilter && sheetsArr.length > 0
-                ? (matchedTab && Array.isArray(matchedTab.students) ? matchedTab.students : [])
-                : (Array.isArray(data.students) ? data.students : []);
-
-              if (rawStudents.length > 0) {
-                const normalized: PreRegisteredStudent[] = [];
-                const seen = new Set<string>();
-                for (const item of rawStudents) {
-                  const id = String(item?.id || '').trim().toUpperCase();
-                  const name = String(item?.name || '').trim().toUpperCase();
-                  if (id && name && !seen.has(id)) {
-                    seen.add(id);
-                    normalized.push({ id, name });
-                  }
-                }
-                if (!cancelled && normalized.length > 0) {
-                  setKnownStudents(normalized);
-                  if (courseFilter) {
-                    syncKnownStudentsToCloud(normalized, courseFilter);
-                  }
-                  return;
-                }
-              }
-            }
-          }
-        } catch {
-          // Fallback to Firebase course roster below
+      // If authenticated and already have course students locally, use them immediately while verifying server
+      if (isAuthenticated && courseFilter) {
+        const localCourse = coursesRef.current.find(c => c.courseName.trim().toUpperCase() === courseFilter.trim().toUpperCase());
+        if (localCourse && Array.isArray(localCourse.students) && localCourse.students.length > 0) {
+          setKnownStudents(localCourse.students);
         }
       }
 
-      if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
-      if (courseFilter) {
-        try {
-          const courseKey = toCourseKey(courseFilter);
-          const courseRes = await fetch(buildDbUrl(`courses/${courseKey}/students`), { cache: 'no-store' });
-          if (courseRes.ok && !cancelled) {
-            const courseRoster = await courseRes.json();
-            if (Array.isArray(courseRoster) && courseRoster.length > 0) {
-              setKnownStudents(courseRoster);
-              return;
-            }
-          }
-        } catch { /* fallback below */ }
-      }
-
-      if (isAuthenticated && localStorage.getItem(KNOWN_STUDENTS_KEY) !== null) return;
       try {
-        const res = await fetch(buildDbUrl('app_config/known_students_v2'), { cache: 'no-store' });
+        const params = new URLSearchParams();
+        if (courseFilter) params.set('course', courseFilter);
+        if (cidFilter) params.set('courseId', cidFilter);
+        const res = await fetch(`/api/student/roster?${params.toString()}`, { cache: 'no-store' });
         if (!res.ok || cancelled) return;
-        const remote = await res.json();
-        if (!cancelled && Array.isArray(remote)) {
-          setKnownStudents(remote);
+        const data = await res.json();
+        if (!cancelled && Array.isArray(data?.students) && data.students.length > 0) {
+          setKnownStudents(data.students);
         }
-      } catch {
-        // Ignore network errors
-      }
+      } catch { /* ignore */ }
     };
-    void loadStudentsFromSheetOrCloud();
+    void loadRoster();
     return () => { cancelled = true; };
-  }, [isAuthenticated, scriptUrl, integrationType, courseNameParam, activeCourse, toCourseKey, syncKnownStudentsToCloud]);
+  }, [isAuthenticated, courseNameParam, courseIdParam, activeCourse]);
 
   const formatCloudPayload = (r: Student) => {
     const targetWeek = r.week || selectedWeek || 'W1';
@@ -1094,33 +904,28 @@ const App: React.FC = () => {
   }, [checkAndClearForNewDay]);
 
   const fetchFirebaseLiveAttendance = useCallback(async () => {
-    if (view !== 'teacher' || !FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET || !isAuthenticated) return;
+    if (view !== 'teacher' || !isAuthenticated || !authTokenRef.current) return;
     try {
-      const path = activeCourse ? `${SESSION_ID}_${sanitize(activeCourse)}` : SESSION_ID;
-      const response = await fetch(buildDbUrl(`live_sessions/${path}`), { cache: 'no-store' });
-      if (!response.ok && response.status !== 404) return;
-      const data = response.status === 404 ? null : await response.json();
-      if (data) {
-        const firebaseStudents: Student[] = (Object.values(data) as Student[]).sort((a, b) => b.timestamp - a.timestamp);
-        setAttendanceList(firebaseStudents);
+      const res = await apiFetch(`/api/attendance/live?course=${encodeURIComponent(activeCourse || '')}`, {
+        cache: 'no-store',
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      const liveStudents: Student[] = Array.isArray(data?.students) ? data.students : [];
+      setAttendanceList(liveStudents);
+      if (liveStudents.length > 0) {
         setTeacherHistory(prev => {
-          const combined = [...firebaseStudents, ...prev];
-          const unique = combined
+          const combined = [...liveStudents, ...prev];
+          return combined
             .filter((item, index, self) => index === self.findIndex(t => t.studentId === item.studentId && t.timestamp === item.timestamp))
             .sort((a, b) => b.timestamp - a.timestamp)
             .slice(0, 200);
-          if (unique.length !== prev.length || (unique[0]?.timestamp !== prev[0]?.timestamp)) {
-            syncHistoryToCloud(unique);
-          }
-          return unique;
         });
-      } else {
-        setAttendanceList([]);
       }
     } catch {
       console.warn('Polling failed');
     }
-  }, [view, isAuthenticated, activeCourse, syncHistoryToCloud]);
+  }, [view, isAuthenticated, activeCourse, apiFetch]);
 
   useEffect(() => {
     if (view === 'teacher' && isAuthenticated) {
@@ -1137,166 +942,52 @@ const App: React.FC = () => {
     }
   }, [fetchFirebaseLiveAttendance, view, isAuthenticated]);
 
-  const buildActivationUrl = useCallback((user: AppUser) => {
-    const tokenVal = user.activationToken || generateToken();
-    return `${getPublicAppUrl()}?activate=${encodeURIComponent(tokenVal)}&user=${encodeURIComponent(user.id)}`;
-  }, []);
-
-  const sendActivationEmailViaScript = useCallback(async (params: {
-    toEmail: string;
-    username: string;
-    activationUrl: string;
-  }): Promise<boolean> => {
-    const cleanUrl = scriptUrl.trim();
-    if (!cleanUrl || cleanUrl === DEFAULT_SCRIPT_URL || cleanUrl.endsWith('/dev')) {
-      return false;
-    }
-    try {
-      const res = await fetch(cleanUrl, {
-        method: 'POST',
-        redirect: 'follow',
-        body: JSON.stringify({
-          action: 'SEND_ACTIVATION_EMAIL',
-          toEmail: params.toEmail,
-          username: params.username,
-          activationUrl: params.activationUrl,
-          adminEmail: adminEmail.trim(),
-        }),
-      });
-      const text = await res.text();
-      if (!res.ok || text.trim().startsWith('<')) return false;
-      const parsed = JSON.parse(text);
-      return Boolean(parsed?.success && parsed?.emailSent !== false);
-    } catch {
-      return false;
-    }
-  }, [scriptUrl, adminEmail]);
-
   const sendTestAdminEmail = useCallback(async (targetEmail?: string): Promise<{ success: boolean; message: string }> => {
-    const cleanUrl = scriptUrl.trim();
-    const recipient = (targetEmail ?? adminEmail).trim();
-    if (!cleanUrl || cleanUrl === DEFAULT_SCRIPT_URL || cleanUrl.endsWith('/dev')) {
-      return { success: false, message: 'Please configure a valid deployed Apps Script /exec URL in Settings first.' };
-    }
-    if (!recipient) {
-      return { success: false, message: 'Enter an Admin Notification Email first.' };
-    }
     try {
-      const res = await fetch(cleanUrl, {
+      const res = await apiFetch('/api/admin/test-email', {
         method: 'POST',
-        redirect: 'follow',
-        body: JSON.stringify({
-          action: 'SEND_ACTIVATION_EMAIL',
-          toEmail: recipient,
-          username: 'Admin Email Test',
-          activationUrl: `${getPublicAppUrl()}?test_email=verified`,
-          adminEmail: recipient,
-        }),
+        body: JSON.stringify({ targetEmail, publicAppUrl: getPublicAppUrl() }),
       });
-      const text = await res.text();
-      if (!res.ok || text.trim().startsWith('<')) {
-        return { success: false, message: 'Apps Script returned HTML instead of JSON. Check Web App access = Anyone.' };
-      }
-      const parsed = JSON.parse(text);
-      if (parsed?.success && parsed?.emailSent !== false) {
-        return { success: true, message: `Test email sent to ${recipient}. Check Inbox/Spam!` };
-      }
-      const errText = String(parsed?.error || 'Email could not be sent.');
-      if (errText.includes('script.send_mail') || errText.includes('MailApp')) {
-        return {
-          success: false,
-          message: 'Apps Script lacks email permission (script.send_mail). Open Apps Script editor → Run a function → Review Permissions → Allow, then re-deploy.',
-        };
-      }
-      return { success: false, message: errText };
+      const data = await res.json();
+      return { success: Boolean(data?.success), message: data?.message || 'Test failed.' };
     } catch {
-      return { success: false, message: 'Network error reaching Apps Script endpoint.' };
+      return { success: false, message: 'Network error reaching server.' };
     }
-  }, [scriptUrl, adminEmail]);
+  }, [apiFetch]);
 
-  const handleLogin = (usernameOrEmail: string, password: string): { success: boolean; message?: string } => {
-    const cleanInput = usernameOrEmail.trim().toLowerCase();
-    const matched = registeredUsers.find(
-      u => (u.username.toLowerCase() === cleanInput || (u.email && u.email.toLowerCase() === cleanInput)) && u.password === password
-    );
-
-    if (matched) {
-      if (matched.status === 'pending' && matched.role !== 'admin') {
-        return {
-          success: false,
-          message: 'Account pending activation. Please click the activation link sent to your email or ask Admin to activate your account.',
-        };
+  const handleLogin = async (usernameOrEmail: string, password: string): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usernameOrEmail, password }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.success || !data?.token || !data?.user) {
+        return { success: false, message: data?.message || 'Invalid User Name / Email or Password.' };
       }
-      const now = Date.now();
-      const newSessionId = `${toFirebaseKey(matched.username.toLowerCase())}_${now}`;
-      const newSession: AdminSessionActivity = {
-        id: newSessionId,
-        adminName: matched.username,
-        email: matched.email || '',
-        device: getDeviceLabel(),
-        date: new Date(now).toISOString().slice(0, 10),
-        loginTime: now,
-        lastActiveTime: now,
-        status: 'active',
-        currentAction: 'Dashboard',
-      };
 
       hasInitializedUserPrefRef.current = false;
       courseEditedAtRef.current = 0;
+      authTokenRef.current = data.token;
+      setAuthToken(data.token);
       setIsAuthenticated(true);
-      setCurrentAdminName(matched.username);
-      setCurrentUserId(matched.id);
-      setActiveSessionId(newSessionId);
-      localStorage.setItem(AUTH_KEY, 'true');
-      setView('teacher');
-
-      if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-        void fetch(buildDbUrl(`admin_logins/${newSessionId}`), {
-          method: 'PUT',
-          body: JSON.stringify(newSession),
-        }).catch(() => { /* ignore */ });
-        void fetch(buildDbUrl(`app_users/${matched.id}`), {
-          method: 'PATCH',
-          body: JSON.stringify({ lastLoginAt: now }),
-        }).catch(() => { /* ignore */ });
+      setCurrentAdminName(data.user.username);
+      setCurrentUserId(data.user.id);
+      setCurrentUserRole(data.user.role === 'admin' ? 'admin' : 'lecturer');
+      if (data.session?.id) {
+        setActiveSessionId(data.session.id);
       }
-      setAdminSessions(prev => [newSession, ...prev]);
-      return { success: true };
-    }
-
-    if (cleanInput === 'admin' && password === LECTURER_PASSWORD) {
-      const now = Date.now();
-      const newSessionId = `admin_${now}`;
-      const newSession: AdminSessionActivity = {
-        id: newSessionId,
-        adminName: 'admin',
-        email: adminEmail || '',
-        device: getDeviceLabel(),
-        date: new Date(now).toISOString().slice(0, 10),
-        loginTime: now,
-        lastActiveTime: now,
-        status: 'active',
-        currentAction: 'Dashboard',
-      };
-      hasInitializedUserPrefRef.current = false;
-      courseEditedAtRef.current = 0;
-      setIsAuthenticated(true);
-      setCurrentAdminName('admin');
-      setCurrentUserId('admin');
-      setActiveSessionId(newSessionId);
       localStorage.setItem(AUTH_KEY, 'true');
+      localStorage.setItem(AUTH_TOKEN_KEY, data.token);
       setView('teacher');
-      if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-        void fetch(buildDbUrl(`admin_logins/${newSessionId}`), {
-          method: 'PUT',
-          body: JSON.stringify(newSession),
-        }).catch(() => { /* ignore */ });
+      if (data.session) {
+        setAdminSessions(prev => [data.session, ...prev]);
       }
-      setAdminSessions(prev => [newSession, ...prev]);
       return { success: true };
+    } catch {
+      return { success: false, message: 'Network error while signing in.' };
     }
-
-    return { success: false, message: 'Invalid User Name / Email or Password.' };
   };
 
   const handleSignUp = async (
@@ -1304,236 +995,119 @@ const App: React.FC = () => {
     email: string,
     password: string
   ): Promise<{ success: boolean; message: string }> => {
-    const cleanUser = username.trim();
-    const cleanEmail = email.trim().toLowerCase();
-    if (!cleanUser || !cleanEmail || !password) {
-      return { success: false, message: 'All fields are required.' };
-    }
-
-    // Fetch latest users from Firebase so cross-browser signups stay consistent
-    let latestUsers = registeredUsers;
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      try {
-        const res = await fetch(buildDbUrl('app_users'), { cache: 'no-store' });
-        if (res.ok) {
-          const data = await res.json();
-          if (data && typeof data === 'object') {
-            latestUsers = Object.values(data) as AppUser[];
-          }
-        }
-      } catch { /* fallback to current state */ }
-    }
-
-    if (latestUsers.some(u => u.username.toLowerCase() === cleanUser.toLowerCase())) {
-      return { success: false, message: 'Username already exists.' };
-    }
-    if (latestUsers.some(u => u.email && u.email.toLowerCase() === cleanEmail)) {
-      return { success: false, message: 'Email address is already registered.' };
-    }
-
-    const now = Date.now();
-    const userId = `${toFirebaseKey(cleanUser.toLowerCase())}_${now.toString(36)}`;
-    const activationToken = generateToken();
-    const newUser: AppUser = {
-      id: userId,
-      username: cleanUser,
-      email: cleanEmail,
-      password,
-      role: 'lecturer',
-      status: 'pending',
-      activationToken,
-      createdAt: now,
-    };
-
-    const activationUrl = `${getPublicAppUrl()}?activate=${encodeURIComponent(activationToken)}&user=${encodeURIComponent(userId)}`;
-
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      const saveUserRes = await fetch(buildDbUrl(`app_users/${userId}`), {
-        method: 'PUT',
-        body: JSON.stringify(newUser),
+    try {
+      const res = await fetch('/api/auth/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username,
+          email,
+          password,
+          publicAppUrl: getPublicAppUrl(),
+        }),
       });
-      if (!saveUserRes.ok) {
-        return { success: false, message: 'Failed to save user registration to cloud.' };
-      }
+      const data = await res.json();
+      return {
+        success: Boolean(data?.success),
+        message: data?.message || 'Registration failed.',
+      };
+    } catch {
+      return { success: false, message: 'Network error during sign up.' };
     }
+  };
 
-    const emailSent = await sendActivationEmailViaScript({
-      toEmail: cleanEmail,
-      username: cleanUser,
-      activationUrl,
-    });
-
-    const notifId = `notif_${now}_${Math.random().toString(36).slice(2, 6)}`;
-    const notif: AdminNotification = {
-      id: notifId,
-      type: 'user_signup',
-      userId,
-      username: cleanUser,
-      email: cleanEmail,
-      createdAt: now,
-      read: false,
-      emailSent,
-      message: `${cleanUser} (${cleanEmail}) signed up and is waiting for account activation.`,
-    };
-
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      await fetch(buildDbUrl(`admin_notifications/${notifId}`), {
-        method: 'PUT',
-        body: JSON.stringify(notif),
-      }).catch(() => { /* ignore */ });
+  const handleRequestAccountDeletion = async (params: {
+    usernameOrEmail: string;
+    reason: string;
+  }): Promise<{ success: boolean; message: string }> => {
+    try {
+      const res = await fetch('/api/auth/delete-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(params),
+      });
+      const data = await res.json();
+      return {
+        success: Boolean(data?.success),
+        message: data?.message || 'Could not submit deletion request.',
+      };
+    } catch {
+      return { success: false, message: 'Network error submitting deletion request.' };
     }
-
-    setRegisteredUsers(prev => [newUser, ...prev]);
-    setAdminNotifications(prev => [notif, ...prev]);
-
-    return {
-      success: true,
-      message: emailSent
-        ? `Account created! An activation email has been sent to ${cleanEmail}. Admin has also been notified.`
-        : `Account created and Admin has been notified! Please check your email or ask Admin to send/activate your account link.`,
-    };
   };
 
   // Admin Control Center Actions
   const handleDeleteUser = useCallback(async (userId: string) => {
     const targetUser = registeredUsers.find(u => u.id === userId);
     if (!targetUser || targetUser.role === 'admin' || targetUser.username.toLowerCase() === 'admin') return;
-
     setRegisteredUsers(prev => prev.filter(u => u.id !== userId));
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      await fetch(buildDbUrl(`app_users/${userId}`), { method: 'DELETE' }).catch(() => { /* ignore */ });
-
-      // Revoke any active sessions belonging to the deleted user
-      const matchingSessions = adminSessions.filter(
-        s => s.adminName.toLowerCase() === targetUser.username.toLowerCase() && s.status === 'active'
-      );
-      await Promise.all(
-        matchingSessions.map(s =>
-          fetch(buildDbUrl(`admin_logins/${s.id}`), {
-            method: 'PATCH',
-            body: JSON.stringify({ status: 'signed_out', lastActiveTime: Date.now(), currentAction: 'Account Removed' }),
-          }).catch(() => { /* ignore */ })
-        )
-      );
-      setAdminSessions(prev =>
-        prev.map(s =>
-          s.adminName.toLowerCase() === targetUser.username.toLowerCase() && s.status === 'active'
-            ? { ...s, status: 'signed_out', lastActiveTime: Date.now() }
-            : s
-        )
-      );
-    }
-  }, [registeredUsers, adminSessions]);
+    await apiFetch(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' }).catch(() => { /* ignore */ });
+  }, [apiFetch, registeredUsers]);
 
   const handleActivateUser = useCallback(async (userId: string) => {
     const now = Date.now();
     setRegisteredUsers(prev =>
       prev.map(u => (u.id === userId ? { ...u, status: 'active', activatedAt: now } : u))
     );
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      await fetch(buildDbUrl(`app_users/${userId}`), {
-        method: 'PATCH',
-        body: JSON.stringify({ status: 'active', activatedAt: now }),
-      }).catch(() => { /* ignore */ });
-    }
-  }, []);
+    await apiFetch(`/api/admin/users/${encodeURIComponent(userId)}/activate`, { method: 'POST' }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
 
   const handleResendActivationEmail = useCallback(async (user: AppUser): Promise<{ sent: boolean; activationUrl: string }> => {
-    const tokenToUse = user.activationToken || generateToken();
-    if (!user.activationToken && FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      await fetch(buildDbUrl(`app_users/${user.id}`), {
-        method: 'PATCH',
-        body: JSON.stringify({ activationToken: tokenToUse }),
-      }).catch(() => { /* ignore */ });
-      setRegisteredUsers(prev => prev.map(u => (u.id === user.id ? { ...u, activationToken: tokenToUse } : u)));
+    try {
+      const res = await apiFetch(`/api/admin/users/${encodeURIComponent(user.id)}/resend-activation`, {
+        method: 'POST',
+        body: JSON.stringify({ publicAppUrl: getPublicAppUrl() }),
+      });
+      const data = await res.json();
+      return {
+        sent: Boolean(data?.sent),
+        activationUrl: data?.activationUrl || `${getPublicAppUrl()}?user=${encodeURIComponent(user.id)}`,
+      };
+    } catch {
+      return { sent: false, activationUrl: `${getPublicAppUrl()}?user=${encodeURIComponent(user.id)}` };
     }
-    const url = buildActivationUrl({ ...user, activationToken: tokenToUse });
-    if (!user.email) return { sent: false, activationUrl: url };
-    const sent = await sendActivationEmailViaScript({
-      toEmail: user.email,
-      username: user.username,
-      activationUrl: url,
-    });
-    return { sent, activationUrl: url };
-  }, [buildActivationUrl, sendActivationEmailViaScript]);
+  }, [apiFetch]);
 
   const handleRevokeSession = useCallback(async (sessionId: string) => {
     const now = Date.now();
     setAdminSessions(prev =>
       prev.map(s => (s.id === sessionId ? { ...s, status: 'signed_out', lastActiveTime: now } : s))
     );
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      await fetch(buildDbUrl(`admin_logins/${sessionId}`), {
-        method: 'PATCH',
-        body: JSON.stringify({ status: 'signed_out', lastActiveTime: now, currentAction: 'Revoked by Admin' }),
-      }).catch(() => { /* ignore */ });
-    }
-  }, []);
+    await apiFetch(`/api/admin/sessions/${encodeURIComponent(sessionId)}/revoke`, { method: 'POST' }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
 
   const handleClearInactiveSessions = useCallback(async () => {
     const staleThreshold = Date.now() - 2 * 60 * 1000;
-    const toRemove = adminSessions.filter(s => s.status === 'signed_out' || (s.lastActiveTime || 0) < staleThreshold);
-    const keep = adminSessions.filter(s => s.status === 'active' && (s.lastActiveTime || 0) >= staleThreshold);
-    setAdminSessions(keep);
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      await Promise.all(
-        toRemove.map(s => fetch(buildDbUrl(`admin_logins/${s.id}`), { method: 'DELETE' }).catch(() => { /* ignore */ }))
-      );
-    }
-  }, [adminSessions]);
+    setAdminSessions(prev => prev.filter(s => s.status === 'active' && (s.lastActiveTime || 0) >= staleThreshold));
+    await apiFetch('/api/admin/sessions/inactive', { method: 'DELETE' }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
 
   const handleMarkNotificationRead = useCallback(async (notifId: string) => {
     setAdminNotifications(prev => prev.map(n => (n.id === notifId ? { ...n, read: true } : n)));
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      await fetch(buildDbUrl(`admin_notifications/${notifId}`), {
-        method: 'PATCH',
-        body: JSON.stringify({ read: true }),
-      }).catch(() => { /* ignore */ });
-    }
-  }, []);
+    await apiFetch(`/api/admin/notifications/${encodeURIComponent(notifId)}/read`, { method: 'PATCH' }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
 
   const handleMarkAllNotificationsRead = useCallback(async () => {
     setAdminNotifications(prev => prev.map(n => ({ ...n, read: true })));
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      await Promise.all(
-        adminNotifications
-          .filter(n => !n.read)
-          .map(n =>
-            fetch(buildDbUrl(`admin_notifications/${n.id}`), {
-              method: 'PATCH',
-              body: JSON.stringify({ read: true }),
-            }).catch(() => { /* ignore */ })
-          )
-      );
-    }
-  }, [adminNotifications]);
+    await apiFetch('/api/admin/notifications/read-all', { method: 'POST' }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
 
   const handleClearNotifications = useCallback(async () => {
     setAdminNotifications([]);
-    if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
-      await fetch(buildDbUrl('admin_notifications'), { method: 'DELETE' }).catch(() => { /* ignore */ });
-    }
-  }, []);
+    await apiFetch('/api/admin/notifications', { method: 'DELETE' }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
+
+  const handleNewSession = useCallback(async () => {
+    setAttendanceList([]);
+    await apiFetch(`/api/attendance/session?course=${encodeURIComponent(activeCourse || '')}`, {
+      method: 'DELETE',
+    }).catch(() => { /* ignore */ });
+  }, [activeCourse, apiFetch]);
 
   const handleEnterKiosk = useCallback(() => {
     setIsKioskMode(true);
     setView('student');
-    localStorage.removeItem(AUTH_KEY);
-    setIsAuthenticated(false);
   }, []);
-
-  const handleNewSession = async () => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
-    setAttendanceList([]);
-    try {
-      const path = activeCourse ? `${SESSION_ID}_${sanitize(activeCourse)}` : SESSION_ID;
-      await fetch(`${getBaseDbUrl()}/live_sessions/${path}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
-        method: 'DELETE',
-      });
-    } catch {
-      console.error('Failed to clear live session');
-    }
-  };
 
   const addStudent = async (
     name: string,
@@ -1546,60 +1120,52 @@ const App: React.FC = () => {
     week?: string,
     requireRegistered = false
   ) => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) {
-      return { success: false, message: 'Configuration error.' };
-    }
     checkAndClearForNewDay();
 
-    const normalizeRegName = (val: string) => val.trim().replace(/\s+/g, ' ').toUpperCase();
-    const normalizeRegId = (val: string) => val.trim().replace(/\s+/g, '').toUpperCase();
+    const targetWeek = week || selectedWeek || 'W1';
 
     if (requireRegistered) {
-      const matchedCourse = courseName
-        ? courses.find(c => c.courseName.trim().toUpperCase() === courseName.trim().toUpperCase())
-        : undefined;
-      let roster = (matchedCourse && Array.isArray(matchedCourse.students) && matchedCourse.students.length > 0)
-        ? matchedCourse.students
-        : knownStudents;
-      if (roster.length === 0) {
-        try {
-          if (courseName) {
-            const courseKey = toCourseKey(courseName);
-            const courseRosterRes = await fetch(buildDbUrl(`courses/${courseKey}/students`), { cache: 'no-store' });
-            if (courseRosterRes.ok) {
-              const remoteCourseRoster = await courseRosterRes.json();
-              if (Array.isArray(remoteCourseRoster) && remoteCourseRoster.length > 0) {
-                roster = remoteCourseRoster;
-                setKnownStudents(remoteCourseRoster);
-              }
-            }
-          }
-          if (roster.length === 0) {
-            const rosterRes = await fetch(buildDbUrl('app_config/known_students_v2'), { cache: 'no-store' });
-            if (rosterRes.ok) {
-              const remoteRoster = await rosterRes.json();
-              if (Array.isArray(remoteRoster) && remoteRoster.length > 0) {
-                roster = remoteRoster;
-                setKnownStudents(remoteRoster);
-              }
-            }
-          }
-        } catch { /* ignore */ }
+      if (status === 'P' && attendanceList.some(s => s.studentId === studentId && s.status === 'P')) {
+        return { success: false, message: 'Attendance already recorded for this student ID.' };
       }
-      const cleanSubmittedName = normalizeRegName(name);
-      const cleanSubmittedId = normalizeRegId(studentId);
-      const nameMatches = roster.filter(s => normalizeRegName(s.name) === cleanSubmittedName);
-      if (nameMatches.length === 0) {
-        return {
-          success: false,
-          message: 'Your name is not registered in the system. Please consult with your Lecturer.',
+      try {
+        const res = await fetch('/api/student/checkin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name,
+            studentId,
+            email,
+            status,
+            courseName,
+            courseId: courseIdParam || '',
+            week: targetWeek,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data?.success) {
+          return { success: false, message: data?.message || 'Submission failed.' };
+        }
+        const savedRecord: Student = data.record || {
+          name,
+          studentId,
+          email,
+          status,
+          timestamp: overrideTimestamp || Date.now(),
+          courseName,
+          week: targetWeek,
         };
-      }
-      if (!nameMatches.some(s => normalizeRegId(s.id) === cleanSubmittedId)) {
-        return {
-          success: false,
-          message: 'Warning: Student ID does not match the registered student name.',
-        };
+        setAttendanceList(prev => [{ ...savedRecord }, ...prev.filter(s => s.studentId !== studentId)]);
+        setTeacherHistory(prev =>
+          [savedRecord, ...prev.filter(t => !(t.studentId === savedRecord.studentId && t.timestamp === savedRecord.timestamp))].slice(0, 200)
+        );
+        if (integrationType === 'airtable') {
+          await syncToAirtable({ [studentId]: savedRecord });
+        }
+        localStorage.setItem(LAST_SCAN_DATE_KEY, new Date().toISOString().slice(0, 10));
+        return { success: true, message: data.message || 'Record submitted successfully.' };
+      } catch {
+        return { success: false, message: 'Connection lost. Please try again.' };
       }
     }
 
@@ -1608,80 +1174,69 @@ const App: React.FC = () => {
     }
 
     try {
-      const path = courseName ? `${SESSION_ID}_${sanitize(courseName)}` : SESSION_ID;
-      const checkRes = await fetch(buildDbUrl(`live_sessions/${path}/${studentId}`), { cache: 'no-store' });
-      const existingData = await checkRes.json();
-      if (existingData && existingData.status === 'P' && status === 'P') {
-        return { success: false, message: 'You have already checked in for this session.' };
+      const res = await apiFetch('/api/attendance/manual', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          studentId,
+          email,
+          status,
+          courseName,
+          overrideTimestamp,
+          absenceReason,
+          week: targetWeek,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        return { success: false, message: data?.message || 'Failed to record attendance.' };
       }
-    } catch { /* ignore */ }
+      const studentData: Student = data.record || {
+        name,
+        studentId,
+        email,
+        status,
+        timestamp: overrideTimestamp || Date.now(),
+        courseName,
+        absenceReason,
+        week: targetWeek,
+      };
+      setAttendanceList(prev => [{ ...studentData }, ...prev.filter(s => s.studentId !== studentId)]);
+      setTeacherHistory(prev =>
+        [studentData, ...prev.filter(t => !(t.studentId === studentData.studentId && t.timestamp === studentData.timestamp))].slice(0, 200)
+      );
 
-    const timestamp = overrideTimestamp || Date.now();
-    const targetWeek = week || selectedWeek || 'W1';
-    const studentData: Student = { name, studentId, email, status, timestamp, courseName, absenceReason, week: targetWeek };
-
-    setAttendanceList(prev => [{ ...studentData }, ...prev.filter(s => s.studentId !== studentId)]);
-    setTeacherHistory(prev => {
-      const next = [
-        studentData,
-        ...prev.filter(t => !(t.studentId === studentData.studentId && t.timestamp === studentData.timestamp)),
-      ].slice(0, 200);
-      syncHistoryToCloud(next);
-      return next;
-    });
-
-    try {
-      const path = courseName ? `${SESSION_ID}_${sanitize(courseName)}` : SESSION_ID;
-      const p1 = fetch(`${getBaseDbUrl()}/pending/${studentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
-        method: 'PUT',
-        body: JSON.stringify(studentData),
-      });
-      const p2 = fetch(`${getBaseDbUrl()}/live_sessions/${path}/${studentId}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
-        method: 'PUT',
-        body: JSON.stringify(studentData),
-      });
-      await Promise.all([p1, p2]);
-
-      if (integrationType === 'google_sheets' && scriptUrl) {
-        await fetch(scriptUrl, {
-          method: 'POST',
-          mode: 'no-cors',
-          body: JSON.stringify(formatCloudPayload(studentData)),
-        }).catch(err => console.warn('Deferred sync', err));
-      } else if (integrationType === 'airtable') {
+      if (integrationType === 'airtable') {
         await syncToAirtable({ [studentId]: studentData });
       }
-      if (!requireRegistered) {
-        const cleanId = studentId.trim().toUpperCase();
-        const cleanName = name.trim().toUpperCase();
-        const existingIdx = knownStudents.findIndex(s => s.id.trim().toUpperCase() === cleanId);
-        let nextKnown: PreRegisteredStudent[] | null = null;
-        if (existingIdx === -1) {
-          nextKnown = [...knownStudents, { id: cleanId, name: cleanName }];
-        } else if (knownStudents[existingIdx].name.trim().toUpperCase() !== cleanName) {
-          nextKnown = knownStudents.map((s, idx) => (idx === existingIdx ? { ...s, name: cleanName } : s));
-        }
-        if (nextKnown) {
-          setKnownStudents(nextKnown);
-          syncKnownStudentsToCloud(nextKnown, courseName);
-        }
+
+      const cleanId = studentId.trim().toUpperCase();
+      const cleanName = name.trim().toUpperCase();
+      const existingIdx = knownStudents.findIndex(s => s.id.trim().toUpperCase() === cleanId);
+      let nextKnown: PreRegisteredStudent[] | null = null;
+      if (existingIdx === -1) {
+        nextKnown = [...knownStudents, { id: cleanId, name: cleanName }];
+      } else if (knownStudents[existingIdx].name.trim().toUpperCase() !== cleanName) {
+        nextKnown = knownStudents.map((s, idx) => (idx === existingIdx ? { ...s, name: cleanName } : s));
       }
+      if (nextKnown) {
+        setKnownStudents(nextKnown);
+        syncKnownStudentsToCloud(nextKnown, courseName);
+      }
+
       localStorage.setItem(LAST_SCAN_DATE_KEY, new Date().toISOString().slice(0, 10));
-      return { success: true, message: 'Record submitted successfully.' };
+      return { success: true, message: data.message || 'Record submitted successfully.' };
     } catch {
       return { success: false, message: 'Connection lost. Please try again.' };
     }
   };
 
   const onRemoveStudents = async (ids: string[], courseName: string) => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
     setAttendanceList(prev => prev.filter(s => !ids.includes(s.studentId)));
     const now = Date.now();
-    const promises: Promise<unknown>[] = [];
-    const path = courseName ? `${SESSION_ID}_${sanitize(courseName)}` : SESSION_ID;
-    for (const id of ids) {
+    const removals: Student[] = ids.map(id => {
       const student = attendanceList.find(s => s.studentId === id) || knownStudents.find(k => k.id === id);
-      const removalData: Student = {
+      return {
         studentId: id,
         name: student?.name || 'Unknown',
         email: `${id}@student.edu.my`,
@@ -1691,119 +1246,134 @@ const App: React.FC = () => {
         absenceReason: 'Lecturer Override',
         week: selectedWeek || 'W1',
       };
-      promises.push(
-        fetch(`${getBaseDbUrl()}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(removalData) }),
-        fetch(`${getBaseDbUrl()}/live_sessions/${path}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'DELETE' })
-      );
+    });
 
-      if (integrationType === 'google_sheets' && scriptUrl) {
-        promises.push(fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(formatCloudPayload(removalData)) }));
-      } else if (integrationType === 'airtable') {
-        promises.push(syncToAirtable({ [id]: removalData }));
-      }
+    await apiFetch('/api/attendance/remove', {
+      method: 'POST',
+      body: JSON.stringify({ removals, courseName }),
+    }).catch(() => { /* ignore */ });
+
+    if (integrationType === 'airtable') {
+      const airtableMap: Record<string, Student> = {};
+      removals.forEach(r => { airtableMap[r.studentId] = r; });
+      await syncToAirtable(airtableMap);
     }
-    await Promise.all(promises);
   };
 
   const onBulkStatusUpdate = async (ids: string[], status: string, courseName: string, absenceReason?: string) => {
     setAttendanceList(prev => prev.map(s => (ids.includes(s.studentId) ? { ...s, status, absenceReason, week: selectedWeek } : s)));
     const now = Date.now();
+    const records: Student[] = [];
     const updatePayload: Record<string, Student> = {};
-    const path = courseName ? `${SESSION_ID}_${sanitize(courseName)}` : SESSION_ID;
-    const promises: Promise<Response>[] = [];
+
     for (const id of ids) {
       const student = attendanceList.find(s => s.studentId === id);
       if (student) {
-        const updateData: Student = { ...student, status, timestamp: now, courseName, absenceReason, week: selectedWeek || 'W1' };
+        const updateData: Student = {
+          ...student,
+          status,
+          timestamp: now,
+          courseName,
+          absenceReason,
+          week: selectedWeek || 'W1',
+        };
+        records.push(updateData);
         updatePayload[id] = updateData;
-        promises.push(
-          fetch(`${getBaseDbUrl()}/pending/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) }),
-          fetch(`${getBaseDbUrl()}/live_sessions/${path}/${id}.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(updateData) })
-        );
       }
     }
-    await Promise.all(promises);
-    if (integrationType === 'google_sheets' && scriptUrl && Object.keys(updatePayload).length > 0) {
-      const bulkPayload = Object.values(updatePayload).map(formatCloudPayload);
-      await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(bulkPayload) });
-    } else if (integrationType === 'airtable' && Object.keys(updatePayload).length > 0) {
-      await syncToAirtable(updatePayload);
+
+    if (records.length > 0) {
+      await apiFetch('/api/attendance/bulk', {
+        method: 'POST',
+        body: JSON.stringify({ records, courseName, week: selectedWeek || 'W1' }),
+      }).catch(() => { /* ignore */ });
+      if (integrationType === 'airtable') {
+        await syncToAirtable(updatePayload);
+      }
     }
   };
 
   const handleSendTestRecord = async (courseName: string): Promise<{ success: boolean; message: string }> => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return { success: false, message: 'Firebase URL missing.' };
-    const testRecord: Student = { name: 'CONNECTION TEST', studentId: 'TEST999', email: 'test@student.edu.my', status: 'P', timestamp: Date.now(), courseName: courseName || 'Connectivity Test', absenceReason: '', week: selectedWeek || 'W1' };
     try {
-      await fetch(`${getBaseDbUrl()}/pending/TEST999.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, { method: 'PUT', body: JSON.stringify(testRecord) });
-
-      if (integrationType === 'google_sheets' && scriptUrl) {
-        await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(formatCloudPayload(testRecord)) });
-      } else if (integrationType === 'airtable') {
+      const res = await apiFetch('/api/queue/test', {
+        method: 'POST',
+        body: JSON.stringify({
+          courseName: courseName || 'Connectivity Test',
+          week: selectedWeek || 'W1',
+        }),
+      });
+      const data = await res.json();
+      if (integrationType === 'airtable' && data?.success) {
+        const testRecord: Student = {
+          name: 'CONNECTION TEST',
+          studentId: 'TEST999',
+          email: 'test@student.edu.my',
+          status: 'P',
+          timestamp: Date.now(),
+          courseName: courseName || 'Connectivity Test',
+          absenceReason: '',
+          week: selectedWeek || 'W1',
+        };
         await syncToAirtable({ TEST999: testRecord });
       }
-
-      return { success: true, message: `Test signal sent to Cloud (${selectedWeek}).` };
+      return { success: Boolean(data?.success), message: data?.message || 'Cloud test failed.' };
     } catch {
       return { success: false, message: 'Cloud test failed.' };
     }
   };
 
   const handleCheckPendingRecords = async (): Promise<{ success: boolean; message: string; count: number }> => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return { success: false, message: 'Firebase URL missing.', count: 0 };
     try {
-      const res = await fetch(buildDbUrl('pending'), { cache: 'no-store' });
+      const res = await apiFetch('/api/queue', { cache: 'no-store' });
       const data = await res.json();
-      return { success: true, message: data ? `Queue length: ${Object.keys(data).length}` : 'Synchronization queue is empty.', count: data ? Object.keys(data).length : 0 };
+      return {
+        success: Boolean(data?.success),
+        message: data?.message || 'Status check failed.',
+        count: typeof data?.count === 'number' ? data.count : 0,
+      };
     } catch {
       return { success: false, message: 'Status check failed.', count: 0 };
     }
   };
 
   const handleClearPendingQueue = async (): Promise<{ success: boolean; message: string }> => {
-    if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return { success: false, message: 'Firebase URL missing.' };
     try {
-      const res = await fetch(`${getBaseDbUrl()}/pending.json?auth=${FIREBASE_CONFIG.DATABASE_SECRET}`, {
-        method: 'DELETE',
-      });
-      if (!res.ok) return { success: false, message: 'Failed to clear queue.' };
-      return { success: true, message: 'Queue cleared. Queue length: 0' };
+      const res = await apiFetch('/api/queue', { method: 'DELETE' });
+      const data = await res.json();
+      return { success: Boolean(data?.success), message: data?.message || 'Failed to clear queue.' };
     } catch {
       return { success: false, message: 'Failed to clear queue.' };
     }
   };
 
   const handleForceSync = async (): Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number }> => {
-    if (integrationType === 'firebase') {
-      return { success: true, message: 'Firebase syncs automatically.', syncedCount: 0, errorCount: 0, total: 0 };
-    }
-
-    if (integrationType === 'airtable') {
-      try {
-        const res = await fetch(buildDbUrl('pending'), { cache: 'no-store' });
-        const data = await res.json();
-        if (data) {
-          await syncToAirtable(data);
-          return { success: true, message: 'Synced pending records to Airtable.', syncedCount: Object.keys(data).length, errorCount: 0, total: Object.keys(data).length };
-        }
-        return { success: true, message: 'No pending records to sync.', syncedCount: 0, errorCount: 0, total: 0 };
-      } catch {
-        return { success: false, message: 'Airtable sync failed.', syncedCount: 0, errorCount: 0, total: 0 };
-      }
-    }
-
-    if (!scriptUrl) return { success: false, message: 'Script Endpoint missing.', syncedCount: 0, errorCount: 0, total: 0 };
     try {
-      const pendingRes = await fetch(buildDbUrl('pending'), { cache: 'no-store' });
-      const pendingData = pendingRes.ok ? await pendingRes.json() : null;
-      if (pendingData && Object.keys(pendingData).length > 0) {
-        const records = Object.values(pendingData) as Student[];
-        const bulkPayload = records.map(r => formatCloudPayload({ ...r, week: r.week || selectedWeek }));
-        await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify(bulkPayload) });
-        return { success: true, message: `Synced ${records.length} record(s) to ${selectedWeek}.`, syncedCount: records.length, errorCount: 0, total: records.length };
+      const res = await apiFetch('/api/queue/sync', {
+        method: 'POST',
+        body: JSON.stringify({ week: selectedWeek }),
+      });
+      const data = await res.json();
+      if (integrationType === 'airtable' && Array.isArray(data?.records) && data.records.length > 0) {
+        const map: Record<string, Student> = {};
+        for (const rec of data.records as Student[]) {
+          map[rec.studentId] = rec;
+        }
+        await syncToAirtable(map);
+        return {
+          success: true,
+          message: 'Synced pending records to Airtable.',
+          syncedCount: data.records.length,
+          errorCount: 0,
+          total: data.records.length,
+        };
       }
-      await fetch(scriptUrl, { method: 'POST', mode: 'no-cors', body: JSON.stringify({ action: 'SYNC_QUEUE', week: selectedWeek }) });
-      return { success: true, message: `Cloud sync triggered (${selectedWeek}).`, syncedCount: 0, errorCount: 0, total: 0 };
+      return {
+        success: Boolean(data?.success),
+        message: data?.message || 'Sync complete.',
+        syncedCount: data?.syncedCount || 0,
+        errorCount: data?.errorCount || 0,
+        total: data?.total || 0,
+      };
     } catch {
       return { success: false, message: 'Trigger failed.', syncedCount: 0, errorCount: 0, total: 0 };
     }
@@ -1840,9 +1410,11 @@ const App: React.FC = () => {
               onAddCourse={handleAddCourse}
               onDeleteCourse={handleDeleteCourse}
               onSyncSheetCourses={handleSyncSheetCourses}
+              onAssignCourseOwner={handleAssignCourseOwner}
               selectedWeek={selectedWeek}
               onWeekChange={handleWeekChange}
               currentAdminName={currentAdminName}
+              currentUserRole={currentUserRole}
               integrationType={integrationType}
               onIntegrationTypeChange={handleIntegrationTypeChange}
               teacherHistory={teacherHistory}
@@ -1852,6 +1424,7 @@ const App: React.FC = () => {
               adminSessions={adminSessions}
               adminNotifications={adminNotifications}
               adminEmail={adminEmail}
+              emailDelivery={emailDelivery}
               onAdminEmailChange={handleAdminEmailChange}
               onDeleteUser={handleDeleteUser}
               onActivateUser={handleActivateUser}
@@ -1868,6 +1441,7 @@ const App: React.FC = () => {
           <LoginView
             onLogin={handleLogin}
             onSignUp={handleSignUp}
+            onRequestAccountDeletion={handleRequestAccountDeletion}
             activationNotice={activationNotice}
             onDismissActivationNotice={() => setActivationNotice(null)}
           />

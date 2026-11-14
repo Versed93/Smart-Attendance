@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import type { Student, AppUser, AdminSessionActivity, AdminNotification, CourseProfile } from '../types';
+import type { Student, AppUser, AdminSessionActivity, AdminNotification, CourseProfile, EmailDeliveryStatus } from '../types';
 import type { PreRegisteredStudent } from '../studentList';
 import QRCode from 'qrcode';
 import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
@@ -45,12 +45,14 @@ interface TeacherViewProps {
   onCourseChange: (courseName: string) => void;
   courses?: CourseProfile[];
   onSelectCourse?: (course: CourseProfile) => void;
-  onAddCourse?: (courseName: string) => CourseProfile | null;
+  onAddCourse?: (courseName: string, initialStudents?: PreRegisteredStudent[]) => CourseProfile | null;
   onDeleteCourse?: (courseId: string) => Promise<void> | void;
   onSyncSheetCourses?: (sheetTabs: Array<{ sheetName: string; courseName: string; students: PreRegisteredStudent[] }>) => void;
+  onAssignCourseOwner?: (courseId: string, ownerId: string) => Promise<void> | void;
   selectedWeek?: string;
   onWeekChange?: (week: string) => void;
   currentAdminName?: string;
+  currentUserRole?: 'admin' | 'lecturer';
   integrationType?: 'google_sheets' | 'airtable' | 'firebase';
   onIntegrationTypeChange?: (type: 'google_sheets' | 'airtable' | 'firebase') => void;
   teacherHistory?: Student[];
@@ -60,6 +62,7 @@ interface TeacherViewProps {
   adminSessions?: AdminSessionActivity[];
   adminNotifications?: AdminNotification[];
   adminEmail?: string;
+  emailDelivery?: EmailDeliveryStatus;
   onAdminEmailChange?: (email: string) => void;
   onDeleteUser?: (userId: string) => Promise<void> | void;
   onActivateUser?: (userId: string) => Promise<void> | void;
@@ -98,9 +101,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onAddCourse,
   onDeleteCourse,
   onSyncSheetCourses,
+  onAssignCourseOwner,
   selectedWeek = 'W1',
   onWeekChange,
   currentAdminName = 'admin',
+  currentUserRole,
   integrationType = 'google_sheets',
   onIntegrationTypeChange,
   teacherHistory = [],
@@ -110,6 +115,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   adminSessions = [],
   adminNotifications = [],
   adminEmail = '',
+  emailDelivery,
   onAdminEmailChange,
   onDeleteUser,
   onActivateUser,
@@ -121,6 +127,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onClearNotifications,
   onSendTestAdminEmail,
 }) => {
+  const isAdmin = currentUserRole === 'admin' || currentAdminName?.toLowerCase() === 'admin';
   const [baseUrl] = useState<string>(() => window.location.origin + window.location.pathname);
   const [qrData, setQrData] = useState<string>('');
   const courseName = propCourseName ?? '';
@@ -171,6 +178,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [sheetReadError, setSheetReadError] = useState<string | null>(null);
   const [showAddCourseModal, setShowAddCourseModal] = useState(false);
   const [newCourseNameInput, setNewCourseNameInput] = useState('');
+  const [newCourseStudents, setNewCourseStudents] = useState<PreRegisteredStudent[]>([]);
+  const [newCourseUploadFileName, setNewCourseUploadFileName] = useState('');
+  const [newCourseUploadError, setNewCourseUploadError] = useState<string | null>(null);
   const [subjectFilter, setSubjectFilter] = useState('');
   const [historyScope, setHistoryScope] = useState<'course' | 'all'>('course');
   const [pendingDeleteAction, setPendingDeleteAction] = useState<
@@ -183,6 +193,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     | null
   >(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const addCourseFileInputRef = useRef<HTMLInputElement>(null);
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const lastConfigRef = useRef('');
@@ -215,7 +226,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const applySheetResponse = (
       data: { courseName?: unknown; students?: unknown; sheets?: Array<{ sheetName?: string; courseName?: string; students?: unknown }> },
       preferredCourse: string,
-      replaceCourseIfPresent: boolean
+      replaceCourseIfPresent: boolean,
+      syncAllTabs = false
   ) => {
       const sheets = Array.isArray(data.sheets)
           ? data.sheets
@@ -228,7 +240,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           : [];
 
       const validCourseSheets = sheets.filter((s) => s.courseName);
-      if (validCourseSheets.length > 0) {
+      if (syncAllTabs && validCourseSheets.length > 0) {
           onSyncSheetCourses?.(validCourseSheets);
       }
 
@@ -236,7 +248,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       const resolvedCourse = String(data.courseName || firstNonEmpty || '').trim();
       const activeTarget = (replaceCourseIfPresent ? resolvedCourse : (preferredCourse || resolvedCourse)).trim();
 
-      if (resolvedCourse) {
+      if (resolvedCourse && syncAllTabs) {
           if (replaceCourseIfPresent) {
               setCourseName(resolvedCourse);
           } else {
@@ -291,7 +303,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           }
           const data = JSON.parse(rawText);
           if (data && data.success) {
-              const { resolvedCourse, studentCount, tabCount } = applySheetResponse(data, courseName, !courseName.trim());
+              const { resolvedCourse, studentCount, tabCount } = applySheetResponse(data, courseName, !courseName.trim(), manual);
               if (resolvedCourse || studentCount > 0 || tabCount > 0) {
                   setSheetReadError(null);
                   if (manual) {
@@ -347,7 +359,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               const data = JSON.parse(rawText);
               if (cancelled || !data?.success) return;
               setSheetReadError(null);
-              applySheetResponse(data, courseName, false);
+              applySheetResponse(data, courseName, false, false);
           } catch {
               if (!cancelled) {
                   setSheetReadError('Could not connect to Apps Script URL. Check Settings → Apps Script URL.');
@@ -375,7 +387,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   useEffect(() => {
     const updateQR = () => {
         let params = `t=${Date.now()}&w=${encodeURIComponent(selectedWeek)}`;
-        if (courseName) params += `&c=${encodeURIComponent(courseName)}`;
+        if (courseName) {
+          params += `&c=${encodeURIComponent(courseName)}`;
+          const matchedCourse = courses.find(c => c.courseName.trim().toUpperCase() === courseName.trim().toUpperCase());
+          if (matchedCourse?.id) params += `&cid=${encodeURIComponent(matchedCourse.id)}`;
+        }
         if (isOfflineMode) params += `&offline=true`;
         if (isGeoEnabled && teacherLocation) params += `&lat=${teacherLocation.lat.toFixed(6)}&lng=${teacherLocation.lng.toFixed(6)}&rad=150`;
         
@@ -391,7 +407,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     updateQR();
     const interval = setInterval(updateQR, 1000);
     return () => clearInterval(interval);
-  }, [baseUrl, courseName, selectedWeek, isGeoEnabled, teacherLocation, isOfflineMode]);
+  }, [baseUrl, courseName, courses, selectedWeek, isGeoEnabled, teacherLocation, isOfflineMode]);
 
   useEffect(() => {
     if (canvasRef.current && qrData) {
@@ -583,6 +599,98 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       }
   };
 
+  const parseStudentCsvText = (rawText: string): PreRegisteredStudent[] => {
+    const cleanText = rawText.replace(/^\uFEFF/, '');
+    const lines = cleanText.split(/\r?\n/).filter(line => line.trim() !== '');
+    if (lines.length === 0) return [];
+
+    const parseCsvLine = (line: string, delimiter: string = ',') => {
+      const parts: string[] = [];
+      let current = '';
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (current === '' && char === ' ' && !inQuotes) continue;
+        if (char === '"' && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === delimiter && !inQuotes) {
+          parts.push(current.trim());
+          current = '';
+        } else {
+          current += char;
+        }
+      }
+      parts.push(current.trim());
+      return parts;
+    };
+
+    const headerLine = lines[0].toLowerCase();
+    const delimiter = headerLine.includes('\t') ? '\t' : (headerLine.includes(';') ? ';' : ',');
+    const headerParts = parseCsvLine(headerLine, delimiter);
+
+    let idIndex = headerParts.findIndex(h => h === 'id' || h === 'student id' || h === 'studentid' || h === 'matrik' || h === 'matric');
+    if (idIndex === -1) {
+      idIndex = headerParts.findIndex(h => h.includes('id') || h.includes('matrik') || h.includes('matric'));
+    }
+    if (idIndex === -1) {
+      idIndex = headerParts.findIndex(h => h.includes('number') || h.includes('no.'));
+    }
+
+    let nameIndex = headerParts.findIndex(h => h === 'name' || h === 'student name' || h === 'nama');
+    if (nameIndex === -1) {
+      nameIndex = headerParts.findIndex(h => h.includes('name') || h.includes('nama') || h.includes('student'));
+    }
+
+    if (idIndex === -1 && nameIndex === -1) {
+      const isFirstColSerial = lines.slice(0, 3).every(l => {
+        const p = parseCsvLine(l, delimiter);
+        return p.length > 0 && !isNaN(Number(p[0])) && p[0].length < 4;
+      });
+
+      if (isFirstColSerial && headerParts.length >= 3) {
+        idIndex = 1;
+        nameIndex = 2;
+      } else if (headerParts.length >= 2) {
+        const isCol1Number = !isNaN(Number(headerParts[1])) || /^[a-z0-9]+$/.test(headerParts[1].replace(/\s/g, ''));
+        const isCol0Name = isNaN(Number(headerParts[0])) && headerParts[0].length > 4;
+
+        if (isCol1Number && isCol0Name) {
+          idIndex = 1;
+          nameIndex = 0;
+        } else {
+          idIndex = 0;
+          nameIndex = 1;
+        }
+      } else {
+        idIndex = 0;
+        nameIndex = 1;
+      }
+    } else {
+      if (idIndex === -1) idIndex = 0;
+      if (nameIndex === -1) nameIndex = 1;
+    }
+
+    const deduped = new Map<string, PreRegisteredStudent>();
+    const hasHeaders = headerParts.some(h => h.includes('id') || h.includes('name') || h.includes('matrik'));
+    const startIndex = hasHeaders ? 1 : 0;
+
+    for (let i = startIndex; i < lines.length; i++) {
+      const parts = parseCsvLine(lines[i], delimiter);
+      if (parts.length > Math.max(idIndex, nameIndex)) {
+        const id = parts[idIndex].trim().toUpperCase();
+        const name = parts[nameIndex].trim().toUpperCase();
+        if (id && name && id.length > 1 && id !== 'ID' && id !== 'STUDENT ID' && id !== 'STUDENTID' && id !== 'MATRIK' && id !== 'MATRIC' && id !== 'NO.') {
+          deduped.set(id, { id, name });
+        }
+      }
+    }
+
+    return Array.from(deduped.values());
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -592,100 +700,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       const text = event.target?.result as string;
       if (!text) return;
 
-      const lines = text.split(/\r?\n/).filter(line => line.trim() !== '');
-      if (lines.length === 0) return;
-
-      // Function to split CSV line handling quotes
-      const parseCsvLine = (line: string, delimiter: string = ',') => {
-          const parts = [];
-          let current = '';
-          let inQuotes = false;
-          for (let i = 0; i < line.length; i++) {
-              const char = line[i];
-              if (current === '' && char === ' ' && !inQuotes) continue; // skip leading spaces
-              if (char === '"' && line[i+1] === '"') {
-                  current += '"';
-                  i++; // skip escaped quote
-              } else if (char === '"') {
-                  inQuotes = !inQuotes;
-              } else if (char === delimiter && !inQuotes) {
-                  parts.push(current.trim());
-                  current = '';
-              } else {
-                  current += char;
-              }
-          }
-          parts.push(current.trim());
-          return parts;
-      };
-
-      // Try to find headers
-      const headerLine = lines[0].toLowerCase();
-      const delimiter = headerLine.includes('\t') ? '\t' : (headerLine.includes(';') ? ';' : ',');
-      const headerParts = parseCsvLine(headerLine, delimiter);
-      
-      let idIndex = headerParts.findIndex(h => h === 'id' || h === 'student id' || h === 'matrik' || h === 'matric');
-      if (idIndex === -1) {
-          idIndex = headerParts.findIndex(h => h.includes('id') || h.includes('matrik') || h.includes('matric'));
-      }
-      if (idIndex === -1) {
-          idIndex = headerParts.findIndex(h => h.includes('number') || h.includes('no.'));
-      }
-
-      let nameIndex = headerParts.findIndex(h => h === 'name' || h === 'student name' || h === 'nama');
-      if (nameIndex === -1) {
-          nameIndex = headerParts.findIndex(h => h.includes('name') || h.includes('nama') || h.includes('student'));
-      }
-
-      // Fallback to 0 and 1 if headers not found or ambiguous
-      if (idIndex === -1 && nameIndex === -1) {
-          const isFirstColSerial = lines.slice(0, 3).every(l => {
-              const p = parseCsvLine(l, delimiter);
-              return p.length > 0 && !isNaN(Number(p[0])) && p[0].length < 4;
-          });
-          
-          if (isFirstColSerial && headerParts.length >= 3) {
-              idIndex = 1;
-              nameIndex = 2;
-          } else if (headerParts.length >= 2) {
-              // Guess based on content: if col 1 is a number and col 0 is not
-              const isCol1Number = !isNaN(Number(headerParts[1])) || /^[a-z0-9]+$/.test(headerParts[1].replace(/\s/g, ''));
-              const isCol0Name = isNaN(Number(headerParts[0])) && headerParts[0].length > 4;
-              
-              if (isCol1Number && isCol0Name) {
-                  idIndex = 1;
-                  nameIndex = 0;
-              } else {
-                  idIndex = 0;
-                  nameIndex = 1;
-              }
-          } else {
-              idIndex = 0;
-              nameIndex = 1;
-          }
-      } else {
-          if (idIndex === -1) idIndex = 0;
-          if (nameIndex === -1) nameIndex = 1;
-      }
-
-      const newStudents: PreRegisteredStudent[] = [];
-      
-      // Start from index 1 if we found headers, otherwise 0
-      const hasHeaders = headerParts.some(h => h.includes('id') || h.includes('name') || h.includes('matrik'));
-      const startIndex = hasHeaders ? 1 : 0;
-
-      for (let i = startIndex; i < lines.length; i++) {
-        const parts = parseCsvLine(lines[i], delimiter);
-        if (parts.length > Math.max(idIndex, nameIndex)) {
-           const id = parts[idIndex].toUpperCase();
-           const name = parts[nameIndex].toUpperCase();
-           // Basic validation
-           if (id && name && id.length > 1 && id !== 'ID' && id !== 'STUDENT ID' && id !== 'MATRIK' && id !== 'MATRIC' && id !== 'NO.') {
-               newStudents.push({ id, name });
-           }
-        }
-      }
-
+      const newStudents = parseStudentCsvText(text);
       if (newStudents.length > 0) {
         const mergedMap = new Map<string, PreRegisteredStudent>();
         knownStudents.forEach(s => mergedMap.set(s.id, s));
@@ -695,10 +710,44 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       } else {
         showToast('error', 'No valid student records found. Check CSV columns.');
       }
-      
+
       if (fileInputRef.current) fileInputRef.current.value = '';
     };
     reader.readAsText(file);
+  };
+
+  const handleAddCourseFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const text = event.target?.result as string;
+      if (!text) return;
+
+      const parsed = parseStudentCsvText(text);
+      if (parsed.length > 0) {
+        setNewCourseStudents(parsed);
+        setNewCourseUploadFileName(file.name);
+        setNewCourseUploadError(null);
+      } else {
+        setNewCourseStudents([]);
+        setNewCourseUploadFileName('');
+        setNewCourseUploadError('No valid student records found. Make sure your CSV follows StudentID, Name columns.');
+      }
+
+      if (addCourseFileInputRef.current) addCourseFileInputRef.current.value = '';
+    };
+    reader.readAsText(file);
+  };
+
+  const closeAddCourseModal = () => {
+    setShowAddCourseModal(false);
+    setNewCourseNameInput('');
+    setNewCourseStudents([]);
+    setNewCourseUploadFileName('');
+    setNewCourseUploadError(null);
+    if (addCourseFileInputRef.current) addCourseFileInputRef.current.value = '';
   };
 
   const submitManualAdd = async () => {
@@ -984,7 +1033,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           </div>
        </div>
 
-       {currentAdminName?.toLowerCase() === 'admin' && (() => {
+       {isAdmin && (() => {
          const nowMs = currentTime.getTime();
          const ONLINE_THRESHOLD_MS = 90 * 1000;
          const onlineSessions = adminSessions.filter(
@@ -1293,6 +1342,28 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         </button>
                       </div>
                     </div>
+                    {emailDelivery && (
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-1 text-[11px] font-bold text-gray-500">
+                        <span>Delivery Channel:</span>
+                        <span className={emailDelivery.configured ? 'text-emerald-700' : 'text-amber-700'}>
+                          {emailDelivery.label}
+                        </span>
+                        {emailDelivery.fromAddress && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="text-gray-400">From: {emailDelivery.fromAddress}</span>
+                          </>
+                        )}
+                        {!emailDelivery.configured && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="text-gray-400 font-medium">
+                              Set RESEND_API_KEY or SMTP_* env vars, or deploy Apps Script /exec
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    )}
                     {adminEmailTestStatus && (
                       <div
                         className={`text-[11px] font-bold px-3 py-2 rounded-xl border ${
@@ -1350,15 +1421,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                               {!notif.read && <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>}
                               <span className="font-bold text-xs text-gray-900">{notif.message}</span>
                             </div>
-                            <div className="flex items-center gap-2 mt-1 flex-wrap">
+                            <div className="flex items-center gap-2 mt-1 flex-wrap text-[10px] font-bold">
                               <span
-                                className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${
-                                  notif.emailSent ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-800'
-                                }`}
+                                className={notif.emailSent ? 'text-emerald-700' : 'text-amber-700'}
                               >
-                                {notif.emailSent ? 'Activation Email Sent' : 'Manual Link / Re-deploy Script Needed'}
+                                {notif.emailSent ? 'Activation Email Sent' : 'Manual Link / Configure Email Provider'}
                               </span>
-                              <span className="text-[10px] font-bold text-gray-400">
+                              <span className="text-gray-300" aria-hidden="true">·</span>
+                              <span className="text-gray-400 tabular-nums">
                                 {new Date(notif.createdAt).toLocaleString()}
                               </span>
                             </div>
@@ -1460,56 +1530,100 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 return (
                   <div
                     key={c.id}
-                    className={`group flex items-center justify-between gap-2 rounded-2xl border transition-all duration-150 ${
+                    className={`group flex flex-col justify-between rounded-2xl border transition-all duration-150 ${
                       isActive
                         ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
                         : 'bg-gray-50/70 text-gray-900 border-gray-200/80 hover:bg-white hover:border-gray-300'
                     }`}
                   >
-                    <button
-                      type="button"
-                      onClick={() => onSelectCourse?.(c)}
-                      className="flex-1 min-w-0 text-left px-3.5 py-2.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 rounded-l-2xl"
-                      title={c.courseName}
-                    >
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-bold tracking-tight truncate">
-                          {c.courseName}
-                        </span>
-                      </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <button
+                        type="button"
+                        onClick={() => onSelectCourse?.(c)}
+                        className="flex-1 min-w-0 text-left px-3.5 py-2.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 rounded-l-2xl"
+                        title={c.courseName}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-xs font-bold tracking-tight truncate">
+                            {c.courseName}
+                          </span>
+                        </div>
+                        <div
+                          className={`flex items-center gap-1.5 mt-1 text-[11px] font-medium tabular-nums truncate ${
+                            isActive ? 'text-indigo-100' : 'text-gray-500'
+                          }`}
+                        >
+                          <span>{weekLabel}</span>
+                          <span aria-hidden="true">·</span>
+                          <span>
+                            {studentCount > 0
+                              ? `${studentCount} ${studentCount === 1 ? 'student' : 'students'}`
+                              : 'No roster'}
+                          </span>
+                          {isAdmin && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="truncate">{c.createdBy || 'admin'}</span>
+                            </>
+                          )}
+                          {isActive && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="font-semibold text-white">Active</span>
+                            </>
+                          )}
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPendingDeleteAction({ type: 'delete-course', id: c.id, courseName: c.courseName })}
+                        className={`mr-2 w-8 h-8 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
+                          isActive
+                            ? 'text-indigo-200 hover:text-white hover:bg-white/15'
+                            : 'text-gray-400 hover:text-red-600 hover:bg-red-50'
+                        }`}
+                        title={`Remove ${c.courseName}`}
+                        aria-label={`Remove ${c.courseName}`}
+                      >
+                        <XMarkIcon className="w-4 h-4" />
+                      </button>
+                    </div>
+                    {isAdmin && onAssignCourseOwner && registeredUsers.length > 0 && (
                       <div
-                        className={`flex items-center gap-1.5 mt-1 text-[11px] font-medium tabular-nums truncate ${
-                          isActive ? 'text-indigo-100' : 'text-gray-500'
+                        className={`px-3.5 pb-2.5 pt-1 border-t flex items-center justify-between gap-2 ${
+                          isActive ? 'border-white/15' : 'border-gray-200/70'
                         }`}
                       >
-                        <span>{weekLabel}</span>
-                        <span aria-hidden="true">·</span>
-                        <span>
-                          {studentCount > 0
-                            ? `${studentCount} ${studentCount === 1 ? 'student' : 'students'}`
-                            : 'No roster'}
+                        <span className={`text-[10px] font-semibold shrink-0 ${isActive ? 'text-indigo-100' : 'text-gray-400'}`}>
+                          Owner
                         </span>
-                        {isActive && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <span className="font-semibold text-white">Active</span>
-                          </>
-                        )}
+                        <select
+                          aria-label={`Assign owner for ${c.courseName}`}
+                          value={c.ownerId || ''}
+                          onChange={(e) => {
+                            if (e.target.value) {
+                              void onAssignCourseOwner(c.id, e.target.value);
+                            }
+                          }}
+                          className={`text-[11px] font-semibold rounded-lg px-2 py-1 outline-none max-w-[140px] truncate cursor-pointer ${
+                            isActive
+                              ? 'bg-white/15 text-white border border-white/20'
+                              : 'bg-white text-gray-700 border border-gray-200'
+                          }`}
+                        >
+                          <option value="" className="text-gray-900">
+                            {c.createdBy || 'Unassigned'}
+                          </option>
+                          {registeredUsers
+                            .filter((u) => u.status === 'active')
+                            .map((u) => (
+                              <option key={u.id} value={u.id} className="text-gray-900">
+                                {u.username}{u.role === 'admin' ? ' (Admin)' : ''}
+                              </option>
+                            ))}
+                        </select>
                       </div>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setPendingDeleteAction({ type: 'delete-course', id: c.id, courseName: c.courseName })}
-                      className={`mr-2 w-8 h-8 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
-                        isActive
-                          ? 'text-indigo-200 hover:text-white hover:bg-white/15'
-                          : 'text-gray-400 hover:text-red-600 hover:bg-red-50'
-                      }`}
-                      title={`Remove ${c.courseName}`}
-                      aria-label={`Remove ${c.courseName}`}
-                    >
-                      <XMarkIcon className="w-4 h-4" />
-                    </button>
+                    )}
                   </div>
                 );
               })}
@@ -1817,6 +1931,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             selectedWeek={selectedWeek}
                             integrationType={integrationType}
                             onIntegrationTypeChange={onIntegrationTypeChange}
+                            isAdmin={isAdmin}
                         />
                     </div>
                     <div className="space-y-4">
@@ -2328,10 +2443,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
       {showAddCourseModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[220] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
-          <div className="bg-white w-full max-w-md rounded-3xl sm:rounded-[2.5rem] shadow-2xl p-6 sm:p-8 relative border-t-8 border-indigo-600 animate-in zoom-in duration-200">
+          <div className="bg-white w-full max-w-lg rounded-3xl sm:rounded-[2.5rem] shadow-2xl p-6 sm:p-8 relative border-t-8 border-indigo-600 animate-in zoom-in duration-200 max-h-[90vh] overflow-y-auto custom-scrollbar">
             <button
               type="button"
-              onClick={() => setShowAddCourseModal(false)}
+              onClick={closeAddCourseModal}
               className="absolute top-6 right-6 text-gray-300 hover:text-gray-900 transition-all active:scale-90"
             >
               <XCircleIcon className="w-7 h-7" />
@@ -2345,10 +2460,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 e.preventDefault();
                 const clean = newCourseNameInput.trim();
                 if (!clean) return;
-                onAddCourse?.(clean);
-                setShowAddCourseModal(false);
-                setNewCourseNameInput('');
-                showToast('success', `Switched to "${clean}"`);
+                const count = newCourseStudents.length;
+                onAddCourse?.(clean, newCourseStudents);
+                closeAddCourseModal();
+                showToast(
+                  'success',
+                  count > 0
+                    ? `Created "${clean}" with ${count} registered student${count === 1 ? '' : 's'}.`
+                    : `Switched to "${clean}"`
+                );
               }}
               className="space-y-4"
             >
@@ -2366,10 +2486,90 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   required
                 />
               </div>
+
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                  <div>
+                    <span className="block text-xs font-bold text-gray-800">Upload Student List (Optional)</span>
+                    <span className="block text-[10px] font-bold text-gray-400 uppercase tracking-wide">
+                      CSV Format: StudentID, Name
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <button
+                      type="button"
+                      onClick={handleDownloadTemplate}
+                      className="flex items-center gap-1.5 bg-white text-gray-600 text-[10px] font-bold px-3 py-2 rounded-xl hover:shadow-sm transition-all active:scale-95 uppercase border border-gray-200 whitespace-nowrap"
+                    >
+                      <ArrowDownTrayIcon className="w-3.5 h-3.5" />
+                      Template
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addCourseFileInputRef.current?.click()}
+                      className="flex items-center gap-1.5 bg-white text-indigo-600 text-[10px] font-bold px-3 py-2 rounded-xl hover:shadow-sm transition-all active:scale-95 uppercase border border-indigo-200 whitespace-nowrap"
+                    >
+                      <ArrowDownTrayIcon className="w-3.5 h-3.5 rotate-180" />
+                      Upload CSV
+                    </button>
+                  </div>
+                  <input
+                    type="file"
+                    ref={addCourseFileInputRef}
+                    onChange={handleAddCourseFileUpload}
+                    accept=".csv"
+                    className="hidden"
+                  />
+                </div>
+
+                {newCourseUploadError && (
+                  <p className="text-[11px] font-bold text-red-600 bg-red-50 border border-red-200 rounded-xl px-3 py-2">
+                    {newCourseUploadError}
+                  </p>
+                )}
+
+                {newCourseStudents.length > 0 && (
+                  <div className="bg-white border border-emerald-200 rounded-xl p-3 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0 text-[11px] font-bold text-emerald-700 truncate">
+                        <span>{newCourseUploadFileName || 'Roster CSV'}</span>
+                        <span className="mx-1.5 text-emerald-400" aria-hidden="true">·</span>
+                        <span className="tabular-nums">{newCourseStudents.length} student{newCourseStudents.length === 1 ? '' : 's'} ready</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setNewCourseStudents([]);
+                          setNewCourseUploadFileName('');
+                          setNewCourseUploadError(null);
+                          if (addCourseFileInputRef.current) addCourseFileInputRef.current.value = '';
+                        }}
+                        className="text-[10px] font-bold text-gray-500 hover:text-red-600 uppercase shrink-0"
+                      >
+                        Clear
+                      </button>
+                    </div>
+                    <div className="divide-y divide-gray-100 text-[11px] text-gray-600 max-h-28 overflow-y-auto custom-scrollbar">
+                      {newCourseStudents.slice(0, 5).map((s) => (
+                        <div key={s.id} className="py-1 flex items-center justify-between gap-3">
+                          <span className="font-bold text-gray-800 truncate">{s.name}</span>
+                          <span className="font-mono text-[10px] text-gray-400 shrink-0 tabular-nums">{s.id}</span>
+                        </div>
+                      ))}
+                      {newCourseStudents.length > 5 && (
+                        <div className="pt-1.5 text-[10px] font-bold text-gray-400 tabular-nums">
+                          +{newCourseStudents.length - 5} more student{newCourseStudents.length - 5 === 1 ? '' : 's'}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
               <div className="flex gap-3 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowAddCourseModal(false)}
+                  onClick={closeAddCourseModal}
                   className="flex-1 px-4 py-3.5 font-bold text-gray-500 bg-gray-100 rounded-2xl hover:bg-gray-200 transition-all uppercase text-[10px] tracking-widest"
                 >
                   Cancel
@@ -2378,7 +2578,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   type="submit"
                   className="flex-1 px-4 py-3.5 font-bold text-white bg-indigo-600 rounded-2xl hover:bg-indigo-700 transition-all uppercase text-[10px] tracking-widest shadow-lg shadow-indigo-100"
                 >
-                  Add &amp; Open Tab
+                  Add
                 </button>
               </div>
             </form>

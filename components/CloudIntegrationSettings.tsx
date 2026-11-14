@@ -11,6 +11,7 @@ interface CloudIntegrationSettingsProps {
   selectedWeek?: string;
   integrationType?: 'google_sheets' | 'airtable' | 'firebase';
   onIntegrationTypeChange?: (type: 'google_sheets' | 'airtable' | 'firebase') => void;
+  isAdmin?: boolean;
 }
 
 export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> = ({ 
@@ -23,6 +24,7 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
   selectedWeek = 'W1',
   integrationType: propIntegrationType,
   onIntegrationTypeChange,
+  isAdmin = true,
 }) => {
   const [localIntegrationType, setLocalIntegrationType] = useState<'google_sheets' | 'airtable' | 'firebase'>(() => {
       return (localStorage.getItem('attendance-integration-type') as 'google_sheets' | 'airtable' | 'firebase') || 'google_sheets';
@@ -357,27 +359,38 @@ function authorizeMail() {
           <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2 ml-1">Destination Type</label>
           <div className="flex bg-gray-50 p-1 rounded-xl">
               <button 
-                  onClick={() => setIntegrationType('google_sheets')}
-                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${integrationType === 'google_sheets' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                  type="button"
+                  disabled={!isAdmin}
+                  onClick={() => isAdmin && setIntegrationType('google_sheets')}
+                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all disabled:cursor-not-allowed ${integrationType === 'google_sheets' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
               >
                   Google Sheets
               </button>
               <button 
-                  onClick={() => setIntegrationType('airtable')}
-                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${integrationType === 'airtable' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                  type="button"
+                  disabled={!isAdmin}
+                  onClick={() => isAdmin && setIntegrationType('airtable')}
+                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all disabled:cursor-not-allowed ${integrationType === 'airtable' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
               >
                   Airtable
               </button>
               <button 
-                  onClick={() => setIntegrationType('firebase')}
-                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all ${integrationType === 'firebase' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                  type="button"
+                  disabled={!isAdmin}
+                  onClick={() => isAdmin && setIntegrationType('firebase')}
+                  className={`flex-1 py-2 text-[10px] font-bold uppercase tracking-widest rounded-lg transition-all disabled:cursor-not-allowed ${integrationType === 'firebase' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
               >
                   Firebase
               </button>
           </div>
+          {!isAdmin && (
+            <p className="mt-2 text-[10px] font-bold text-gray-500">
+              Global destination &amp; script settings are managed by the Administrator.
+            </p>
+          )}
       </div>
 
-      {integrationType === 'google_sheets' && (
+      {integrationType === 'google_sheets' && isAdmin && (
           <div className="space-y-4 animate-in fade-in">
               <div className="flex justify-between items-center">
                   <h4 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Apps Script Code</h4>
@@ -475,9 +488,11 @@ function authorizeMail() {
           </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 border-t border-gray-50">
+      <div className={`grid ${isAdmin ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-3'} gap-3 pt-4 border-t border-gray-50`}>
         <button type="button" onClick={async () => { setStatus('Checking...'); const r = await onCheckPendingRecords(); setStatus(r.message); }} className="bg-gray-100 text-gray-800 font-bold py-3 rounded-xl text-[10px] hover:bg-gray-200 uppercase tracking-widest active:scale-95 transition-all">Check Queue</button>
-        <button type="button" onClick={async () => { setStatus('Clearing...'); const r = await onClearPendingQueue(); setStatus(r.message); }} className="bg-red-50 text-red-600 border border-red-100 font-bold py-3 rounded-xl text-[10px] hover:bg-red-100 uppercase tracking-widest active:scale-95 transition-all">Clear Queue</button>
+        {isAdmin && (
+          <button type="button" onClick={async () => { setStatus('Clearing...'); const r = await onClearPendingQueue(); setStatus(r.message); }} className="bg-red-50 text-red-600 border border-red-100 font-bold py-3 rounded-xl text-[10px] hover:bg-red-100 uppercase tracking-widest active:scale-95 transition-all">Clear Queue</button>
+        )}
         <button type="button" onClick={async () => { setStatus('Syncing...'); const r = await onForceSync(); setStatus(r.message || 'Sync Complete'); }} className="bg-gray-100 text-gray-800 font-bold py-3 rounded-xl text-[10px] hover:bg-gray-200 uppercase tracking-widest active:scale-95 transition-all">Force Sync</button>
         <button type="button" onClick={async () => { setStatus('Testing...'); const r = await onSendTestRecord(); setStatus(r.message); }} className="bg-gray-900 text-white font-bold py-3 rounded-xl text-[10px] hover:bg-black uppercase tracking-widest active:scale-95 transition-all">Test Sync</button>
       </div>
