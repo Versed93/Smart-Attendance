@@ -315,6 +315,28 @@ function formatCloudPayload(r: Student, fallbackWeek = 'W1') {
   };
 }
 
+async function upsertAttendanceHistory(incoming: Student[]): Promise<void> {
+  if (!Array.isArray(incoming) || incoming.length === 0) return;
+  const histRaw = await fbGet<Student[] | Record<string, Student>>('attendance_history');
+  const prevHist: Student[] = Array.isArray(histRaw)
+    ? histRaw.filter((h) => Boolean(h && h.studentId && h.timestamp))
+    : histRaw && typeof histRaw === 'object'
+      ? Object.values(histRaw).filter((h) => Boolean(h && h.studentId && h.timestamp))
+      : [];
+
+  const deduped = new Map<string, Student>();
+  for (const rec of [...incoming, ...prevHist]) {
+    if (!rec || !rec.studentId || !rec.timestamp) continue;
+    const key = `${rec.studentId.trim().toUpperCase()}__${rec.timestamp}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, rec);
+    }
+  }
+
+  const nextHist = Array.from(deduped.values()).sort((a, b) => b.timestamp - a.timestamp);
+  await fbPut('attendance_history', nextHist).catch(() => { /* ignore */ });
+}
+
 async function postToGoogleScript(scriptUrl: string, bodyPayload: unknown): Promise<{ ok: boolean; json?: Record<string, unknown> }> {
   const cleanUrl = scriptUrl.trim();
   if (!cleanUrl || !cleanUrl.startsWith('https://script.google.com/') || cleanUrl.endsWith('/dev')) {
@@ -726,7 +748,7 @@ async function resolveRosterForCourse(params: {
 
 async function startServer() {
   const app = express();
-  app.use(express.json({ limit: '2mb' }));
+  app.use(express.json({ limit: '5mb' }));
 
   // Ensure admin record exists with hashed password
   void ensureAdminUserExists().catch((err: unknown) => {
@@ -1124,7 +1146,7 @@ async function startServer() {
 
       const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
       const existingData = await fbGet<Student>(`live_sessions/${sessionPath}/${studentId}`);
-      if (existingData && existingData.status === 'P' && status === 'P') {
+      if (existingData && existingData.status === 'P' && status === 'P' && (existingData.week || 'W1').trim().toUpperCase() === week) {
         res.status(409).json({ success: false, message: 'You have already checked in for this session.' });
         return;
       }
@@ -1143,22 +1165,8 @@ async function startServer() {
       await Promise.all([
         fbPut(`pending/${studentId}`, studentData),
         fbPut(`live_sessions/${sessionPath}/${studentId}`, studentData),
+        upsertAttendanceHistory([studentData]),
       ]);
-
-      // Update attendance_history (keep latest 200)
-      const histRaw = await fbGet<Student[] | Record<string, Student>>('attendance_history');
-      const prevHist: Student[] = Array.isArray(histRaw)
-        ? histRaw
-        : histRaw && typeof histRaw === 'object'
-          ? Object.values(histRaw)
-          : [];
-      const nextHist = [
-        studentData,
-        ...prevHist.filter((t) => t && !(t.studentId === studentData.studentId && t.timestamp === studentData.timestamp)),
-      ]
-        .sort((a, b) => b.timestamp - a.timestamp)
-        .slice(0, 200);
-      await fbPut('attendance_history', nextHist).catch(() => { /* ignore */ });
 
       const cfg = await getAppConfig();
       if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl) {
@@ -1206,9 +1214,7 @@ async function startServer() {
         auth.role === 'admin'
           ? allHistory
           : allHistory.filter((h) => ownedCourseNames.has((h.courseName || '').trim().toUpperCase()))
-      )
-        .sort((a, b) => b.timestamp - a.timestamp)
-        .slice(0, 200);
+      ).sort((a, b) => b.timestamp - a.timestamp);
 
       const sanitizedUsers: AppUser[] =
         auth.role === 'admin' && usersObj && typeof usersObj === 'object'
@@ -1549,7 +1555,7 @@ async function startServer() {
       const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
       if (status === 'P') {
         const existingData = await fbGet<Student>(`live_sessions/${sessionPath}/${studentId}`);
-        if (existingData && existingData.status === 'P') {
+        if (existingData && existingData.status === 'P' && (existingData.week || 'W1').trim().toUpperCase() === week) {
           res.status(409).json({ success: false, message: 'You have already checked in for this session.' });
           return;
         }
@@ -1570,21 +1576,8 @@ async function startServer() {
       await Promise.all([
         fbPut(`pending/${studentId}`, studentData),
         fbPut(`live_sessions/${sessionPath}/${studentId}`, studentData),
+        upsertAttendanceHistory([studentData]),
       ]);
-
-      const histRaw = await fbGet<Student[] | Record<string, Student>>('attendance_history');
-      const prevHist: Student[] = Array.isArray(histRaw)
-        ? histRaw
-        : histRaw && typeof histRaw === 'object'
-          ? Object.values(histRaw)
-          : [];
-      const nextHist = [
-        studentData,
-        ...prevHist.filter((t) => t && !(t.studentId === studentData.studentId && t.timestamp === studentData.timestamp)),
-      ]
-        .sort((a, b) => b.timestamp - a.timestamp)
-        .slice(0, 200);
-      await fbPut('attendance_history', nextHist).catch(() => { /* ignore */ });
 
       const cfg = await getAppConfig();
       if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl) {
@@ -1608,12 +1601,13 @@ async function startServer() {
       }
 
       const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
-      await Promise.all(
-        records.flatMap((r) => [
+      await Promise.all([
+        ...records.flatMap((r) => [
           fbPut(`pending/${r.studentId}`, r),
           fbPut(`live_sessions/${sessionPath}/${r.studentId}`, r),
-        ])
-      );
+        ]),
+        upsertAttendanceHistory(records),
+      ]);
 
       const cfg = await getAppConfig();
       if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl) {
@@ -1635,12 +1629,13 @@ async function startServer() {
       const courseName = String(req.body?.courseName || '').trim();
       const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
 
-      await Promise.all(
-        removals.flatMap((r) => [
+      await Promise.all([
+        ...removals.flatMap((r) => [
           fbPut(`pending/${r.studentId}`, r),
           fbDelete(`live_sessions/${sessionPath}/${r.studentId}`),
-        ])
-      );
+        ]),
+        upsertAttendanceHistory(removals),
+      ]);
 
       const cfg = await getAppConfig();
       if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl && removals.length > 0) {
@@ -1653,6 +1648,68 @@ async function startServer() {
       res.json({ success: true });
     } catch {
       res.status(500).json({ success: false, error: 'Failed to remove students.' });
+    }
+  });
+
+  app.put('/api/attendance/matrix-cell', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const studentId = String(req.body?.studentId || '').trim();
+      const name = String(req.body?.name || '').trim();
+      const courseName = String(req.body?.courseName || 'General Session').trim();
+      const week = String(req.body?.week || 'W1').trim().toUpperCase();
+      const status = String(req.body?.status || 'P').trim().toUpperCase();
+      const absenceReason = typeof req.body?.absenceReason === 'string' ? req.body.absenceReason.trim() : '';
+      const updateLiveSession = Boolean(req.body?.updateLiveSession);
+
+      if (!studentId || !name || !/^W([1-9]|1[0-4])$/.test(week)) {
+        res.status(400).json({ success: false, error: 'Valid Student ID, Name, and Week (W1–W14) are required.' });
+        return;
+      }
+
+      if (auth.role !== 'admin' && courseName) {
+        const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
+        const matched = Object.values(coursesObj)
+          .filter((c) => c && c.courseName)
+          .find((c) => c.courseName.trim().toUpperCase() === courseName.toUpperCase());
+        if (matched && !canAccessCourse(normalizeCourse(matched), auth)) {
+          res.status(403).json({ success: false, error: 'You do not have permission to edit this subject.' });
+          return;
+        }
+      }
+
+      const timestamp = Date.now();
+      const record: Student = {
+        studentId,
+        name,
+        email: `${studentId}@student.edu.my`,
+        status,
+        timestamp,
+        courseName,
+        absenceReason: status === 'P' ? '' : (absenceReason || undefined),
+        week,
+      };
+
+      const writes: Promise<void>[] = [
+        fbPut(`pending/${studentId}`, record),
+        upsertAttendanceHistory([record]),
+      ];
+
+      if (updateLiveSession) {
+        const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+        writes.push(fbPut(`live_sessions/${sessionPath}/${studentId}`, record));
+      }
+
+      await Promise.all(writes);
+
+      const cfg = await getAppConfig();
+      if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl) {
+        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(record, week));
+      }
+
+      res.json({ success: true, record });
+    } catch {
+      res.status(500).json({ success: false, error: 'Failed to update matrix cell.' });
     }
   });
 

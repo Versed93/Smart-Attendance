@@ -844,7 +844,7 @@ const App: React.FC = () => {
     return () => { cancelled = true; };
   }, [isAuthenticated, courseNameParam, courseIdParam, activeCourse]);
 
-  const formatCloudPayload = (r: Student) => {
+  const formatCloudPayload = useCallback((r: Student) => {
     const targetWeek = r.week || selectedWeek || 'W1';
     return {
       'Student ID': r.studentId,
@@ -859,9 +859,9 @@ const App: React.FC = () => {
       'Reason': r.absenceReason || '',
       'Timestamp': new Date(r.timestamp).toISOString(),
     };
-  };
+  }, [selectedWeek]);
 
-  const syncToAirtable = async (records: Record<string, Student>) => {
+  const syncToAirtable = useCallback(async (records: Record<string, Student>) => {
     if (integrationType !== 'airtable') return;
 
     const aToken = localStorage.getItem('airtable-token');
@@ -886,7 +886,7 @@ const App: React.FC = () => {
     } catch (err) {
       console.error('Airtable sync failed', err);
     }
-  };
+  }, [formatCloudPayload, integrationType]);
 
   const checkAndClearForNewDay = useCallback(() => {
     const today = new Date().toISOString().slice(0, 10);
@@ -918,8 +918,7 @@ const App: React.FC = () => {
           const combined = [...liveStudents, ...prev];
           return combined
             .filter((item, index, self) => index === self.findIndex(t => t.studentId === item.studentId && t.timestamp === item.timestamp))
-            .sort((a, b) => b.timestamp - a.timestamp)
-            .slice(0, 200);
+            .sort((a, b) => b.timestamp - a.timestamp);
         });
       }
     } catch {
@@ -1157,7 +1156,7 @@ const App: React.FC = () => {
         };
         setAttendanceList(prev => [{ ...savedRecord }, ...prev.filter(s => s.studentId !== studentId)]);
         setTeacherHistory(prev =>
-          [savedRecord, ...prev.filter(t => !(t.studentId === savedRecord.studentId && t.timestamp === savedRecord.timestamp))].slice(0, 200)
+          [savedRecord, ...prev.filter(t => !(t.studentId === savedRecord.studentId && t.timestamp === savedRecord.timestamp))]
         );
         if (integrationType === 'airtable') {
           await syncToAirtable({ [studentId]: savedRecord });
@@ -1203,7 +1202,7 @@ const App: React.FC = () => {
       };
       setAttendanceList(prev => [{ ...studentData }, ...prev.filter(s => s.studentId !== studentId)]);
       setTeacherHistory(prev =>
-        [studentData, ...prev.filter(t => !(t.studentId === studentData.studentId && t.timestamp === studentData.timestamp))].slice(0, 200)
+        [studentData, ...prev.filter(t => !(t.studentId === studentData.studentId && t.timestamp === studentData.timestamp))]
       );
 
       if (integrationType === 'airtable') {
@@ -1248,6 +1247,10 @@ const App: React.FC = () => {
       };
     });
 
+    if (removals.length > 0) {
+      setTeacherHistory(prev => [...removals, ...prev]);
+    }
+
     await apiFetch('/api/attendance/remove', {
       method: 'POST',
       body: JSON.stringify({ removals, courseName }),
@@ -1283,6 +1286,7 @@ const App: React.FC = () => {
     }
 
     if (records.length > 0) {
+      setTeacherHistory(prev => [...records, ...prev]);
       await apiFetch('/api/attendance/bulk', {
         method: 'POST',
         body: JSON.stringify({ records, courseName, week: selectedWeek || 'W1' }),
@@ -1292,6 +1296,43 @@ const App: React.FC = () => {
       }
     }
   };
+
+  const handleUpdateMatrixCell = useCallback(async (params: {
+    studentId: string;
+    name: string;
+    courseName: string;
+    week: string;
+    status: 'P' | 'A';
+    absenceReason?: string;
+  }): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const isCurrentWeek =
+        params.week.toUpperCase() === (selectedWeek || 'W1').toUpperCase() &&
+        params.courseName.trim().toUpperCase() === activeCourseRef.current.trim().toUpperCase();
+      const res = await apiFetch('/api/attendance/matrix-cell', {
+        method: 'PUT',
+        body: JSON.stringify({
+          ...params,
+          updateLiveSession: isCurrentWeek,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.success || !data?.record) {
+        return { success: false, message: data?.error || 'Failed to update week record.' };
+      }
+      const saved = data.record as Student;
+      setTeacherHistory(prev => [saved, ...prev]);
+      if (isCurrentWeek) {
+        setAttendanceList(prev => [{ ...saved }, ...prev.filter(s => s.studentId !== saved.studentId)]);
+      }
+      if (integrationType === 'airtable') {
+        await syncToAirtable({ [saved.studentId]: saved });
+      }
+      return { success: true };
+    } catch {
+      return { success: false, message: 'Network error updating matrix cell.' };
+    }
+  }, [apiFetch, integrationType, selectedWeek, syncToAirtable]);
 
   const handleSendTestRecord = async (courseName: string): Promise<{ success: boolean; message: string }> => {
     try {
@@ -1418,6 +1459,7 @@ const App: React.FC = () => {
               integrationType={integrationType}
               onIntegrationTypeChange={handleIntegrationTypeChange}
               teacherHistory={teacherHistory}
+              onUpdateMatrixCell={handleUpdateMatrixCell}
               onDeleteHistoryItem={handleDeleteHistoryItem}
               onClearTeacherHistory={handleClearTeacherHistory}
               registeredUsers={registeredUsers}

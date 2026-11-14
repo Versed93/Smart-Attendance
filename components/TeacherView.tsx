@@ -56,6 +56,14 @@ interface TeacherViewProps {
   integrationType?: 'google_sheets' | 'airtable' | 'firebase';
   onIntegrationTypeChange?: (type: 'google_sheets' | 'airtable' | 'firebase') => void;
   teacherHistory?: Student[];
+  onUpdateMatrixCell?: (params: {
+    studentId: string;
+    name: string;
+    courseName: string;
+    week: string;
+    status: 'P' | 'A';
+    absenceReason?: string;
+  }) => Promise<{ success: boolean; message?: string }>;
   onDeleteHistoryItem?: (timestamp: number, studentId: string) => void;
   onClearTeacherHistory?: () => void;
   registeredUsers?: AppUser[];
@@ -109,6 +117,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   integrationType = 'google_sheets',
   onIntegrationTypeChange,
   teacherHistory = [],
+  onUpdateMatrixCell,
   onDeleteHistoryItem,
   onClearTeacherHistory,
   registeredUsers = [],
@@ -147,7 +156,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [teacherLocation, setTeacherLocation] = useState<{lat: number, lng: number} | null>(null);
   const [locationStatus, setLocationStatus] = useState<'idle' | 'fetching' | 'success' | 'error' | 'denied'>('idle');
   const [showManualModal, setShowManualModal] = useState(false);
-  const [activeTab, setActiveTab] = useState<'attendance' | 'history'>('attendance');
+  const [activeTab, setActiveTab] = useState<'attendance' | 'matrix' | 'history'>('attendance');
+  const [matrixFilterMode, setMatrixFilterMode] = useState<'all' | 'below80'>('all');
+  const [editingMatrixCell, setEditingMatrixCell] = useState<{
+    studentId: string;
+    name: string;
+    week: string;
+    currentStatus: string;
+    reason: string;
+  } | null>(null);
+  const [isSavingMatrixCell, setIsSavingMatrixCell] = useState(false);
   const [adminPanelTab, setAdminPanelTab] = useState<'activity' | 'users' | 'notifications'>('activity');
   const [adminEmailInput, setAdminEmailInput] = useState(adminEmail);
   const [isTestingAdminEmail, setIsTestingAdminEmail] = useState(false);
@@ -478,27 +496,167 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     return sortStudentRecords(filtered);
   }, [teacherHistory, listSearchTerm, sortStudentRecords, historyScope, courseName]);
 
+  const matrixData = useMemo(() => {
+    const targetCourseUpper = (courseName || 'General Session').trim().toUpperCase();
+    const studentMap = new Map<string, { studentId: string; name: string }>();
+
+    knownStudents.forEach((s) => {
+      const id = s.id.trim().toUpperCase();
+      if (id && !studentMap.has(id)) {
+        studentMap.set(id, { studentId: id, name: s.name.trim().toUpperCase() });
+      }
+    });
+
+    const courseRecords: Student[] = [];
+    const considerRecord = (r: Student) => {
+      const rCourse = (r.courseName || 'General Session').trim().toUpperCase();
+      if (courseName.trim() && rCourse !== targetCourseUpper) return;
+      courseRecords.push(r);
+      const id = (r.studentId || '').trim().toUpperCase();
+      if (id && !studentMap.has(id)) {
+        studentMap.set(id, { studentId: id, name: (r.name || id).trim().toUpperCase() });
+      }
+    };
+
+    teacherHistory.forEach(considerRecord);
+    attendanceList.forEach(considerRecord);
+
+    const cellLookup = new Map<string, { status: string; timestamp: number; absenceReason?: string }>();
+    const recordedWeeksSet = new Set<string>();
+
+    for (const r of courseRecords) {
+      const id = (r.studentId || '').trim().toUpperCase();
+      const week = (r.week || 'W1').trim().toUpperCase();
+      if (!id || !/^W([1-9]|1[0-4])$/.test(week)) continue;
+      recordedWeeksSet.add(week);
+      const cellKey = `${id}__${week}`;
+      const existing = cellLookup.get(cellKey);
+      if (!existing || r.timestamp >= existing.timestamp) {
+        cellLookup.set(cellKey, {
+          status: (r.status || 'P').trim().toUpperCase(),
+          timestamp: r.timestamp,
+          absenceReason: r.absenceReason,
+        });
+      }
+    }
+
+    const totalWeeksRecorded = recordedWeeksSet.size;
+    const allRows = Array.from(studentMap.values()).map((stu) => {
+      const weeks: Record<string, { status: string; timestamp: number; absenceReason?: string } | undefined> = {};
+      let presentCount = 0;
+      let absentCount = 0;
+      let studentMarkedWeeks = 0;
+
+      for (const w of WEEKS) {
+        const cell = cellLookup.get(`${stu.studentId}__${w}`);
+        weeks[w] = cell;
+        if (cell) {
+          studentMarkedWeeks += 1;
+          if (cell.status === 'P') presentCount += 1;
+          else if (cell.status === 'A') absentCount += 1;
+        }
+      }
+
+      const denominator = Math.max(totalWeeksRecorded, studentMarkedWeeks);
+      const attendancePct = denominator > 0 ? Math.round((presentCount / denominator) * 100) : null;
+
+      return {
+        studentId: stu.studentId,
+        name: stu.name,
+        weeks,
+        presentCount,
+        absentCount,
+        denominator,
+        attendancePct,
+      };
+    });
+
+    const below80Count = allRows.filter((r) => r.attendancePct !== null && r.attendancePct < 80).length;
+    const pctRows = allRows.filter((r) => r.attendancePct !== null);
+    const averagePct =
+      pctRows.length > 0
+        ? Math.round(pctRows.reduce((acc, r) => acc + (r.attendancePct || 0), 0) / pctRows.length)
+        : null;
+
+    const query = listSearchTerm.trim().toLowerCase();
+    const visibleRows = allRows
+      .filter((r) => {
+        if (matrixFilterMode === 'below80' && !(r.attendancePct !== null && r.attendancePct < 80)) {
+          return false;
+        }
+        if (!query) return true;
+        return r.name.toLowerCase().includes(query) || r.studentId.toLowerCase().includes(query);
+      })
+      .sort((a, b) => {
+        if (studentSortBy === 'id') {
+          return a.studentId.localeCompare(b.studentId, undefined, { numeric: true, sensitivity: 'base' });
+        }
+        if (studentSortBy === 'name') {
+          return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        }
+        const aPct = a.attendancePct ?? 101;
+        const bPct = b.attendancePct ?? 101;
+        if (aPct !== bPct) return aPct - bPct;
+        return a.studentId.localeCompare(b.studentId, undefined, { numeric: true, sensitivity: 'base' });
+      });
+
+    return {
+      totalStudents: allRows.length,
+      totalWeeksRecorded,
+      recordedWeeksSet,
+      below80Count,
+      averagePct,
+      rows: visibleRows,
+    };
+  }, [attendanceList, courseName, knownStudents, listSearchTerm, matrixFilterMode, studentSortBy, teacherHistory]);
+
   const handleExportCSV = () => {
-      if (filteredList.length === 0) {
-        showToast('error', 'No data to export.');
+    const safeCourseSlug = (courseName || 'session').toLowerCase().replace(/\s+/g, '_');
+
+    if (activeTab === 'matrix') {
+      if (matrixData.rows.length === 0) {
+        showToast('error', 'No matrix records to export.');
         return;
       }
-      const headers = ["Student ID", "Name", "Course Name", "Week", "Date", "Status", "Reason", "Time"];
+      const headers = ['Student ID', 'Name', 'Course Name', ...WEEKS, 'Present', 'Weeks Conducted', 'Attendance %'];
       const rows = [headers.join(',')];
-      filteredList.forEach(s => {
-          const ts = new Date(s.timestamp);
-          const name = `"${s.name.replace(/"/g, '""')}"`;
-          const reason = `"${(s.absenceReason || '').replace(/"/g, '""')}"`;
-          const course = `"${(courseName || 'General Session').replace(/"/g, '""')}"`;
-          const weekVal = s.week || selectedWeek;
-          rows.push([s.studentId, name, course, weekVal, ts.toLocaleDateString(), s.status, reason, ts.toLocaleTimeString()].join(','));
+      const courseEscaped = `"${(courseName || 'General Session').replace(/"/g, '""')}"`;
+      matrixData.rows.forEach((row) => {
+        const nameEscaped = `"${row.name.replace(/"/g, '""')}"`;
+        const weekCells = WEEKS.map((w) => row.weeks[w]?.status || '-');
+        const pctVal = row.attendancePct !== null ? `${row.attendancePct}%` : '-';
+        rows.push([row.studentId, nameEscaped, courseEscaped, ...weekCells, row.presentCount, row.denominator, pctVal].join(','));
       });
       const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
       const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
+      const link = document.createElement('a');
       link.href = url;
-      link.download = `attendance_${(courseName || 'session').toLowerCase().replace(/\s+/g, '_')}.csv`;
+      link.download = `attendance_matrix_w1_w14_${safeCourseSlug}.csv`;
       link.click();
+      return;
+    }
+
+    const sourceList = activeTab === 'history' ? filteredHistory : filteredList;
+    if (sourceList.length === 0) {
+      showToast('error', 'No data to export.');
+      return;
+    }
+    const headers = ['Student ID', 'Name', 'Course Name', 'Week', 'Date', 'Status', 'Reason', 'Time'];
+    const rows = [headers.join(',')];
+    sourceList.forEach((s) => {
+      const ts = new Date(s.timestamp);
+      const name = `"${s.name.replace(/"/g, '""')}"`;
+      const reason = `"${(s.absenceReason || '').replace(/"/g, '""')}"`;
+      const course = `"${(s.courseName || courseName || 'General Session').replace(/"/g, '""')}"`;
+      const weekVal = s.week || selectedWeek;
+      rows.push([s.studentId, name, course, weekVal, ts.toLocaleDateString(), s.status, reason, ts.toLocaleTimeString()].join(','));
+    });
+    const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = activeTab === 'history' ? `attendance_history_${safeCourseSlug}.csv` : `attendance_${safeCourseSlug}.csv`;
+    link.click();
   };
 
   const handleMarkAll = (status: 'P' | 'A') => {
@@ -1681,13 +1839,19 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 <div className="flex bg-gray-100 p-1 rounded-xl shrink-0">
                     <button 
                         onClick={() => setActiveTab('attendance')}
-                        className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all ${activeTab === 'attendance' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                        className={`flex-1 sm:flex-initial px-3.5 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'attendance' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
                     >
                         Live List
                     </button>
                     <button 
+                        onClick={() => setActiveTab('matrix')}
+                        className={`flex-1 sm:flex-initial px-3.5 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'matrix' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                    >
+                        W1–W14 Matrix
+                    </button>
+                    <button 
                         onClick={() => setActiveTab('history')}
-                        className={`flex-1 sm:flex-initial px-4 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all ${activeTab === 'history' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
+                        className={`flex-1 sm:flex-initial px-3.5 py-2 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all whitespace-nowrap ${activeTab === 'history' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-400 hover:text-gray-600'}`}
                     >
                         History
                     </button>
@@ -1697,7 +1861,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         <MagnifyingGlassIcon className="w-4 h-4 text-gray-300 absolute top-1/2 left-3.5 -translate-y-1/2" />
                         <input type="text" placeholder="Search students..." value={listSearchTerm} onChange={(e) => setListSearchTerm(e.target.value)} className="w-full pl-10 pr-4 py-2.5 text-xs font-bold border-2 border-gray-50 bg-gray-50/50 rounded-xl focus:ring-0 focus:border-brand-primary focus:bg-white transition-all" />
                     </div>
-                    <button onClick={handleExportCSV} className="flex items-center justify-center w-11 h-11 bg-gray-900 text-white rounded-xl shadow-lg shadow-gray-200 hover:bg-black transition-all shrink-0 active:scale-90" title="Export CSV"><ArrowDownTrayIcon className="w-4 h-4" /></button>
+                    <button onClick={handleExportCSV} className="flex items-center justify-center w-11 h-11 bg-gray-900 text-white rounded-xl shadow-lg shadow-gray-200 hover:bg-black transition-all shrink-0 active:scale-90" title={activeTab === 'matrix' ? 'Export W1–W14 Matrix CSV' : activeTab === 'history' ? 'Export Full History CSV' : 'Export Live Session CSV'}><ArrowDownTrayIcon className="w-4 h-4" /></button>
                 </div>
             </div>
 
@@ -1709,10 +1873,48 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                       <button onClick={() => handleMarkAll('A')} className="flex-1 sm:flex-initial flex items-center justify-center gap-2 bg-white text-red-600 text-[10px] font-bold px-3 sm:px-4 py-2 rounded-xl hover:shadow-md transition-all disabled:opacity-30 active:scale-95 uppercase border border-red-100" disabled={filteredList.length === 0}><XMarkIcon className="w-3.5 h-3.5" /> All Absent</button>
                   </div>
               </div>
+            ) : activeTab === 'matrix' ? (
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-4 bg-gray-50 px-3.5 py-2.5 rounded-2xl border border-gray-200">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] font-bold text-gray-600 tabular-nums">
+                    <span className="text-gray-900">{courseName || 'General Session'}</span>
+                    <span className="text-gray-300" aria-hidden="true">·</span>
+                    <span>{matrixData.totalStudents} student{matrixData.totalStudents === 1 ? '' : 's'}</span>
+                    <span className="text-gray-300" aria-hidden="true">·</span>
+                    <span>{matrixData.totalWeeksRecorded}/14 weeks recorded</span>
+                    {matrixData.averagePct !== null && (
+                      <>
+                        <span className="text-gray-300" aria-hidden="true">·</span>
+                        <span>Avg {matrixData.averagePct}%</span>
+                      </>
+                    )}
+                    {matrixData.below80Count > 0 && (
+                      <>
+                        <span className="text-gray-300" aria-hidden="true">·</span>
+                        <span className="text-amber-700">{matrixData.below80Count} below 80%</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="flex bg-white p-0.5 rounded-xl border border-gray-200 shrink-0 self-start sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={() => setMatrixFilterMode('all')}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all whitespace-nowrap ${matrixFilterMode === 'all' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-800'}`}
+                    >
+                      All
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMatrixFilterMode('below80')}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all whitespace-nowrap ${matrixFilterMode === 'below80' ? 'bg-amber-600 text-white' : 'text-gray-500 hover:text-gray-800'}`}
+                    >
+                      Below 80% ({matrixData.below80Count})
+                    </button>
+                  </div>
+              </div>
             ) : (
               <div className="flex items-center justify-between gap-2 mb-5 sm:mb-6 bg-gray-50 p-2.5 rounded-2xl border border-gray-100">
-                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-2 truncate">
-                    {historyScope === 'course' && courseName ? courseName : 'All Subjects'}
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-2 truncate tabular-nums">
+                    {historyScope === 'course' && courseName ? courseName : 'All Subjects'} · {filteredHistory.length} record{filteredHistory.length === 1 ? '' : 's'}
                   </p>
                   <div className="flex bg-white p-0.5 rounded-xl border border-gray-200 shrink-0">
                     <button
@@ -1752,7 +1954,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         />
                     )}
                     <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest truncate">
-                        Student (Name / ID)
+                        {activeTab === 'matrix' ? 'Click any W1–W14 cell to update attendance' : 'Student (Name / ID)'}
                     </span>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
@@ -1766,12 +1968,117 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5 7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5" />
                         </svg>
                         <span>
-                            Sort: {studentSortBy === 'id' ? 'ID' : studentSortBy === 'name' ? 'Name' : 'Status'}
+                            Sort: {studentSortBy === 'id' ? 'ID' : studentSortBy === 'name' ? 'Name' : activeTab === 'matrix' ? 'Rate %' : 'Status'}
                         </span>
                     </button>
                 </div>
             </div>
 
+            {activeTab === 'matrix' ? (
+              <div className="overflow-auto h-[340px] sm:h-[440px] border border-gray-200 rounded-2xl bg-white custom-scrollbar">
+                {matrixData.rows.length > 0 ? (
+                  <table className="w-full border-collapse text-left text-xs min-w-[820px]">
+                    <thead className="sticky top-0 z-20 bg-gray-50 border-b border-gray-200">
+                      <tr>
+                        <th className="sticky left-0 z-30 bg-gray-50 px-3.5 py-2.5 text-[10px] font-bold uppercase tracking-wider text-gray-500 border-r border-gray-200 min-w-[190px]">
+                          Student
+                        </th>
+                        {WEEKS.map((w) => (
+                          <th
+                            key={w}
+                            className={`px-1.5 py-2.5 text-center text-[10px] font-bold uppercase tabular-nums min-w-[40px] ${
+                              w === selectedWeek ? 'text-indigo-700 bg-indigo-50/80' : 'text-gray-500'
+                            }`}
+                          >
+                            {w}
+                          </th>
+                        ))}
+                        <th className="px-3 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-gray-500 border-l border-gray-200 whitespace-nowrap">
+                          Present
+                        </th>
+                        <th className="px-3 py-2.5 text-right text-[10px] font-bold uppercase tracking-wider text-gray-500 whitespace-nowrap">
+                          Rate
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-100">
+                      {matrixData.rows.map((row) => {
+                        const pctColor =
+                          row.attendancePct === null
+                            ? 'text-gray-400'
+                            : row.attendancePct >= 80
+                              ? 'text-emerald-700'
+                              : row.attendancePct >= 60
+                                ? 'text-amber-700'
+                                : 'text-red-700';
+
+                        return (
+                          <tr key={row.studentId} className="hover:bg-gray-50/70 transition-colors">
+                            <td className="sticky left-0 z-10 bg-white px-3.5 py-2 border-r border-gray-200 max-w-[220px]">
+                              <div className="font-bold text-xs text-gray-900 truncate">{row.name}</div>
+                              <div className="font-mono text-[10px] text-gray-400 tabular-nums">{row.studentId}</div>
+                            </td>
+                            {WEEKS.map((w) => {
+                              const cell = row.weeks[w];
+                              const st = cell?.status || '';
+                              const cellStyle =
+                                st === 'P'
+                                  ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                                  : st === 'A'
+                                    ? 'bg-red-50 text-red-700 hover:bg-red-100'
+                                    : st
+                                      ? 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                                      : 'text-gray-300 hover:bg-gray-100 hover:text-gray-600';
+                              return (
+                                <td key={w} className="p-1 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setEditingMatrixCell({
+                                        studentId: row.studentId,
+                                        name: row.name,
+                                        week: w,
+                                        currentStatus: st,
+                                        reason: cell?.absenceReason || '',
+                                      })
+                                    }
+                                    title={
+                                      cell
+                                        ? `${row.name} (${w}): ${st}${cell.absenceReason ? ` — ${cell.absenceReason}` : ''} · Click to edit`
+                                        : `${row.name} (${w}): Not recorded · Click to mark`
+                                    }
+                                    className={`w-8 h-7 rounded-md font-mono text-[11px] font-bold transition-colors tabular-nums ${cellStyle}`}
+                                  >
+                                    {st || '-'}
+                                  </button>
+                                </td>
+                              );
+                            })}
+                            <td className="px-3 py-2 text-right font-mono text-xs font-bold text-gray-700 border-l border-gray-200 tabular-nums whitespace-nowrap">
+                              {row.presentCount}/{row.denominator}
+                            </td>
+                            <td className={`px-3 py-2 text-right font-mono text-xs font-bold tabular-nums whitespace-nowrap ${pctColor}`}>
+                              {row.attendancePct !== null ? `${row.attendancePct}%` : '—'}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="flex flex-col items-center justify-center h-full text-center p-8">
+                    <div className="w-14 h-14 bg-gray-50 rounded-full flex items-center justify-center mb-3 text-gray-300">
+                      <ListBulletIcon className="w-7 h-7" />
+                    </div>
+                    <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">
+                      {matrixFilterMode === 'below80'
+                        ? 'No students below 80% attendance'
+                        : 'No student roster or attendance records for this subject yet'}
+                    </p>
+                  </div>
+                )}
+              </div>
+            ) : (
             <div className="overflow-y-auto h-[340px] sm:h-[440px] pr-1 sm:pr-2 custom-scrollbar">
                 {activeTab === 'attendance' ? (
                     filteredList.length > 0 ? (
@@ -1821,8 +2128,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                         <div className="w-10 h-10 bg-indigo-50 text-indigo-400 rounded-xl flex items-center justify-center font-bold text-xs shrink-0">{s.name.charAt(0)}</div>
                                         <div className="flex-1 min-w-0">
                                             <p className="font-bold text-sm text-gray-900 truncate leading-tight mb-0.5">{s.name}</p>
-                                            <div className="flex items-center gap-2">
+                                            <div className="flex items-center gap-2 flex-wrap">
                                                 <span className="text-[10px] font-mono font-bold text-gray-400 bg-white px-2 rounded-md border border-gray-100">{s.studentId}</span>
+                                                {s.week && (
+                                                  <span className="text-[10px] font-mono font-bold text-indigo-600 tabular-nums">{s.week}</span>
+                                                )}
                                                 <span className="text-[10px] font-bold text-gray-300 tabular-nums">
                                                     {new Date(s.timestamp).toLocaleDateString()} {new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
                                                 </span>
@@ -1844,7 +2154,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     )
                 )}
             </div>
-            {selectedIds.size > 0 && (
+            )}
+            {activeTab === 'attendance' && selectedIds.size > 0 && (
                 <div className="mt-4 flex items-center justify-between p-3 bg-red-50 rounded-2xl border-2 border-red-100 animate-in slide-in-from-bottom-4">
                     <span className="text-xs font-bold text-red-600 ml-2">{selectedIds.size} STU SELECTED</span>
                     <button onClick={() => { onRemoveStudents(Array.from(selectedIds), courseName); setSelectedIds(new Set()); }} className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-xl text-[10px] font-bold uppercase hover:bg-red-700 transition-all shadow-md active:scale-95"><TrashIcon className="w-3.5 h-3.5" /> Remove</button>
@@ -2582,6 +2893,110 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {editingMatrixCell && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[225] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6 sm:p-7 relative border-t-8 border-indigo-600 animate-in zoom-in duration-200">
+            <button
+              type="button"
+              onClick={() => !isSavingMatrixCell && setEditingMatrixCell(null)}
+              className="absolute top-5 right-5 text-gray-300 hover:text-gray-900 transition-all"
+            >
+              <XCircleIcon className="w-6 h-6" />
+            </button>
+            <h3 className="text-lg font-bold text-gray-900 tracking-tight mb-1">
+              Update Week {editingMatrixCell.week} Attendance
+            </h3>
+            <p className="text-xs font-bold text-gray-500 mb-4 tabular-nums">
+              {editingMatrixCell.name} · <span className="font-mono">{editingMatrixCell.studentId}</span>
+              {courseName ? ` · ${courseName}` : ''}
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                  Absence / Excuse Note (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={editingMatrixCell.reason}
+                  onChange={(e) =>
+                    setEditingMatrixCell((prev) => (prev ? { ...prev, reason: e.target.value } : null))
+                  }
+                  placeholder="e.g., Medical Certificate, Approved Leave"
+                  className="w-full border border-gray-200 bg-gray-50 rounded-xl px-3.5 py-2.5 text-xs font-bold text-gray-800 focus:bg-white focus:border-indigo-600 outline-none"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  disabled={isSavingMatrixCell}
+                  onClick={async () => {
+                    if (!onUpdateMatrixCell) return;
+                    setIsSavingMatrixCell(true);
+                    try {
+                      const res = await onUpdateMatrixCell({
+                        studentId: editingMatrixCell.studentId,
+                        name: editingMatrixCell.name,
+                        courseName: courseName || 'General Session',
+                        week: editingMatrixCell.week,
+                        status: 'P',
+                      });
+                      if (res.success) {
+                        showToast('success', `Marked ${editingMatrixCell.studentId} Present (${editingMatrixCell.week}).`);
+                        setEditingMatrixCell(null);
+                      } else {
+                        showToast('error', res.message || 'Failed to update week record.');
+                      }
+                    } finally {
+                      setIsSavingMatrixCell(false);
+                    }
+                  }}
+                  className="px-4 py-3 rounded-xl font-bold text-xs uppercase tracking-wider bg-emerald-600 text-white hover:bg-emerald-700 transition-all disabled:opacity-50"
+                >
+                  Mark Present (P)
+                </button>
+                <button
+                  type="button"
+                  disabled={isSavingMatrixCell}
+                  onClick={async () => {
+                    if (!onUpdateMatrixCell) return;
+                    setIsSavingMatrixCell(true);
+                    try {
+                      const res = await onUpdateMatrixCell({
+                        studentId: editingMatrixCell.studentId,
+                        name: editingMatrixCell.name,
+                        courseName: courseName || 'General Session',
+                        week: editingMatrixCell.week,
+                        status: 'A',
+                        absenceReason: editingMatrixCell.reason,
+                      });
+                      if (res.success) {
+                        showToast('success', `Marked ${editingMatrixCell.studentId} Absent (${editingMatrixCell.week}).`);
+                        setEditingMatrixCell(null);
+                      } else {
+                        showToast('error', res.message || 'Failed to update week record.');
+                      }
+                    } finally {
+                      setIsSavingMatrixCell(false);
+                    }
+                  }}
+                  className="px-4 py-3 rounded-xl font-bold text-xs uppercase tracking-wider bg-red-600 text-white hover:bg-red-700 transition-all disabled:opacity-50"
+                >
+                  Mark Absent (A)
+                </button>
+              </div>
+              <button
+                type="button"
+                disabled={isSavingMatrixCell}
+                onClick={() => setEditingMatrixCell(null)}
+                className="w-full py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-widest text-gray-500 bg-gray-100 hover:bg-gray-200 transition-all"
+              >
+                Cancel
+              </button>
+            </div>
           </div>
         </div>
       )}
