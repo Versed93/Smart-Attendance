@@ -74,21 +74,27 @@ const generateToken = () => {
 
 const toFirebaseKey = (raw: string) => raw.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-const App: React.FC = () => {
-  const urlParams = new URLSearchParams(window.location.search);
-  const token = urlParams.get('t');
-  const courseNameParam = urlParams.get('c');
-  const weekParam = urlParams.get('w');
-  const isOfflineScan = urlParams.get('offline') === 'true';
-  const activateTokenParam = urlParams.get('activate');
-  const activateUserParam = urlParams.get('user');
+const getPublicAppUrl = () => {
+  const publicOrigin = window.location.origin.replace(/^https:\/\/ais-dev-/i, 'https://ais-pre-');
+  return `${publicOrigin}${window.location.pathname}`;
+};
 
-  const latParam = urlParams.get('lat');
-  const lngParam = urlParams.get('lng');
-  const radParam = urlParams.get('rad');
+const App: React.FC = () => {
+  const [initialUrlParams] = useState(() => new URLSearchParams(window.location.search));
+  const token = initialUrlParams.get('t');
+  const courseNameParam = initialUrlParams.get('c');
+  const weekParam = initialUrlParams.get('w');
+  const isOfflineScan = initialUrlParams.get('offline') === 'true';
+  const activateTokenParam = initialUrlParams.get('activate');
+  const activateUserParam = initialUrlParams.get('user');
+  const testEmailParam = initialUrlParams.get('test_email');
+
+  const latParam = initialUrlParams.get('lat');
+  const lngParam = initialUrlParams.get('lng');
+  const radParam = initialUrlParams.get('rad');
 
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
-    if (activateTokenParam && activateUserParam) return false;
+    if ((activateTokenParam && activateUserParam) || testEmailParam === 'verified') return false;
     const auth = localStorage.getItem(AUTH_KEY) === 'true';
     const kiosk = localStorage.getItem(KIOSK_PREF_KEY) === 'true';
     return auth && !kiosk;
@@ -96,8 +102,8 @@ const App: React.FC = () => {
 
   const savedView = localStorage.getItem(VIEW_PREF_KEY) as View;
 
-  // SECURITY: If not authenticated and no token is present, always force 'student' view unless opening an activation link.
-  const initialView: View = activateTokenParam && activateUserParam
+  // SECURITY: If not authenticated and no token is present, always force 'student' view unless opening an activation or test email link.
+  const initialView: View = (activateTokenParam && activateUserParam) || testEmailParam === 'verified'
     ? 'teacher'
     : (token || !isAuthenticated)
       ? 'student'
@@ -139,7 +145,14 @@ const App: React.FC = () => {
   const [hasLoadedCloudUsers, setHasLoadedCloudUsers] = useState(false);
   const [adminSessions, setAdminSessions] = useState<AdminSessionActivity[]>([]);
   const [adminNotifications, setAdminNotifications] = useState<AdminNotification[]>([]);
-  const [activationNotice, setActivationNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [activationNotice, setActivationNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(() =>
+    testEmailParam === 'verified'
+      ? {
+          type: 'success',
+          message: 'Test email link verified! Account activation buttons are working properly.',
+        }
+      : null
+  );
 
   const [currentAdminName, setCurrentAdminName] = useState(() => {
     return localStorage.getItem(CURRENT_ADMIN_NAME_KEY) || '';
@@ -236,10 +249,10 @@ const App: React.FC = () => {
   }, [scriptUrl]);
 
   useEffect(() => {
-    if (!token && !(activateTokenParam && activateUserParam)) {
+    if (!token && !(activateTokenParam && activateUserParam) && testEmailParam !== 'verified') {
       localStorage.setItem(VIEW_PREF_KEY, view);
     }
-  }, [view, token, activateTokenParam, activateUserParam]);
+  }, [view, token, activateTokenParam, activateUserParam, testEmailParam]);
 
   useEffect(() => {
     localStorage.setItem(KIOSK_PREF_KEY, isKioskMode.toString());
@@ -415,15 +428,23 @@ const App: React.FC = () => {
     }
   }, []);
 
-  // Handle email activation link (?activate=TOKEN&user=USER_ID)
+  // Handle email activation link (?activate=TOKEN&user=USER_ID) and test email verification (?test_email=verified)
   useEffect(() => {
+    if (testEmailParam === 'verified') {
+      if (window.location.search) {
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+      return;
+    }
     if (!activateTokenParam || !activateUserParam) return;
     let cancelled = false;
 
     const processActivation = async () => {
       try {
-        window.history.replaceState({}, '', window.location.pathname);
-        if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) return;
+        if (!FIREBASE_CONFIG.DATABASE_URL || !FIREBASE_CONFIG.DATABASE_SECRET) {
+          setActivationNotice({ type: 'error', message: 'Cloud database is not configured for activation.' });
+          return;
+        }
         const res = await fetch(buildDbUrl(`app_users/${toFirebaseKey(activateUserParam)}`), { cache: 'no-store' });
         if (cancelled) return;
         if (!res.ok) {
@@ -431,12 +452,16 @@ const App: React.FC = () => {
           return;
         }
         const userRecord = (await res.json()) as AppUser | null;
+        if (cancelled) return;
         if (!userRecord || !userRecord.id) {
           setActivationNotice({ type: 'error', message: 'Activation failed: Account no longer exists or was removed by Admin.' });
           return;
         }
         if (userRecord.status === 'active') {
           setActivationNotice({ type: 'success', message: `Account "${userRecord.username}" is already active. You can sign in now.` });
+          if (window.location.search) {
+            window.history.replaceState({}, '', window.location.pathname);
+          }
           return;
         }
         if (userRecord.activationToken !== activateTokenParam) {
@@ -444,20 +469,26 @@ const App: React.FC = () => {
           return;
         }
 
-        await fetch(buildDbUrl(`app_users/${userRecord.id}`), {
+        const patchRes = await fetch(buildDbUrl(`app_users/${userRecord.id}`), {
           method: 'PATCH',
           body: JSON.stringify({
             status: 'active',
             activatedAt: Date.now(),
           }),
         });
-        if (!cancelled) {
-          setActivationNotice({
-            type: 'success',
-            message: `Account "${userRecord.username}" has been activated! Please sign in below.`,
-          });
-          void syncAllCloudState();
+        if (cancelled) return;
+        if (!patchRes.ok) {
+          setActivationNotice({ type: 'error', message: 'Failed to update account activation status. Please try again.' });
+          return;
         }
+        setActivationNotice({
+          type: 'success',
+          message: `Account "${userRecord.username}" has been activated! Please sign in below.`,
+        });
+        if (window.location.search) {
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+        void syncAllCloudState();
       } catch {
         if (!cancelled) {
           setActivationNotice({ type: 'error', message: 'Network error while activating account.' });
@@ -467,7 +498,7 @@ const App: React.FC = () => {
 
     void processActivation();
     return () => { cancelled = true; };
-  }, [activateTokenParam, activateUserParam, syncAllCloudState]);
+  }, [activateTokenParam, activateUserParam, testEmailParam, syncAllCloudState]);
 
   // Initial sync + cross-browser / cross-device live sync listeners (focus, visibilitychange, online, polling)
   useEffect(() => {
@@ -839,7 +870,7 @@ const App: React.FC = () => {
 
   const buildActivationUrl = useCallback((user: AppUser) => {
     const tokenVal = user.activationToken || generateToken();
-    return `${window.location.origin}${window.location.pathname}?activate=${encodeURIComponent(tokenVal)}&user=${encodeURIComponent(user.id)}`;
+    return `${getPublicAppUrl()}?activate=${encodeURIComponent(tokenVal)}&user=${encodeURIComponent(user.id)}`;
   }, []);
 
   const sendActivationEmailViaScript = useCallback(async (params: {
@@ -889,7 +920,7 @@ const App: React.FC = () => {
           action: 'SEND_ACTIVATION_EMAIL',
           toEmail: recipient,
           username: 'Admin Email Test',
-          activationUrl: `${window.location.origin}${window.location.pathname}`,
+          activationUrl: `${getPublicAppUrl()}?test_email=verified`,
           adminEmail: recipient,
         }),
       });
@@ -1041,7 +1072,7 @@ const App: React.FC = () => {
       createdAt: now,
     };
 
-    const activationUrl = `${window.location.origin}${window.location.pathname}?activate=${encodeURIComponent(activationToken)}&user=${encodeURIComponent(userId)}`;
+    const activationUrl = `${getPublicAppUrl()}?activate=${encodeURIComponent(activationToken)}&user=${encodeURIComponent(userId)}`;
 
     if (FIREBASE_CONFIG.DATABASE_URL && FIREBASE_CONFIG.DATABASE_SECRET) {
       const saveUserRes = await fetch(buildDbUrl(`app_users/${userId}`), {
