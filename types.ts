@@ -9,6 +9,24 @@ export interface Student {
   week?: string;
 }
 
+export interface CourseStudentRef {
+  id: string;
+  name: string;
+}
+
+export interface CourseProfile {
+  id: string;
+  courseName: string;
+  sheetName?: string;
+  selectedWeek: string;
+  students: CourseStudentRef[];
+  createdBy?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export const ACTIVATION_EXPIRY_MS = 24 * 60 * 60 * 1000; // 1 day (24 hours)
+
 export interface AppUser {
   id: string;
   username: string;
@@ -17,6 +35,10 @@ export interface AppUser {
   role: 'admin' | 'lecturer';
   status: 'active' | 'pending';
   activationToken?: string;
+  activationSentAt?: number;
+  activationExpiresAt?: number;
+  deletionRequestedAt?: number;
+  deletionReason?: string;
   createdAt: number;
   activatedAt?: number;
   lastLoginAt?: number;
@@ -36,7 +58,7 @@ export interface AdminSessionActivity {
 
 export interface AdminNotification {
   id: string;
-  type: 'user_signup';
+  type: 'user_signup' | 'delete_request';
   userId: string;
   username: string;
   email: string;
@@ -44,4 +66,5 @@ export interface AdminNotification {
   read: boolean;
   emailSent: boolean;
   message: string;
+  reason?: string;
 }

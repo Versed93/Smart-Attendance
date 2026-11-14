@@ -8,6 +8,7 @@ import { CameraIcon } from './icons/CameraIcon';
 import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
 import { HistoryIcon } from './icons/HistoryIcon';
 import { TrashIcon } from './icons/TrashIcon';
+import { MapPinIcon } from './icons/MapPinIcon';
 import type { PreRegisteredStudent } from '../studentList';
 
 const QR_REFRESH_INTERVAL = 15;
@@ -32,7 +33,7 @@ interface StudentViewProps {
   onSwitchToTeacher?: () => void;
 }
 
-type Status = 'landing' | 'validating' | 'validating-gps' | 'form' | 'submitting' | 'success' | 'error' | 'show-student-qr' | 'device-locked' | 'checking-firebase' | 'history';
+type Status = 'landing' | 'validating' | 'validating-gps' | 'gps-prompt' | 'form' | 'submitting' | 'success' | 'error' | 'show-student-qr' | 'device-locked' | 'checking-firebase' | 'history';
 
 const STUDENT_PROFILE_KEY = 'attendance-student-profile-v1';
 const STUDENT_HISTORY_KEY = 'attendance-student-history-v1';
@@ -49,14 +50,22 @@ const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2
   return R * c;
 };
 
+const isIosDevice = () => {
+  if (typeof navigator === 'undefined') return false;
+  return (
+    /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
+  );
+};
+
 export const StudentView: React.FC<StudentViewProps> = ({ 
   markAttendance, 
   token: initialToken, 
   courseName: initialCourseName, 
   week: initialWeek,
-  geoConstraints, 
+  geoConstraints: initialGeoConstraints, 
   bypassRestrictions = false, 
-  isOfflineScan = false,
+  isOfflineScan: initialIsOfflineScan = false,
   knownStudents,
   onSwitchToTeacher
 }) => {
@@ -64,6 +73,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [studentId, setStudentId] = useState('');
   const [status, setStatus] = useState<Status>('validating');
   const [message, setMessage] = useState('');
+  const [gpsErrorCode, setGpsErrorCode] = useState<number | null>(null);
   const [formError, setFormError] = useState('');
   const [studentQrData, setStudentQrData] = useState('');
   const [showScanner, setShowScanner] = useState(false);
@@ -72,6 +82,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [token, setToken] = useState(initialToken);
   const [courseName, setCourseName] = useState(initialCourseName);
   const [scannedWeek, setScannedWeek] = useState(initialWeek);
+  const [geoConstraints, setGeoConstraints] = useState(initialGeoConstraints);
+  const [isOfflineScan, setIsOfflineScan] = useState(initialIsOfflineScan);
   const [history, setHistory] = useState<ScanHistory[]>(() => {
     const saved = localStorage.getItem(STUDENT_HISTORY_KEY);
     return saved ? JSON.parse(saved) : [];
@@ -98,8 +110,54 @@ export const StudentView: React.FC<StudentViewProps> = ({
     }
   }, []);
 
+  const requestGpsVerification = React.useCallback((constraints: { lat: number; lng: number; radius: number }) => {
+    if (typeof navigator === 'undefined' || !navigator.geolocation) {
+      setGpsErrorCode(0);
+      setStatus('gps-prompt');
+      return;
+    }
+
+    setStatus('validating-gps');
+    setGpsErrorCode(null);
+
+    const handleGpsSuccess = (pos: GeolocationPosition) => {
+      const dist = getDistanceFromLatLonInM(constraints.lat, constraints.lng, pos.coords.latitude, pos.coords.longitude);
+      if (dist - pos.coords.accuracy <= constraints.radius) {
+        setStatus('form');
+      } else {
+        setStatus('error');
+        setMessage(`Location Mismatch: ${Math.round(dist)}m away. Move closer to the classroom.`);
+      }
+    };
+
+    const handleGpsFailure = (err: GeolocationPositionError | null) => {
+      setGpsErrorCode(err?.code ?? 1);
+      setStatus('gps-prompt');
+    };
+
+    navigator.geolocation.getCurrentPosition(
+      handleGpsSuccess,
+      (err) => {
+        if (err && (err.code === 2 || err.code === 3)) {
+          navigator.geolocation.getCurrentPosition(
+            handleGpsSuccess,
+            (fallbackErr) => handleGpsFailure(fallbackErr),
+            { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
+          );
+          return;
+        }
+        handleGpsFailure(err);
+      },
+      { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
+    );
+  }, []);
+
   useEffect(() => {
+    let cancelled = false;
     const checkStatus = async () => {
+        await Promise.resolve();
+        if (cancelled) return;
+
         if (!token) {
             setStatus('landing');
             return;
@@ -123,47 +181,15 @@ export const StudentView: React.FC<StudentViewProps> = ({
         }
 
         if (geoConstraints && !bypassRestrictions) {
-            if (typeof navigator === 'undefined' || !navigator.geolocation) {
-                setStatus('error');
-                setMessage('GPS/Location is not supported on this browser.');
-                return;
-            }
-            setStatus('validating-gps');
-            const handleGpsSuccess = (pos: GeolocationPosition) => {
-                const dist = getDistanceFromLatLonInM(geoConstraints.lat, geoConstraints.lng, pos.coords.latitude, pos.coords.longitude);
-                if (dist - pos.coords.accuracy <= geoConstraints.radius) {
-                    setStatus('form');
-                } else {
-                    setStatus('error');
-                    setMessage(`Location Mismatch: ${Math.round(dist)}m away. Move closer to the classroom.`);
-                }
-            };
-            navigator.geolocation.getCurrentPosition(
-                handleGpsSuccess,
-                (err) => {
-                    if (err && (err.code === 2 || err.code === 3)) {
-                        navigator.geolocation.getCurrentPosition(
-                            handleGpsSuccess,
-                            () => {
-                                setStatus('error');
-                                setMessage('GPS access is required for security verification.');
-                            },
-                            { enableHighAccuracy: false, timeout: 10000, maximumAge: 60000 }
-                        );
-                        return;
-                    }
-                    setStatus('error');
-                    setMessage('GPS access is required for security verification.');
-                },
-                { enableHighAccuracy: true, timeout: 10000, maximumAge: 30000 }
-            );
+            requestGpsVerification(geoConstraints);
         } else {
             setStatus('form');
         }
     };
 
-    checkStatus();
-  }, [bypassRestrictions, courseName, geoConstraints, token]);
+    void checkStatus();
+    return () => { cancelled = true; };
+  }, [bypassRestrictions, courseName, geoConstraints, requestGpsVerification, token]);
 
   useEffect(() => {
     if (status === 'show-student-qr' && canvasRef.current && studentQrData) {
@@ -211,9 +237,27 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name || !studentId) { setFormError('All fields required.'); return; }
+    const cleanName = normalizeName(name);
+    const cleanId = normalizeId(studentId);
+    if (!cleanName || !cleanId) { setFormError('All fields required.'); return; }
+
+    const registeredMatches = knownStudents.filter(
+      (s) => normalizeName(s.name) === cleanName
+    );
+    if (registeredMatches.length === 0) {
+      setFormError('Your name is not registered in the system. Please consult with your Lecturer.');
+      return;
+    }
+
+    const exactIdMatch = registeredMatches.some(
+      (s) => normalizeId(s.id) === cleanId
+    );
+    if (!exactIdMatch) {
+      setFormError('Warning: Student ID does not match the registered student name. Please verify your details.');
+      return;
+    }
     
-    localStorage.setItem(STUDENT_PROFILE_KEY, JSON.stringify({ name, studentId }));
+    localStorage.setItem(STUDENT_PROFILE_KEY, JSON.stringify({ name: cleanName, studentId: cleanId }));
     
     const addHistory = (entry: Omit<ScanHistory, 'id'>) => {
       const newHistory = [{ ...entry, id: Date.now().toString() }, ...history];
@@ -223,7 +267,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
     if (isOfflineScan) {
         setIsQrLoading(true);
-        const qrData = JSON.stringify({ name, studentId, email: `${studentId}@student.edu.my`, timestamp: Date.now() });
+        const qrData = JSON.stringify({ name: cleanName, studentId: cleanId, email: `${cleanId}@student.edu.my`, timestamp: Date.now() });
         setStudentQrData(qrData);
         addHistory({ courseName: courseName || 'Offline Check-in', timestamp: Date.now(), type: 'offline', qrData });
         setStatus('show-student-qr');
@@ -231,7 +275,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
     }
 
     setStatus('submitting');
-    const result = await markAttendance(name, studentId, `${studentId}@student.edu.my`, scannedWeek);
+    const result = await markAttendance(cleanName, cleanId, `${cleanId}@student.edu.my`, scannedWeek);
     if (result.success) {
       setStatus('success');
       addHistory({ courseName: courseName || 'General Session', timestamp: Date.now(), type: 'online' });
@@ -241,6 +285,9 @@ export const StudentView: React.FC<StudentViewProps> = ({
       setStatus('device-locked');
       const lockKey = `attendance-device-lock-v1-${SESSION_ID}-${courseName || 'general'}`;
       if (!bypassRestrictions) localStorage.setItem(lockKey, 'true');
+    } else if (result.message.toLowerCase().includes('not registered') || result.message.toLowerCase().includes('does not match')) {
+      setFormError(result.message);
+      setStatus('form');
     } else {
       setStatus('error');
       setMessage(result.message);
@@ -255,6 +302,21 @@ export const StudentView: React.FC<StudentViewProps> = ({
       (s) => normalizeId(s.id) === cleanId && normalizeName(s.name) === cleanName
     );
   }, [knownStudents, studentId, name]);
+
+  const isNameRegistered = useMemo(() => {
+    const cleanName = normalizeName(name);
+    if (!cleanName) return false;
+    return knownStudents.some((s) => normalizeName(s.name) === cleanName);
+  }, [knownStudents, name]);
+
+  const showUnregisteredNameWarning = useMemo(() => {
+    const cleanName = normalizeName(name);
+    if (cleanName.length < 3 || isNameRegistered) return false;
+    if (activeSuggestionField === 'name') {
+      return !knownStudents.some((s) => normalizeName(s.name).includes(cleanName));
+    }
+    return true;
+  }, [knownStudents, name, isNameRegistered, activeSuggestionField]);
 
   const idSuggestions = useMemo(() => {
     const query = normalizeId(studentId);
@@ -303,6 +365,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const handleIdChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = normalizeId(e.target.value);
     setStudentId(val);
+    setFormError('');
     setActiveSuggestionField(val.length >= 2 ? 'id' : null);
 
     const matched = knownStudents.find((s) => normalizeId(s.id) === val);
@@ -325,6 +388,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const handleNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const rawUpper = e.target.value.toUpperCase();
     setName(rawUpper);
+    setFormError('');
     const norm = normalizeName(rawUpper);
     setActiveSuggestionField(norm.length >= 2 ? 'name' : null);
 
@@ -354,10 +418,24 @@ export const StudentView: React.FC<StudentViewProps> = ({
           const t = url.searchParams.get('t');
           const c = url.searchParams.get('c');
           const w = url.searchParams.get('w');
+          const lat = url.searchParams.get('lat');
+          const lng = url.searchParams.get('lng');
+          const rad = url.searchParams.get('rad');
+          const offline = url.searchParams.get('offline') === 'true';
           if (t) {
               setToken(t);
               if (c) setCourseName(c);
               if (w) setScannedWeek(w);
+              setIsOfflineScan(offline);
+              if (lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng))) {
+                setGeoConstraints({
+                  lat: parseFloat(lat),
+                  lng: parseFloat(lng),
+                  radius: rad && !isNaN(parseFloat(rad)) ? parseFloat(rad) : 150,
+                });
+              } else {
+                setGeoConstraints(undefined);
+              }
               setStatus('validating');
           } else {
               setStatus('error');
@@ -502,6 +580,67 @@ export const StudentView: React.FC<StudentViewProps> = ({
              'Securing Session...'}
         </p>
         <p className="text-xs text-gray-400 font-bold mt-2 uppercase">Please wait a moment</p>
+      </div>
+    );
+  }
+
+  if (status === 'gps-prompt') {
+    const ios = isIosDevice();
+    return (
+      <div className="text-center py-8 animate-in fade-in duration-300">
+        <div className="w-20 h-20 bg-amber-50 text-amber-600 rounded-3xl flex items-center justify-center mx-auto mb-5 border border-amber-100">
+          <MapPinIcon className="w-11 h-11" />
+        </div>
+        <h2 className="text-2xl font-bold text-gray-900 mb-2">Turn On &amp; Allow GPS</h2>
+        <p className="text-xs text-gray-500 font-bold mb-6 px-2 leading-relaxed">
+          {gpsErrorCode === 1
+            ? 'Location permission is required to verify that you are in the classroom. Please turn on Location / GPS and allow access.'
+            : 'Unable to detect your GPS signal. Please make sure Location / GPS is turned on and allow browser access.'}
+        </p>
+
+        <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 text-left mb-6 space-y-2">
+          <p className="text-[11px] font-extrabold text-amber-900 uppercase tracking-wider">
+            {ios ? 'How to enable GPS on iPhone:' : 'How to enable GPS:'}
+          </p>
+          {ios ? (
+            <ol className="text-xs text-amber-900/90 font-semibold space-y-1.5 list-decimal list-inside">
+              <li>Open <b>Settings → Privacy &amp; Security → Location Services</b> and turn it <b>ON</b>.</li>
+              <li>Scroll down to <b>Safari Websites</b> (or your browser) and choose <b>While Using the App</b>.</li>
+              <li>In Safari, tap <b>aA</b> / lock icon in the address bar → <b>Website Settings → Location → Allow</b>.</li>
+            </ol>
+          ) : (
+            <ol className="text-xs text-amber-900/90 font-semibold space-y-1.5 list-decimal list-inside">
+              <li>Turn on <b>Location (GPS)</b> in your phone&apos;s Quick Settings.</li>
+              <li>Tap <b>Allow GPS &amp; Continue</b> below and select <b>Allow</b> on the popup.</li>
+            </ol>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            if (geoConstraints) {
+              requestGpsVerification(geoConstraints);
+            } else {
+              setStatus('form');
+            }
+          }}
+          className="w-full bg-indigo-600 text-white font-bold py-4 rounded-xl hover:bg-indigo-700 transition-all active:scale-95 shadow-lg uppercase tracking-widest text-xs mb-3"
+        >
+          Allow GPS &amp; Continue
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            window.history.replaceState({}, '', window.location.pathname);
+            setToken('');
+            setStatus('landing');
+          }}
+          className="text-xs font-bold text-gray-400 hover:text-gray-700 uppercase tracking-widest mt-2"
+        >
+          Back to Home
+        </button>
       </div>
     );
   }
@@ -707,10 +846,20 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
         <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100 flex items-start gap-3">
             <div className="p-2 bg-white rounded-xl text-gray-400 shrink-0"><LockClosedIcon className="w-4 h-4" /></div>
-            <p className="text-[10px] text-gray-400 font-bold leading-relaxed uppercase">Submission is permanent for this session. Please ensure your ID is correct before confirming.</p>
+            <p className="text-[10px] text-gray-400 font-bold leading-relaxed uppercase">Only registered students in this course list can submit attendance. Please ensure your ID and Name match your registered profile.</p>
         </div>
 
-        {formError && <p className="text-xs text-red-500 font-bold text-center bg-red-50 p-3 rounded-xl border border-red-100">{formError}</p>}
+        {showUnregisteredNameWarning && !formError && (
+          <p className="text-xs text-amber-700 font-bold text-center bg-amber-50 p-3 rounded-xl border border-amber-200" role="alert">
+            Your name is not registered in the system. Please consult with your Lecturer.
+          </p>
+        )}
+
+        {formError && (
+          <p className="text-xs text-red-600 font-bold text-center bg-red-50 p-3 rounded-xl border border-red-200" role="alert">
+            {formError}
+          </p>
+        )}
 
         <button 
           type="submit" 

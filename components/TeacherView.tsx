@@ -1,6 +1,6 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
-import type { Student, AppUser, AdminSessionActivity, AdminNotification } from '../types';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import type { Student, AppUser, AdminSessionActivity, AdminNotification, CourseProfile } from '../types';
 import type { PreRegisteredStudent } from '../studentList';
 import QRCode from 'qrcode';
 import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
@@ -43,6 +43,11 @@ interface TeacherViewProps {
   onUpdateKnownStudents: (students: PreRegisteredStudent[]) => void;
   courseName?: string;
   onCourseChange: (courseName: string) => void;
+  courses?: CourseProfile[];
+  onSelectCourse?: (course: CourseProfile) => void;
+  onAddCourse?: (courseName: string) => CourseProfile | null;
+  onDeleteCourse?: (courseId: string) => Promise<void> | void;
+  onSyncSheetCourses?: (sheetTabs: Array<{ sheetName: string; courseName: string; students: PreRegisteredStudent[] }>) => void;
   selectedWeek?: string;
   onWeekChange?: (week: string) => void;
   currentAdminName?: string;
@@ -88,7 +93,12 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onUpdateKnownStudents,
   courseName: propCourseName,
   onCourseChange,
-  selectedWeek = 'W7',
+  courses = [],
+  onSelectCourse,
+  onAddCourse,
+  onDeleteCourse,
+  onSyncSheetCourses,
+  selectedWeek = 'W1',
   onWeekChange,
   currentAdminName = 'admin',
   integrationType = 'google_sheets',
@@ -147,6 +157,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const qrErrorCorrection = (localStorage.getItem('qr-error-correction') as 'L' | 'M' | 'Q' | 'H') || 'M';
   const qrMargin = parseInt(localStorage.getItem('qr-margin') || '2', 10);
   const [listSearchTerm, setListSearchTerm] = useState('');
+  const [studentSortBy, setStudentSortBy] = useState<'id' | 'name' | 'status'>('id');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [currentTime, setCurrentTime] = useState(() => new Date());
   const [confirmation, setConfirmation] = useState<{ action: 'P' | 'A' | null, count: number, reason?: string }>({ action: null, count: 0 });
@@ -157,14 +168,18 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [selectedStudentListIds, setSelectedStudentListIds] = useState<Set<string>>(new Set());
   const [showWeekPromptModal, setShowWeekPromptModal] = useState(true);
   const [isLoadingSheetCourse, setIsLoadingSheetCourse] = useState(false);
-  const [sheetCourseOptions, setSheetCourseOptions] = useState<{ sheetName: string; courseName: string; students?: PreRegisteredStudent[] }[]>([]);
   const [sheetReadError, setSheetReadError] = useState<string | null>(null);
+  const [showAddCourseModal, setShowAddCourseModal] = useState(false);
+  const [newCourseNameInput, setNewCourseNameInput] = useState('');
+  const [subjectFilter, setSubjectFilter] = useState('');
+  const [historyScope, setHistoryScope] = useState<'course' | 'all'>('course');
   const [pendingDeleteAction, setPendingDeleteAction] = useState<
     | { type: 'single'; id: string; name: string }
     | { type: 'bulk'; count: number }
     | { type: 'clear-list' }
     | { type: 'clear-history' }
     | { type: 'delete-user'; id: string; username: string; email?: string }
+    | { type: 'delete-course'; id: string; courseName: string }
     | null
   >(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -212,11 +227,12 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               }))
           : [];
 
-      if (sheets.length > 0) {
-          setSheetCourseOptions(sheets.filter((s) => s.courseName));
+      const validCourseSheets = sheets.filter((s) => s.courseName);
+      if (validCourseSheets.length > 0) {
+          onSyncSheetCourses?.(validCourseSheets);
       }
 
-      const firstNonEmpty = sheets.find((s) => s.courseName)?.courseName || '';
+      const firstNonEmpty = validCourseSheets[0]?.courseName || '';
       const resolvedCourse = String(data.courseName || firstNonEmpty || '').trim();
       const activeTarget = (replaceCourseIfPresent ? resolvedCourse : (preferredCourse || resolvedCourse)).trim();
 
@@ -229,17 +245,20 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       }
 
       const matchedSheet = activeTarget
-          ? sheets.find((s) => s.courseName.toUpperCase() === activeTarget.toUpperCase())
+          ? validCourseSheets.find((s) => s.courseName.toUpperCase() === activeTarget.toUpperCase())
           : undefined;
-      const resolvedStudents = matchedSheet && matchedSheet.students.length > 0
+      const shouldUseFallbackStudents = !activeTarget || validCourseSheets.length === 0;
+      const resolvedStudents = matchedSheet
           ? matchedSheet.students
-          : normalizeSheetStudents(data.students);
+          : shouldUseFallbackStudents
+            ? normalizeSheetStudents(data.students)
+            : [];
 
-      if (resolvedStudents.length > 0) {
+      if (resolvedStudents.length > 0 && (matchedSheet || shouldUseFallbackStudents)) {
           onUpdateKnownStudents(resolvedStudents);
       }
 
-      return { resolvedCourse, studentCount: resolvedStudents.length };
+      return { resolvedCourse, studentCount: resolvedStudents.length, tabCount: validCourseSheets.length };
   };
 
   const fetchCourseFromB1 = async (manual = false) => {
@@ -272,19 +291,24 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           }
           const data = JSON.parse(rawText);
           if (data && data.success) {
-              const { resolvedCourse, studentCount } = applySheetResponse(data, courseName, true);
-              if (resolvedCourse || studentCount > 0) {
+              const { resolvedCourse, studentCount, tabCount } = applySheetResponse(data, courseName, !courseName.trim());
+              if (resolvedCourse || studentCount > 0 || tabCount > 0) {
                   setSheetReadError(null);
                   if (manual) {
                       const courseLabel = resolvedCourse || courseName || 'Sheet';
-                      showToast('success', `Loaded ${courseLabel} (${studentCount} students from Sheet)`);
+                      showToast(
+                        'success',
+                        tabCount > 1
+                          ? `Synced ${tabCount} course tabs from Google Sheet`
+                          : `Loaded ${courseLabel} (${studentCount} students from Sheet)`
+                      );
                   }
               } else {
-                  setSheetReadError('Row B1 and Student rows (B4+/C4+) on the Google Sheet are empty.');
-                  if (manual) showToast('error', 'Row B1 and Student rows on the Google Sheet are empty.');
+                  setSheetReadError('Course name and student list on the Google Sheet are empty.');
+                  if (manual) showToast('error', 'Course name and student list on the Google Sheet are empty.');
               }
           } else {
-              const msg = data?.error ? `Sheet error: ${data.error}` : 'Could not read Row B1. Re-deploy updated Apps Script.';
+              const msg = data?.error ? `Sheet error: ${data.error}` : 'Could not read Course Name from Google Sheet. Re-deploy updated Apps Script.';
               setSheetReadError(msg);
               if (manual) showToast('error', msg);
           }
@@ -390,16 +414,60 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       return { present, absent, total, pct };
   }, [attendanceList]);
 
+  const cycleStudentSort = () => {
+    setStudentSortBy((prev) => (prev === 'id' ? 'name' : prev === 'name' ? 'status' : 'id'));
+  };
+
+  const sortStudentRecords = useCallback((records: Student[]) => {
+    const getStatusRank = (status: string) => {
+      const s = status.trim().toUpperCase();
+      if (s === 'P') return 0;
+      if (s === 'A') return 2;
+      return 1;
+    };
+
+    return [...records].sort((a, b) => {
+      if (studentSortBy === 'id') {
+        const idCmp = a.studentId.localeCompare(b.studentId, undefined, { numeric: true, sensitivity: 'base' });
+        return idCmp !== 0 ? idCmp : a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      }
+      if (studentSortBy === 'name') {
+        const nameCmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        return nameCmp !== 0
+          ? nameCmp
+          : a.studentId.localeCompare(b.studentId, undefined, { numeric: true, sensitivity: 'base' });
+      }
+      const statusCmp = getStatusRank(a.status) - getStatusRank(b.status);
+      if (statusCmp !== 0) return statusCmp;
+      const rawStatusCmp = a.status.localeCompare(b.status, undefined, { sensitivity: 'base' });
+      return rawStatusCmp !== 0
+        ? rawStatusCmp
+        : a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
+  }, [studentSortBy]);
+
   const filteredList = useMemo(() => {
-    return attendanceList.filter(s => s.name.toLowerCase().includes(listSearchTerm.toLowerCase()) || s.studentId.toLowerCase().includes(listSearchTerm.toLowerCase()));
-  }, [attendanceList, listSearchTerm]);
+    const filtered = attendanceList.filter(s => s.name.toLowerCase().includes(listSearchTerm.toLowerCase()) || s.studentId.toLowerCase().includes(listSearchTerm.toLowerCase()));
+    return sortStudentRecords(filtered);
+  }, [attendanceList, listSearchTerm, sortStudentRecords]);
+
+  const filteredHistory = useMemo(() => {
+    const filtered = teacherHistory.filter(s => {
+      const matchesCourse = historyScope === 'all' || !courseName.trim()
+        ? true
+        : (s.courseName || '').trim().toUpperCase() === courseName.trim().toUpperCase();
+      if (!matchesCourse) return false;
+      return s.name.toLowerCase().includes(listSearchTerm.toLowerCase()) || s.studentId.toLowerCase().includes(listSearchTerm.toLowerCase());
+    });
+    return sortStudentRecords(filtered);
+  }, [teacherHistory, listSearchTerm, sortStudentRecords, historyScope, courseName]);
 
   const handleExportCSV = () => {
       if (filteredList.length === 0) {
         showToast('error', 'No data to export.');
         return;
       }
-      const headers = ["Student ID", "Name", "[Course Name Here]", "Week", "[Date Here 1]", "[Status Here]", "Reason", "Time"];
+      const headers = ["Student ID", "Name", "Course Name", "Week", "Date", "Status", "Reason", "Time"];
       const rows = [headers.join(',')];
       filteredList.forEach(s => {
           const ts = new Date(s.timestamp);
@@ -493,6 +561,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       } else if (pendingDeleteAction.type === 'delete-user') {
           void onDeleteUser?.(pendingDeleteAction.id);
           showToast('success', `Removed user account "${pendingDeleteAction.username}".`);
+      } else if (pendingDeleteAction.type === 'delete-course') {
+          void onDeleteCourse?.(pendingDeleteAction.id);
+          showToast('success', `Removed course tab "${pendingDeleteAction.courseName}".`);
       }
       setPendingDeleteAction(null);
   };
@@ -1311,6 +1382,142 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
          );
        })()}
 
+      {/* Subjects / Courses Panel */}
+      <section className="bg-white p-4 sm:p-5 rounded-3xl shadow-sm border border-gray-100 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <h2 className="text-sm font-bold text-gray-900 tracking-tight whitespace-nowrap">Subjects</h2>
+            <span className="text-xs font-medium text-gray-400 tabular-nums whitespace-nowrap">
+              · {courses.length} {courses.length === 1 ? 'course' : 'courses'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+            {courses.length > 6 && (
+              <div className="relative flex-1 sm:flex-initial sm:w-52">
+                <MagnifyingGlassIcon className="w-3.5 h-3.5 text-gray-400 absolute top-1/2 left-3 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={subjectFilter}
+                  onChange={(e) => setSubjectFilter(e.target.value)}
+                  placeholder="Filter subjects..."
+                  className="w-full pl-8 pr-3 py-2 text-xs font-medium bg-gray-50 border border-gray-200 rounded-xl text-gray-800 placeholder-gray-400 focus:bg-white focus:border-indigo-500 outline-none transition-colors"
+                />
+              </div>
+            )}
+            {integrationType === 'google_sheets' && (
+              <button
+                type="button"
+                onClick={() => fetchCourseFromB1(true)}
+                disabled={isLoadingSheetCourse}
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors active:scale-95 disabled:opacity-50 whitespace-nowrap shrink-0"
+              >
+                {isLoadingSheetCourse ? 'Syncing...' : 'Sync Sheet Tabs'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setNewCourseNameInput('');
+                setShowAddCourseModal(true);
+              }}
+              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-gray-900 text-white hover:bg-black transition-colors active:scale-95 shadow-sm whitespace-nowrap shrink-0"
+            >
+              <PlusIcon className="w-3.5 h-3.5" />
+              Add Subject
+            </button>
+          </div>
+        </div>
+
+        {courses.length === 0 ? (
+          <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/60 px-4 py-6 text-center">
+            <p className="text-xs font-semibold text-gray-700">No subjects added yet</p>
+            <p className="text-xs text-gray-500 mt-1">
+              Sync tabs from your Google Sheet or add a subject to manage its own roster, week, and attendance list.
+            </p>
+          </div>
+        ) : (() => {
+          const query = subjectFilter.trim().toLowerCase();
+          const visibleCourses = query
+            ? courses.filter(c => c.courseName.toLowerCase().includes(query))
+            : courses;
+
+          if (visibleCourses.length === 0) {
+            return (
+              <div className="rounded-2xl border border-gray-100 bg-gray-50/60 px-4 py-5 text-center text-xs text-gray-500">
+                No subjects match &ldquo;{subjectFilter.trim()}&rdquo;.
+              </div>
+            );
+          }
+
+          return (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 max-h-60 overflow-y-auto pr-0.5 custom-scrollbar">
+              {visibleCourses.map((c) => {
+                const isActive = courseName.trim().toUpperCase() === c.courseName.trim().toUpperCase();
+                const studentCount = c.students?.length ?? 0;
+                const weekLabel = (c.selectedWeek || 'W1').replace(/^W(\d+)$/i, 'Week $1');
+
+                return (
+                  <div
+                    key={c.id}
+                    className={`group flex items-center justify-between gap-2 rounded-2xl border transition-all duration-150 ${
+                      isActive
+                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
+                        : 'bg-gray-50/70 text-gray-900 border-gray-200/80 hover:bg-white hover:border-gray-300'
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onSelectCourse?.(c)}
+                      className="flex-1 min-w-0 text-left px-3.5 py-2.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 rounded-l-2xl"
+                      title={c.courseName}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-bold tracking-tight truncate">
+                          {c.courseName}
+                        </span>
+                      </div>
+                      <div
+                        className={`flex items-center gap-1.5 mt-1 text-[11px] font-medium tabular-nums truncate ${
+                          isActive ? 'text-indigo-100' : 'text-gray-500'
+                        }`}
+                      >
+                        <span>{weekLabel}</span>
+                        <span aria-hidden="true">·</span>
+                        <span>
+                          {studentCount > 0
+                            ? `${studentCount} ${studentCount === 1 ? 'student' : 'students'}`
+                            : 'No roster'}
+                        </span>
+                        {isActive && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="font-semibold text-white">Active</span>
+                          </>
+                        )}
+                      </div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPendingDeleteAction({ type: 'delete-course', id: c.id, courseName: c.courseName })}
+                      className={`mr-2 w-8 h-8 rounded-xl flex items-center justify-center shrink-0 transition-colors ${
+                        isActive
+                          ? 'text-indigo-200 hover:text-white hover:bg-white/15'
+                          : 'text-gray-400 hover:text-red-600 hover:bg-red-50'
+                      }`}
+                      title={`Remove ${c.courseName}`}
+                      aria-label={`Remove ${c.courseName}`}
+                    >
+                      <XMarkIcon className="w-4 h-4" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+      </section>
+
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         <div className="bg-white p-4 sm:p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col items-center justify-center">
             <div className="w-full text-center mb-5 sm:mb-6">
@@ -1320,10 +1527,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         type="button"
                         onClick={() => setShowWeekPromptModal(true)}
                         className="inline-flex items-center gap-1.5 text-[10px] font-bold text-amber-800 uppercase tracking-widest bg-amber-50 hover:bg-amber-100 px-3.5 py-1.5 rounded-full border border-amber-300 shadow-sm active:scale-95 transition-all cursor-pointer"
-                        title="Click to change Google Sheet target week column"
+                        title="Click to change attendance week"
                     >
                         <PencilSquareIcon className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                        <span>Sheet Column: {selectedWeek}</span>
+                        <span>{selectedWeek.replace(/^W(\d+)$/i, 'Week $1')}</span>
                         <span className="text-amber-600 font-black">• Edit</span>
                     </button>
                     <button
@@ -1331,7 +1538,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         onClick={() => fetchCourseFromB1(true)}
                         disabled={isLoadingSheetCourse}
                         className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest bg-emerald-50 hover:bg-emerald-100 px-3.5 py-1.5 rounded-full border border-emerald-200 transition-all active:scale-95 disabled:opacity-50"
-                        title="Sync Course Name & Student List from Google Sheet (Row B1)"
+                        title="Sync Course Name & Student List from Google Sheet"
                     >
                         {isLoadingSheetCourse ? 'Syncing Course...' : 'Sync Course Name'}
                     </button>
@@ -1340,33 +1547,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     type="text"
                     value={courseName}
                     onChange={(e) => setCourseName(e.target.value)}
-                    placeholder="Enter Course Name (or Sync from Sheet)"
+                    placeholder="Enter Course Name (or Add Subject above)"
                     className="text-xl sm:text-2xl font-bold text-gray-800 text-center w-full border-none focus:ring-0 p-2.5 sm:p-3 bg-transparent placeholder-gray-300 mt-2"
                 />
-                {sheetCourseOptions.length > 1 && (
-                  <div className="flex items-center justify-center gap-1.5 flex-wrap mt-1">
-                    {sheetCourseOptions.map((opt) => (
-                      <button
-                        key={opt.sheetName}
-                        type="button"
-                        onClick={() => {
-                          setCourseName(opt.courseName);
-                          if (opt.students && opt.students.length > 0) {
-                            onUpdateKnownStudents(opt.students);
-                            showToast('success', `Switched to ${opt.courseName} (${opt.students.length} students)`);
-                          }
-                        }}
-                        className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-all ${
-                          courseName.toUpperCase() === opt.courseName.toUpperCase()
-                            ? 'bg-indigo-600 text-white border-indigo-600'
-                            : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
-                        }`}
-                      >
-                        {opt.courseName}
-                      </button>
-                    ))}
-                  </div>
-                )}
             </div>
             <div className="mb-5 sm:mb-6 max-w-[260px] sm:max-w-[320px] w-full aspect-square p-3 border-4 border-dashed border-gray-100 rounded-[2rem] sm:rounded-[2.5rem] relative flex items-center justify-center overflow-hidden">
                 {isQrLoading && <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10"><div className="animate-spin h-8 w-8 border-4 border-brand-primary border-t-transparent rounded-full"></div></div>}
@@ -1404,7 +1587,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 </div>
             </div>
 
-            {activeTab === 'attendance' && (
+            {activeTab === 'attendance' ? (
               <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-3 mb-5 sm:mb-6 bg-brand-primary/5 p-3 rounded-2xl border border-brand-primary/10">
                   <p className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] ml-1 sm:ml-2">Bulk Update</p>
                   <div className="flex items-center gap-2">
@@ -1412,7 +1595,68 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                       <button onClick={() => handleMarkAll('A')} className="flex-1 sm:flex-initial flex items-center justify-center gap-2 bg-white text-red-600 text-[10px] font-bold px-3 sm:px-4 py-2 rounded-xl hover:shadow-md transition-all disabled:opacity-30 active:scale-95 uppercase border border-red-100" disabled={filteredList.length === 0}><XMarkIcon className="w-3.5 h-3.5" /> All Absent</button>
                   </div>
               </div>
+            ) : (
+              <div className="flex items-center justify-between gap-2 mb-5 sm:mb-6 bg-gray-50 p-2.5 rounded-2xl border border-gray-100">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-2 truncate">
+                    {historyScope === 'course' && courseName ? courseName : 'All Subjects'}
+                  </p>
+                  <div className="flex bg-white p-0.5 rounded-xl border border-gray-200 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setHistoryScope('course')}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all ${historyScope === 'course' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-800'}`}
+                    >
+                      This Subject
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setHistoryScope('all')}
+                      className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase transition-all ${historyScope === 'all' ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-800'}`}
+                    >
+                      All
+                    </button>
+                  </div>
+              </div>
             )}
+
+            {/* Student List Table Header */}
+            <div className="flex items-center justify-between gap-2 px-4 py-2.5 mb-2.5 bg-gray-50 rounded-xl border border-gray-100">
+                <div className="flex items-center gap-3 min-w-0">
+                    {activeTab === 'attendance' && (
+                        <input
+                            type="checkbox"
+                            aria-label="Select all visible students"
+                            checked={filteredList.length > 0 && filteredList.every(s => selectedIds.has(s.studentId))}
+                            onChange={(e) => {
+                                if (e.target.checked) {
+                                    setSelectedIds(new Set(filteredList.map(s => s.studentId)));
+                                } else {
+                                    setSelectedIds(new Set());
+                                }
+                            }}
+                            className="w-4 h-4 rounded border-2 border-gray-200 text-brand-primary focus:ring-0 cursor-pointer shrink-0"
+                        />
+                    )}
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest truncate">
+                        Student (Name / ID)
+                    </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                    <button
+                        type="button"
+                        onClick={cycleStudentSort}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white border border-gray-200 text-[10px] font-bold uppercase tracking-wider text-gray-700 hover:border-indigo-300 hover:text-indigo-600 transition-all active:scale-95 shadow-xs"
+                        title="Click to switch sorting between ID, Name, and Attendance Status"
+                    >
+                        <svg className="w-3.5 h-3.5 text-indigo-500 shrink-0" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" aria-hidden="true">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5 7.5 3m0 0L12 7.5M7.5 3v13.5m13.5 0L16.5 21m0 0L12 16.5m4.5 4.5V7.5" />
+                        </svg>
+                        <span>
+                            Sort: {studentSortBy === 'id' ? 'ID' : studentSortBy === 'name' ? 'Name' : 'Status'}
+                        </span>
+                    </button>
+                </div>
+            </div>
 
             <div className="overflow-y-auto h-[340px] sm:h-[440px] pr-1 sm:pr-2 custom-scrollbar">
                 {activeTab === 'attendance' ? (
@@ -1455,11 +1699,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         </div>
                     )
                 ) : (
-                    teacherHistory.length > 0 ? (
+                    filteredHistory.length > 0 ? (
                         <ul className="space-y-3">
-                            {teacherHistory
-                                .filter(s => s.name.toLowerCase().includes(listSearchTerm.toLowerCase()) || s.studentId.toLowerCase().includes(listSearchTerm.toLowerCase()))
-                                .map((s, idx) => (
+                            {filteredHistory.map((s, idx) => (
                                 <li key={`${s.studentId}-${s.timestamp}-${idx}`} className="flex flex-col gap-2 p-4 bg-gray-50/50 rounded-2xl border-2 border-transparent hover:border-gray-100 transition-all group">
                                     <div className="flex items-center gap-4">
                                         <div className="w-10 h-10 bg-indigo-50 text-indigo-400 rounded-xl flex items-center justify-center font-bold text-xs shrink-0">{s.name.charAt(0)}</div>
@@ -1943,6 +2185,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                    pendingDeleteAction.type === 'bulk' ? `Delete ${pendingDeleteAction.count} Students?` :
                    pendingDeleteAction.type === 'clear-list' ? 'Clear Student List?' :
                    pendingDeleteAction.type === 'delete-user' ? 'Remove User Account?' :
+                   pendingDeleteAction.type === 'delete-course' ? 'Remove Subject Tab?' :
                    'Clear Scan History?'}
                 </h2>
                 <p className="text-xs font-bold text-gray-400 mb-7 leading-relaxed">
@@ -1950,6 +2193,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                    pendingDeleteAction.type === 'bulk' ? `Remove ${pendingDeleteAction.count} selected student(s) from the Student List?` :
                    pendingDeleteAction.type === 'clear-list' ? 'This will remove all students from the known Student List. This cannot be undone.' :
                    pendingDeleteAction.type === 'delete-user' ? `Permanently remove user "${pendingDeleteAction.username}"${pendingDeleteAction.email ? ` (${pendingDeleteAction.email})` : ''} and revoke any active login sessions?` :
+                   pendingDeleteAction.type === 'delete-course' ? `Remove subject "${pendingDeleteAction.courseName}" from the course tabs? (Existing Google Sheet data is preserved.)` :
                    'This will remove all saved scan history records across all devices.'}
                 </p>
                 <div className="flex gap-3">
@@ -1963,12 +2207,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       {showWeekPromptModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[220] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-md rounded-3xl sm:rounded-[2.5rem] shadow-2xl p-6 sm:p-8 text-center border-t-8 border-amber-500 animate-in zoom-in duration-200 max-h-[92vh] overflow-y-auto">
-                <span className="inline-block text-[10px] font-bold text-amber-800 uppercase tracking-widest bg-amber-50 px-3 py-1 rounded-full border border-amber-200 mb-3">
-                  Google Sheet Placement (D3:Q3)
-                </span>
                 <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2 tracking-tight">Select Attendance Week</h2>
                 <p className="text-xs font-bold text-gray-400 mb-5 sm:mb-6 leading-relaxed">
-                  Choose which week column on the Google Sheet should record today&apos;s attendance check-ins.
+                  Choose the active week for today&apos;s attendance check-ins.
                 </p>
                 <div className="grid grid-cols-4 sm:grid-cols-7 gap-2 mb-5 sm:mb-6">
                   {WEEKS.map((w) => {
@@ -1990,11 +2231,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   })}
                 </div>
                 <div className="bg-gray-50 border border-gray-100 rounded-2xl p-3 mb-5 sm:mb-6 text-[11px] font-bold text-gray-500 space-y-2">
-                  <div>
-                    Recording to Google Sheet Column <span className="text-amber-700 font-black">{selectedWeek}</span> (Name: B4+, ID: C4+)
-                  </div>
                   <div className="flex items-center justify-center gap-2 flex-wrap">
-                    <span>Course Name (Sheet B1): <strong className="text-gray-800">{courseName || 'Not set'}</strong></span>
+                    <span>Course Name: <strong className="text-gray-800">{courseName || 'Not set'}</strong></span>
                     <button
                       type="button"
                       onClick={() => fetchCourseFromB1(true)}
@@ -2084,6 +2322,66 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 Cancel
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {showAddCourseModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[220] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-3xl sm:rounded-[2.5rem] shadow-2xl p-6 sm:p-8 relative border-t-8 border-indigo-600 animate-in zoom-in duration-200">
+            <button
+              type="button"
+              onClick={() => setShowAddCourseModal(false)}
+              className="absolute top-6 right-6 text-gray-300 hover:text-gray-900 transition-all active:scale-90"
+            >
+              <XCircleIcon className="w-7 h-7" />
+            </button>
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2 tracking-tight">Add New Subject / Course</h2>
+            <p className="text-xs font-bold text-gray-400 mb-5 leading-relaxed">
+              Create a dedicated tab with its own attendance list, week setting, and registered student roster.
+            </p>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const clean = newCourseNameInput.trim();
+                if (!clean) return;
+                onAddCourse?.(clean);
+                setShowAddCourseModal(false);
+                setNewCourseNameInput('');
+                showToast('success', `Switched to "${clean}"`);
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">
+                  Course / Subject Name
+                </label>
+                <input
+                  type="text"
+                  value={newCourseNameInput}
+                  onChange={(e) => setNewCourseNameInput(e.target.value)}
+                  placeholder="e.g., CSC 2104 DATA STRUCTURES"
+                  className="w-full border-2 border-gray-100 bg-gray-50 rounded-2xl p-4 text-sm font-bold text-gray-900 focus:bg-white focus:border-indigo-600 outline-none transition-all"
+                  autoFocus
+                  required
+                />
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddCourseModal(false)}
+                  className="flex-1 px-4 py-3.5 font-bold text-gray-500 bg-gray-100 rounded-2xl hover:bg-gray-200 transition-all uppercase text-[10px] tracking-widest"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-3.5 font-bold text-white bg-indigo-600 rounded-2xl hover:bg-indigo-700 transition-all uppercase text-[10px] tracking-widest shadow-lg shadow-indigo-100"
+                >
+                  Add &amp; Open Tab
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

@@ -20,7 +20,7 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
   onCheckPendingRecords, 
   onClearPendingQueue,
   onForceSync,
-  selectedWeek = 'W7',
+  selectedWeek = 'W1',
   integrationType: propIntegrationType,
   onIntegrationTypeChange,
 }) => {
@@ -127,6 +127,10 @@ function doPost(e) {
       var toEmail = String(data.toEmail || "").trim();
       var username = String(data.username || "User").trim();
       var activationUrl = String(data.activationUrl || "").trim();
+      var expiresAtText = String(data.expiresAtText || "").trim();
+      var expiryLine = expiresAtText
+        ? "This activation link expires in 1 day (" + expiresAtText + ")."
+        : "This activation link expires within 1 day (24 hours).";
       var adminEmail = String(data.adminEmail || "").trim();
       var ownerEmail = "";
       try { ownerEmail = Session.getEffectiveUser().getEmail() || ""; } catch (e0) {}
@@ -136,8 +140,8 @@ function doPost(e) {
         MailApp.sendEmail({
           to: toEmail,
           subject: "Activate Your Smart Attendance Account",
-          body: "Hello " + username + ",\\n\\nPlease activate your Smart QR Attendance account by opening the link below:\\n" + activationUrl + "\\n\\nAfter activating, you can sign in to the Lecturer Dashboard.",
-          htmlBody: "<div style='font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;'><h2 style='color:#111827;margin-bottom:8px;'>Activate Your Account</h2><p style='color:#4b5563;font-size:14px;'>Hello <strong>" + username + "</strong>,</p><p style='color:#4b5563;font-size:14px;'>Thank you for signing up for the Smart QR Attendance System. Click the button below to activate your account:</p><p style='margin:24px 0;'><a href='" + activationUrl + "' style='background:#4f46e5;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block;'>Activate Account</a></p><p style='color:#6b7280;font-size:12px;word-break:break-all;'>Or copy this link: " + activationUrl + "</p></div>"
+          body: "Hello " + username + ",\\n\\nPlease activate your Smart QR Attendance account by opening the link below:\\n" + activationUrl + "\\n\\n" + expiryLine + "\\n\\nIf you signed up by mistake or want to delete your account, please open the app and submit an Account Deletion Request to the Admin.\\n\\nAfter activating, you can sign in to the Lecturer Dashboard.",
+          htmlBody: "<div style='font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;'><h2 style='color:#111827;margin-bottom:8px;'>Activate Your Account</h2><p style='color:#4b5563;font-size:14px;'>Hello <strong>" + username + "</strong>,</p><p style='color:#4b5563;font-size:14px;'>Thank you for signing up for the Smart QR Attendance System. Click the button below to activate your account:</p><p style='margin:24px 0;'><a href='" + activationUrl + "' style='background:#4f46e5;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block;'>Activate Account</a></p><p style='color:#b45309;background:#fffbeb;border:1px solid #fde68a;padding:10px 12px;border-radius:8px;font-size:12px;font-weight:bold;'>" + expiryLine + "</p><p style='color:#6b7280;font-size:12px;'>Signed up by mistake or want to remove your account? Open the app login page and submit an Account Deletion Request to Admin.</p><p style='color:#6b7280;font-size:12px;word-break:break-all;'>Or copy this link: " + activationUrl + "</p></div>"
         });
       }
 
@@ -145,11 +149,31 @@ function doPost(e) {
         MailApp.sendEmail({
           to: targetAdminEmail,
           subject: "[Smart Attendance] New User Signup: " + username,
-          body: "A new user has signed up via email on the Smart QR Attendance System.\\n\\nUsername: " + username + "\\nEmail: " + toEmail + "\\nStatus: Pending Activation\\n\\nYou can view, activate, or remove this account from the Admin Dashboard."
+          body: "A new user has signed up via email on the Smart QR Attendance System.\\n\\nUsername: " + username + "\\nEmail: " + toEmail + "\\nStatus: Pending Activation\\n" + expiryLine + "\\n\\nYou can view, activate, resend, or remove this account from the Admin Dashboard."
         });
       }
 
       return ContentService.createTextOutput(JSON.stringify({success: true, emailSent: true})).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    if (data && !Array.isArray(data) && data.action === "SEND_DELETE_REQUEST_EMAIL") {
+      var reqUser = String(data.username || "User").trim();
+      var reqEmail = String(data.userEmail || "").trim();
+      var reqReason = String(data.reason || "Requested via app").trim();
+      var reqAdminEmail = String(data.adminEmail || "").trim();
+      var reqOwnerEmail = "";
+      try { reqOwnerEmail = Session.getEffectiveUser().getEmail() || ""; } catch (e1) {}
+      var finalAdminEmail = reqAdminEmail || reqOwnerEmail;
+
+      if (finalAdminEmail) {
+        MailApp.sendEmail({
+          to: finalAdminEmail,
+          subject: "[Smart Attendance] Account Deletion Request: " + reqUser,
+          body: "A user submitted an account deletion request from inside the Smart QR Attendance app.\\n\\nUsername: " + reqUser + "\\nEmail: " + reqEmail + "\\nReason: " + reqReason + "\\n\\nPlease open the Admin Control Center in the app to review and remove this account."
+        });
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({success: true, emailSent: Boolean(finalAdminEmail)})).setMimeType(ContentService.MimeType.JSON);
     }
 
     var doc = SpreadsheetApp.getActiveSpreadsheet();
@@ -176,9 +200,9 @@ function doPost(e) {
       if (!studentId && !name) continue;
 
       var incomingCourse = String(record["Course Name"] || record["[Course Name Here]"] || "").trim();
-      var sheet = allSheets[0];
+      var sheet = null;
 
-      // Find matching sheet tab by Row B1 Course Name if available
+      // 1. Find existing sheet tab matching Row B1 Course Name
       if (incomingCourse) {
         for (var sIdx = 0; sIdx < allSheets.length; sIdx++) {
           var b1Course = String(allSheets[sIdx].getRange("B1").getValue() || "").trim();
@@ -189,6 +213,44 @@ function doPost(e) {
         }
       }
 
+      // 2. If not found, either reuse an empty-B1 sheet or auto-create a new tab in the same Spreadsheet
+      if (!sheet) {
+        var firstSheet = allSheets[0];
+        var firstB1 = String(firstSheet.getRange("B1").getValue() || "").trim();
+        if (!incomingCourse || incomingCourse === "General Session" || incomingCourse === "Connectivity Test" || !firstB1) {
+          sheet = firstSheet;
+        } else {
+          var safeTabName = incomingCourse.replace(/[\\\\/?*\\[\\]:]/g, " ").replace(/\\s+/g, " ").trim().slice(0, 95) || "Subject";
+          var byName = doc.getSheetByName(safeTabName);
+          if (byName) {
+            var existingNameB1 = String(byName.getRange("B1").getValue() || "").trim();
+            if (!existingNameB1 || existingNameB1.toUpperCase() === incomingCourse.toUpperCase()) {
+              sheet = byName;
+            } else {
+              safeTabName = (safeTabName.slice(0, 88) + " " + (allSheets.length + 1)).trim();
+              sheet = doc.insertSheet(safeTabName);
+            }
+          } else {
+            sheet = doc.insertSheet(safeTabName);
+          }
+
+          // Initialize standard layout headers on newly created tab
+          if (!String(sheet.getRange("B1").getValue() || "").trim()) {
+            sheet.getRange("B1").setValue(incomingCourse);
+          }
+          if (!String(sheet.getRange("B3").getValue() || "").trim()) {
+            sheet.getRange("B3").setValue("Student Name");
+          }
+          if (!String(sheet.getRange("C3").getValue() || "").trim()) {
+            sheet.getRange("C3").setValue("Student ID");
+          }
+          var initWeeks = [];
+          for (var iw = 1; iw <= WEEK_COUNT; iw++) initWeeks.push("W" + iw);
+          sheet.getRange(3, WEEK_START_COL, 1, WEEK_COUNT).setValues([initWeeks]);
+          allSheets.push(sheet);
+        }
+      }
+
       // If B1 on target sheet is empty, populate it with incoming Course Name
       var currentB1 = String(sheet.getRange("B1").getValue() || "").trim();
       if (!currentB1 && incomingCourse && incomingCourse !== "General Session" && incomingCourse !== "Connectivity Test") {
@@ -196,7 +258,7 @@ function doPost(e) {
       }
 
       var weekHeaders = sheet.getRange(3, WEEK_START_COL, 1, WEEK_COUNT).getValues()[0];
-      var targetWeek = String(record["Week"] || "W7").toUpperCase().trim();
+      var targetWeek = String(record["Week"] || "W1").toUpperCase().trim();
       var statusValue = record["Status"] || record["[Status Here]"] || record[targetWeek] || "P";
 
       // Resolve target week column in D3:Q3 (cols 4..17)
@@ -210,7 +272,7 @@ function doPost(e) {
       }
       if (weekCol === -1) {
         var match = targetWeek.match(/^W(\\d+)$/);
-        var weekNum = match ? parseInt(match[1], 10) : 7;
+        var weekNum = match ? parseInt(match[1], 10) : 1;
         if (weekNum < 1) weekNum = 1;
         if (weekNum > 14) weekNum = 14;
         weekCol = WEEK_START_COL + weekNum - 1;
@@ -329,7 +391,7 @@ function authorizeMail() {
               <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
                   <div className="bg-amber-100 p-1.5 rounded-lg text-amber-600 shrink-0">ℹ️</div>
                   <p className="text-[10px] text-amber-800 leading-relaxed font-bold uppercase">
-                      Sheet Placement &amp; Emails: Course Name is read/matched on Row B1, Student Name &amp; ID list at B4 &amp; C4, and Weeks W1–W14 in D3:Q3 (recording to {selectedWeek}). Re-deploy the updated script above as a Web App (Access: Anyone) to also enable automatic activation &amp; admin signup emails.
+                      Sheet Sync &amp; Emails: Automatically syncs Course Name, Student Roster, and Weeks W1–W14 (recording to {selectedWeek}). Re-deploy the updated script above as a Web App (Access: Anyone) to also enable automatic activation &amp; admin signup emails.
                   </p>
               </div>
               <div>
