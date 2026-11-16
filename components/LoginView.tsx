@@ -7,7 +7,6 @@ import { EyeSlashIcon } from './icons/EyeSlashIcon';
 interface LoginViewProps {
   onLogin: (usernameOrEmail: string, password: string) => Promise<{ success: boolean; message?: string }> | { success: boolean; message?: string };
   onSignUp?: (username: string, email: string, password: string) => Promise<{ success: boolean; message: string }>;
-  onRequestAccountDeletion?: (params: { usernameOrEmail: string; reason: string }) => Promise<{ success: boolean; message: string }>;
   activationNotice?: { type: 'success' | 'error'; message: string } | null;
   onDismissActivationNotice?: () => void;
 }
@@ -15,26 +14,22 @@ interface LoginViewProps {
 export const LoginView: React.FC<LoginViewProps> = ({
   onLogin,
   onSignUp,
-  onRequestAccountDeletion,
   activationNotice,
   onDismissActivationNotice,
 }) => {
-  const [mode, setMode] = useState<'signin' | 'signup' | 'delete-request'>('signin');
+  const [mode, setMode] = useState<'signin' | 'signup'>('signin');
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
   const [showUsername, setShowUsername] = useState(true);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [deleteReason, setDeleteReason] = useState('Signed up by mistake');
-  const [customDeleteReason, setCustomDeleteReason] = useState('');
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const isSignUp = mode === 'signup';
-  const isDeleteRequest = mode === 'delete-request';
 
-  const switchMode = (nextMode: 'signin' | 'signup' | 'delete-request') => {
+  const switchMode = (nextMode: 'signin' | 'signup') => {
     setMode(nextMode);
     setError('');
     setSuccessMsg('');
@@ -46,37 +41,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
     setError('');
     setSuccessMsg('');
     if (onDismissActivationNotice) onDismissActivationNotice();
-
-    if (isDeleteRequest) {
-      const cleanLookup = username.trim();
-      const finalReason =
-        deleteReason === 'Other'
-          ? customDeleteReason.trim() || 'Requested account deletion via app'
-          : deleteReason;
-      if (!cleanLookup) {
-        setError('Please enter your User Name or Email Address.');
-        return;
-      }
-      if (onRequestAccountDeletion) {
-        setIsSubmitting(true);
-        try {
-          const result = await onRequestAccountDeletion({
-            usernameOrEmail: cleanLookup,
-            reason: finalReason,
-          });
-          if (result.success) {
-            setSuccessMsg(result.message);
-            setUsername('');
-            setCustomDeleteReason('');
-          } else {
-            setError(result.message || 'Could not submit deletion request.');
-          }
-        } finally {
-          setIsSubmitting(false);
-        }
-      }
-      return;
-    }
 
     if (isSignUp) {
       const cleanUser = username.trim();
@@ -123,17 +87,13 @@ export const LoginView: React.FC<LoginViewProps> = ({
       <div className="bg-white p-6 sm:p-8 rounded-3xl shadow-xl w-full max-w-md border border-gray-100 animate-in fade-in zoom-in duration-300">
         <div className="flex flex-col items-center mb-6">
           <div
-            className={`flex items-center justify-center w-16 h-16 rounded-2xl shadow-lg mb-4 ${
-              isDeleteRequest
-                ? 'bg-red-600 text-white shadow-red-200'
-                : 'bg-gradient-to-br from-brand-primary to-brand-secondary text-white shadow-brand-primary/20'
-            }`}
+            className="flex items-center justify-center w-16 h-16 rounded-2xl shadow-lg mb-4 bg-gradient-to-br from-brand-primary to-brand-secondary text-white shadow-brand-primary/20"
             aria-hidden="true"
           >
             {isSignUp ? <UserPlusIcon className="w-9 h-9" /> : <ShieldCheckIcon className="w-9 h-9" />}
           </div>
           <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
-            {isDeleteRequest ? 'Request Account Deletion' : isSignUp ? 'Create Account' : 'Main Access'}
+            {isSignUp ? 'Create Account' : 'Main Access'}
           </h1>
           <p className="text-sm text-gray-500 font-bold mt-1">Smart QR Attendance System</p>
         </div>
@@ -152,32 +112,24 @@ export const LoginView: React.FC<LoginViewProps> = ({
         )}
 
         {/* Tab Switcher */}
-        {!isDeleteRequest && (
-          <div className="flex bg-gray-100 p-1.5 rounded-2xl mb-6">
-            <button
-              type="button"
-              onClick={() => switchMode('signin')}
-              className={`flex-1 py-2.5 text-xs font-bold rounded-xl transition-all ${mode === 'signin' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
-            >
-              Sign In
-            </button>
-            <button
-              type="button"
-              onClick={() => switchMode('signup')}
-              className={`flex-1 py-2.5 text-xs font-bold rounded-xl transition-all ${mode === 'signup' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
-            >
-              Sign Up
-            </button>
-          </div>
-        )}
+        <div className="flex bg-gray-100 p-1.5 rounded-2xl mb-6">
+          <button
+            type="button"
+            onClick={() => switchMode('signin')}
+            className={`flex-1 py-2.5 text-xs font-bold rounded-xl transition-all ${mode === 'signin' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+          >
+            Sign In
+          </button>
+          <button
+            type="button"
+            onClick={() => switchMode('signup')}
+            className={`flex-1 py-2.5 text-xs font-bold rounded-xl transition-all ${mode === 'signup' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}
+          >
+            Sign Up
+          </button>
+        </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {isDeleteRequest && (
-            <div className="bg-red-50 border border-red-100 rounded-2xl p-3.5 text-xs font-bold text-red-800 leading-relaxed">
-              Signed up by mistake or want to remove your account? Submit a request below to notify the Admin directly inside the app.
-            </div>
-          )}
-
           <div>
             <label htmlFor="login-username" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5 ml-1">
               {isSignUp ? 'User Name' : 'User Name or Email'}
@@ -185,24 +137,25 @@ export const LoginView: React.FC<LoginViewProps> = ({
             <div className="relative">
               <input
                 id="login-username"
-                type={isDeleteRequest || showUsername ? 'text' : 'password'}
+                type={showUsername ? 'text' : 'password'}
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
+                autoComplete="username"
+                autoCapitalize="none"
+                autoCorrect="off"
                 className="block w-full border-2 border-gray-200 rounded-xl px-4 py-3 pr-12 outline-none focus:border-brand-primary transition-colors text-gray-900 font-bold placeholder-gray-300 text-sm"
                 placeholder={isSignUp ? 'Your Name' : 'Username or Email'}
                 autoFocus
                 required
               />
-              {!isDeleteRequest && (
-                <button
-                  type="button"
-                  onClick={() => setShowUsername(!showUsername)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none p-1"
-                  title={showUsername ? 'Hide User Name' : 'Show User Name'}
-                >
-                  {showUsername ? <EyeSlashIcon className="w-5 h-5" /> : <EyeIcon className="w-5 h-5" />}
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => setShowUsername(!showUsername)}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none p-1"
+                title={showUsername ? 'Hide User Name' : 'Show User Name'}
+              >
+                {showUsername ? <EyeSlashIcon className="w-5 h-5" /> : <EyeIcon className="w-5 h-5" />}
+              </button>
             </div>
           </div>
 
@@ -226,64 +179,29 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
           )}
 
-          {isDeleteRequest ? (
-            <div className="space-y-3">
-              <div>
-                <label htmlFor="delete-reason" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5 ml-1">
-                  Reason for Request
-                </label>
-                <select
-                  id="delete-reason"
-                  value={deleteReason}
-                  onChange={(e) => setDeleteReason(e.target.value)}
-                  className="block w-full border-2 border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-brand-primary transition-colors text-gray-900 font-bold text-sm bg-white"
-                >
-                  <option value="Signed up by mistake">Signed up by mistake</option>
-                  <option value="Wrong email or username entered">Wrong email or username entered</option>
-                  <option value="Account no longer needed">Account no longer needed</option>
-                  <option value="Other">Other reason...</option>
-                </select>
-              </div>
-              {deleteReason === 'Other' && (
-                <div>
-                  <label htmlFor="custom-delete-reason" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5 ml-1">
-                    Details
-                  </label>
-                  <textarea
-                    id="custom-delete-reason"
-                    value={customDeleteReason}
-                    onChange={(e) => setCustomDeleteReason(e.target.value)}
-                    placeholder="Explain why you want Admin to delete this account..."
-                    className="block w-full border-2 border-gray-200 rounded-xl px-4 py-3 outline-none focus:border-brand-primary transition-colors text-gray-900 font-bold text-sm min-h-[84px]"
-                    required
-                  />
-                </div>
-              )}
+          <div>
+            <label htmlFor="login-password" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5 ml-1">Password</label>
+            <div className="relative">
+              <input
+                id="login-password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                autoComplete={isSignUp ? 'new-password' : 'current-password'}
+                className="block w-full border-2 border-gray-200 rounded-xl px-4 py-3 pr-12 outline-none focus:border-brand-primary transition-colors text-gray-900 font-bold placeholder-gray-300 text-sm"
+                placeholder="Password"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword(!showPassword)}
+                className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none p-1"
+                title={showPassword ? 'Hide Password' : 'Show Password'}
+              >
+                {showPassword ? <EyeSlashIcon className="w-5 h-5" /> : <EyeIcon className="w-5 h-5" />}
+              </button>
             </div>
-          ) : (
-            <div>
-              <label htmlFor="login-password" className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-1.5 ml-1">Password</label>
-              <div className="relative">
-                <input
-                  id="login-password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  className="block w-full border-2 border-gray-200 rounded-xl px-4 py-3 pr-12 outline-none focus:border-brand-primary transition-colors text-gray-900 font-bold placeholder-gray-300 text-sm"
-                  placeholder="Password"
-                  required
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 focus:outline-none p-1"
-                  title={showPassword ? 'Hide Password' : 'Show Password'}
-                >
-                  {showPassword ? <EyeSlashIcon className="w-5 h-5" /> : <EyeIcon className="w-5 h-5" />}
-                </button>
-              </div>
-            </div>
-          )}
+          </div>
 
           {error && (
             <div className="bg-red-50 text-red-600 text-xs font-bold p-3 rounded-xl text-center border border-red-100" role="alert">
@@ -300,47 +218,17 @@ export const LoginView: React.FC<LoginViewProps> = ({
           <button
             type="submit"
             disabled={isSubmitting}
-            className={`w-full text-white font-bold py-3.5 rounded-xl shadow-lg active:scale-[0.98] transition-all focus:ring-4 focus:outline-none text-sm uppercase tracking-wider disabled:opacity-60 ${
-              isDeleteRequest
-                ? 'bg-red-600 shadow-red-200 hover:bg-red-700 focus:ring-red-300'
-                : 'bg-brand-primary shadow-brand-primary/20 hover:bg-brand-secondary focus:ring-brand-primary/50'
-            }`}
+            className="w-full text-white font-bold py-3.5 rounded-xl shadow-lg active:scale-[0.98] transition-all focus:ring-4 focus:outline-none text-sm uppercase tracking-wider disabled:opacity-60 bg-brand-primary shadow-brand-primary/20 hover:bg-brand-secondary focus:ring-brand-primary/50"
           >
             {isSubmitting
-              ? isDeleteRequest
-                ? 'Sending Request...'
-                : isSignUp
-                  ? 'Creating Account...'
-                  : 'Signing In...'
-              : isDeleteRequest
-                ? 'Request Account Deletion'
-                : isSignUp
-                  ? 'SIGN UP'
-                  : 'Login to Dashboard'}
+              ? isSignUp
+                ? 'Creating Account...'
+                : 'Signing In...'
+              : isSignUp
+                ? 'SIGN UP'
+                : 'Login to Dashboard'}
           </button>
         </form>
-
-        {onRequestAccountDeletion && (
-          <div className="mt-5 pt-4 border-t border-gray-100 text-center">
-            {isDeleteRequest ? (
-              <button
-                type="button"
-                onClick={() => switchMode('signin')}
-                className="text-xs font-bold text-brand-primary hover:underline uppercase tracking-wider"
-              >
-                Back to Sign In
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => switchMode('delete-request')}
-                className="text-xs font-bold text-gray-500 hover:text-red-600 transition-colors"
-              >
-                Signed up by mistake or want to delete your account? <span className="underline">Request Admin</span>
-              </button>
-            )}
-          </div>
-        )}
       </div>
     </div>
   );

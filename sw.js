@@ -1,4 +1,4 @@
-const CACHE_NAME = 'uts-attendance-v1';
+const CACHE_NAME = 'uts-attendance-v2';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -31,10 +31,19 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch Event: Network First for HTML, Cache First for assets
+// Fetch Event: Never intercept API calls or non-GET requests
 self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') {
+    return;
+  }
+
   // Skip cross-origin requests (like Google Scripts)
   if (!event.request.url.startsWith(self.location.origin)) {
+    return;
+  }
+
+  const requestUrl = new URL(event.request.url);
+  if (requestUrl.pathname.startsWith('/api/')) {
     return;
   }
 
@@ -53,9 +62,12 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
       const fetchPromise = fetch(event.request).then((networkResponse) => {
-        caches.open(CACHE_NAME).then((cache) => {
-          cache.put(event.request, networkResponse.clone());
-        });
+        if (networkResponse && networkResponse.ok && networkResponse.type === 'basic') {
+          const cloned = networkResponse.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, cloned);
+          });
+        }
         return networkResponse;
       });
       return cachedResponse || fetchPromise;

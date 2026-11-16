@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { TeacherView } from './components/TeacherView';
 import { StudentView } from './components/StudentView';
 import { LoginView } from './components/LoginView';
-import type { Student, AppUser, AdminSessionActivity, AdminNotification, CourseProfile, EmailDeliveryStatus } from './types';
+import type { Student, AppUser, AdminSessionActivity, AdminNotification, CourseProfile } from './types';
 import { PRE_REGISTERED_STUDENTS, PreRegisteredStudent } from './studentList';
 
 type View = 'teacher' | 'student';
@@ -32,6 +32,22 @@ const getPublicAppUrl = () => {
   const publicOrigin = window.location.origin.replace(/^https:\/\/ais-dev-/i, 'https://ais-pre-');
   return `${publicOrigin}${window.location.pathname}`;
 };
+
+const isDevPreviewOrigin = () => /^ais-dev-/i.test(window.location.hostname);
+
+async function readJsonSafe<T = Record<string, unknown>>(res: Response): Promise<T | null> {
+  try {
+    const raw = await res.text();
+    if (!raw) return null;
+    const trimmed = raw.trim();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+      return null;
+    }
+    return JSON.parse(trimmed) as T;
+  } catch {
+    return null;
+  }
+}
 
 const normalizeCourses = (list: unknown): CourseProfile[] => {
   if (!Array.isArray(list)) return [];
@@ -93,7 +109,6 @@ const App: React.FC = () => {
     return (localStorage.getItem('attendance-integration-type') as IntegrationType) || 'google_sheets';
   });
   const [adminEmail, setAdminEmail] = useState<string>(() => localStorage.getItem(ADMIN_EMAIL_KEY) || '');
-  const [emailDelivery, setEmailDelivery] = useState<EmailDeliveryStatus | undefined>(undefined);
 
   const [registeredUsers, setRegisteredUsers] = useState<AppUser[]>([]);
   const [adminSessions, setAdminSessions] = useState<AdminSessionActivity[]>([]);
@@ -384,9 +399,6 @@ const App: React.FC = () => {
         }
         if (typeof data.config.adminEmail === 'string') {
           setAdminEmail(data.config.adminEmail);
-        }
-        if (data.config.emailDelivery && typeof data.config.emailDelivery === 'object') {
-          setEmailDelivery(data.config.emailDelivery as EmailDeliveryStatus);
         }
       }
 
@@ -954,14 +966,46 @@ const App: React.FC = () => {
     }
   }, [apiFetch]);
 
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((reg) => {
+          void reg.update().catch(() => { /* ignore */ });
+        });
+      }).catch(() => { /* ignore */ });
+    }
+  }, []);
+
   const handleLogin = async (usernameOrEmail: string, password: string): Promise<{ success: boolean; message?: string }> => {
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
         body: JSON.stringify({ usernameOrEmail, password }),
       });
-      const data = await res.json();
+      const data = await readJsonSafe<{
+        success?: boolean;
+        message?: string;
+        token?: string;
+        user?: AppUser;
+        session?: AdminSessionActivity;
+      }>(res);
+
+      if (!data) {
+        if (isDevPreviewOrigin()) {
+          return {
+            success: false,
+            message: 'This preview link requires your developer Google login. On mobile, please open the Shared App URL (ais-pre-...) instead.',
+          };
+        }
+        return {
+          success: false,
+          message: `Sign-in server returned an unexpected response (HTTP ${res.status}). Please refresh and try again.`,
+        };
+      }
+
       if (!res.ok || !data?.success || !data?.token || !data?.user) {
         return { success: false, message: data?.message || 'Invalid User Name / Email or Password.' };
       }
@@ -981,11 +1025,17 @@ const App: React.FC = () => {
       localStorage.setItem(AUTH_TOKEN_KEY, data.token);
       setView('teacher');
       if (data.session) {
-        setAdminSessions(prev => [data.session, ...prev]);
+        setAdminSessions(prev => [data.session!, ...prev]);
       }
       return { success: true };
     } catch {
-      return { success: false, message: 'Network error while signing in.' };
+      if (isDevPreviewOrigin()) {
+        return {
+          success: false,
+          message: 'Mobile sign-in is blocked on the ais-dev preview URL. Please open the Shared App URL (ais-pre-...) on mobile.',
+        };
+      }
+      return { success: false, message: 'Network error while signing in. Please check your connection and try again.' };
     }
   };
 
@@ -998,6 +1048,8 @@ const App: React.FC = () => {
       const res = await fetch('/api/auth/signup', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
         body: JSON.stringify({
           username,
           email,
@@ -1005,7 +1057,15 @@ const App: React.FC = () => {
           publicAppUrl: getPublicAppUrl(),
         }),
       });
-      const data = await res.json();
+      const data = await readJsonSafe<{ success?: boolean; message?: string }>(res);
+      if (!data) {
+        return {
+          success: false,
+          message: isDevPreviewOrigin()
+            ? 'Please open the Shared App URL (ais-pre-...) to register on mobile.'
+            : `Registration server returned an unexpected response (HTTP ${res.status}).`,
+        };
+      }
       return {
         success: Boolean(data?.success),
         message: data?.message || 'Registration failed.',
@@ -1023,9 +1083,17 @@ const App: React.FC = () => {
       const res = await fetch('/api/auth/delete-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
         body: JSON.stringify(params),
       });
-      const data = await res.json();
+      const data = await readJsonSafe<{ success?: boolean; message?: string }>(res);
+      if (!data) {
+        return {
+          success: false,
+          message: `Server returned an unexpected response (HTTP ${res.status}).`,
+        };
+      }
       return {
         success: Boolean(data?.success),
         message: data?.message || 'Could not submit deletion request.',
@@ -1466,7 +1534,6 @@ const App: React.FC = () => {
               adminSessions={adminSessions}
               adminNotifications={adminNotifications}
               adminEmail={adminEmail}
-              emailDelivery={emailDelivery}
               onAdminEmailChange={handleAdminEmailChange}
               onDeleteUser={handleDeleteUser}
               onActivateUser={handleActivateUser}
@@ -1477,13 +1544,13 @@ const App: React.FC = () => {
               onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
               onClearNotifications={handleClearNotifications}
               onSendTestAdminEmail={sendTestAdminEmail}
+              onRequestAccountDeletion={handleRequestAccountDeletion}
             />
           </div>
         ) : (
           <LoginView
             onLogin={handleLogin}
             onSignUp={handleSignUp}
-            onRequestAccountDeletion={handleRequestAccountDeletion}
             activationNotice={activationNotice}
             onDismissActivationNotice={() => setActivationNotice(null)}
           />

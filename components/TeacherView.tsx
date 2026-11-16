@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import type { Student, AppUser, AdminSessionActivity, AdminNotification, CourseProfile, EmailDeliveryStatus } from '../types';
+import type { Student, AppUser, AdminSessionActivity, AdminNotification, CourseProfile } from '../types';
 import type { PreRegisteredStudent } from '../studentList';
 import QRCode from 'qrcode';
 import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
@@ -70,7 +70,6 @@ interface TeacherViewProps {
   adminSessions?: AdminSessionActivity[];
   adminNotifications?: AdminNotification[];
   adminEmail?: string;
-  emailDelivery?: EmailDeliveryStatus;
   onAdminEmailChange?: (email: string) => void;
   onDeleteUser?: (userId: string) => Promise<void> | void;
   onActivateUser?: (userId: string) => Promise<void> | void;
@@ -81,6 +80,7 @@ interface TeacherViewProps {
   onMarkAllNotificationsRead?: () => Promise<void> | void;
   onClearNotifications?: () => Promise<void> | void;
   onSendTestAdminEmail?: (targetEmail?: string) => Promise<{ success: boolean; message: string }>;
+  onRequestAccountDeletion?: (params: { usernameOrEmail: string; reason: string }) => Promise<{ success: boolean; message: string }>;
 }
 
 const WEEKS = Array.from({ length: 14 }, (_, i) => `W${i + 1}`);
@@ -124,7 +124,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   adminSessions = [],
   adminNotifications = [],
   adminEmail = '',
-  emailDelivery,
   onAdminEmailChange,
   onDeleteUser,
   onActivateUser,
@@ -135,6 +134,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onMarkAllNotificationsRead,
   onClearNotifications,
   onSendTestAdminEmail,
+  onRequestAccountDeletion,
 }) => {
   const isAdmin = currentUserRole === 'admin' || currentAdminName?.toLowerCase() === 'admin';
   const [baseUrl] = useState<string>(() => window.location.origin + window.location.pathname);
@@ -171,6 +171,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [isTestingAdminEmail, setIsTestingAdminEmail] = useState(false);
   const [adminEmailTestStatus, setAdminEmailTestStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [resendingUserId, setResendingUserId] = useState<string | null>(null);
+  const [deleteReason, setDeleteReason] = useState('Signed up by mistake');
+  const [customDeleteReason, setCustomDeleteReason] = useState('');
+  const [isSubmittingDeleteRequest, setIsSubmittingDeleteRequest] = useState(false);
+  const [deleteRequestFeedback, setDeleteRequestFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [manualId, setManualId] = useState('');
   const [manualName, setManualName] = useState('');
   const [manualStatus, setManualStatus] = useState('P');
@@ -1500,28 +1504,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         </button>
                       </div>
                     </div>
-                    {emailDelivery && (
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 pt-1 text-[11px] font-bold text-gray-500">
-                        <span>Delivery Channel:</span>
-                        <span className={emailDelivery.configured ? 'text-emerald-700' : 'text-amber-700'}>
-                          {emailDelivery.label}
-                        </span>
-                        {emailDelivery.fromAddress && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <span className="text-gray-400">From: {emailDelivery.fromAddress}</span>
-                          </>
-                        )}
-                        {!emailDelivery.configured && (
-                          <>
-                            <span aria-hidden="true">·</span>
-                            <span className="text-gray-400 font-medium">
-                              Set RESEND_API_KEY or SMTP_* env vars, or deploy Apps Script /exec
-                            </span>
-                          </>
-                        )}
-                      </div>
-                    )}
                     {adminEmailTestStatus && (
                       <div
                         className={`text-[11px] font-bold px-3 py-2 rounded-xl border ${
@@ -1583,7 +1565,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                               <span
                                 className={notif.emailSent ? 'text-emerald-700' : 'text-amber-700'}
                               >
-                                {notif.emailSent ? 'Activation Email Sent' : 'Manual Link / Configure Email Provider'}
+                                {notif.emailSent ? 'Activation Email Sent' : 'Manual Link Ready'}
                               </span>
                               <span className="text-gray-300" aria-hidden="true">·</span>
                               <span className="text-gray-400 tabular-nums">
@@ -1614,7 +1596,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       <section className="bg-white p-4 sm:p-5 rounded-3xl shadow-sm border border-gray-100 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
-            <h2 className="text-sm font-bold text-gray-900 tracking-tight whitespace-nowrap">Subjects</h2>
+            <h2 className="text-sm font-bold text-gray-900 tracking-tight whitespace-nowrap">SUBJECTS</h2>
             <span className="text-xs font-medium text-gray-400 tabular-nums whitespace-nowrap">
               · {courses.length} {courses.length === 1 ? 'course' : 'courses'}
             </span>
@@ -1684,6 +1666,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 const isActive = courseName.trim().toUpperCase() === c.courseName.trim().toUpperCase();
                 const studentCount = c.students?.length ?? 0;
                 const weekLabel = (c.selectedWeek || 'W1').replace(/^W(\d+)$/i, 'Week $1');
+                const activeUsers = registeredUsers.filter((u) => u.status === 'active');
+                const showOwnerSelector = isAdmin && Boolean(onAssignCourseOwner) && activeUsers.length > 0;
+                const matchedOwner =
+                  activeUsers.find((u) => u.id === c.ownerId) ||
+                  activeUsers.find(
+                    (u) => u.username.toLowerCase() === String(c.createdBy || '').trim().toLowerCase()
+                  );
+                const resolvedOwnerValue = matchedOwner?.id || c.ownerId || '';
 
                 return (
                   <div
@@ -1718,7 +1708,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                               ? `${studentCount} ${studentCount === 1 ? 'student' : 'students'}`
                               : 'No roster'}
                           </span>
-                          {isAdmin && (
+                          {isAdmin && !showOwnerSelector && (
                             <>
                               <span aria-hidden="true">·</span>
                               <span className="truncate">{c.createdBy || 'admin'}</span>
@@ -1746,39 +1736,35 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         <XMarkIcon className="w-4 h-4" />
                       </button>
                     </div>
-                    {isAdmin && onAssignCourseOwner && registeredUsers.length > 0 && (
+                    {showOwnerSelector && (
                       <div
-                        className={`px-3.5 pb-2.5 pt-1 border-t flex items-center justify-between gap-2 ${
+                        className={`px-3.5 pb-2.5 pt-1.5 border-t flex items-center justify-between gap-2 ${
                           isActive ? 'border-white/15' : 'border-gray-200/70'
                         }`}
                       >
-                        <span className={`text-[10px] font-semibold shrink-0 ${isActive ? 'text-indigo-100' : 'text-gray-400'}`}>
+                        <span className={`text-[10px] font-semibold shrink-0 ${isActive ? 'text-indigo-100' : 'text-gray-500'}`}>
                           Owner
                         </span>
                         <select
                           aria-label={`Assign owner for ${c.courseName}`}
-                          value={c.ownerId || ''}
+                          value={resolvedOwnerValue}
                           onChange={(e) => {
-                            if (e.target.value) {
+                            if (e.target.value && onAssignCourseOwner) {
                               void onAssignCourseOwner(c.id, e.target.value);
                             }
                           }}
-                          className={`text-[11px] font-semibold rounded-lg px-2 py-1 outline-none max-w-[140px] truncate cursor-pointer ${
-                            isActive
-                              ? 'bg-white/15 text-white border border-white/20'
-                              : 'bg-white text-gray-700 border border-gray-200'
-                          }`}
+                          className="font-sans text-[11px] font-semibold rounded-lg pl-2.5 pr-7 py-1 outline-none max-w-[170px] cursor-pointer bg-white text-gray-800 border border-gray-200 shadow-sm"
                         >
-                          <option value="" className="text-gray-900">
-                            {c.createdBy || 'Unassigned'}
-                          </option>
-                          {registeredUsers
-                            .filter((u) => u.status === 'active')
-                            .map((u) => (
-                              <option key={u.id} value={u.id} className="text-gray-900">
-                                {u.username}{u.role === 'admin' ? ' (Admin)' : ''}
-                              </option>
-                            ))}
+                          {!matchedOwner && (
+                            <option value="" className="text-gray-900">
+                              {c.createdBy || 'Unassigned'}
+                            </option>
+                          )}
+                          {activeUsers.map((u) => (
+                            <option key={u.id} value={u.id} className="text-gray-900">
+                              {u.username}{u.role === 'admin' ? ' (Admin)' : ''}
+                            </option>
+                          ))}
                         </select>
                       </div>
                     )}
@@ -2309,6 +2295,93 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             </div>
                         </div>
                     </div>
+                    {onRequestAccountDeletion && (
+                      <div className="space-y-4">
+                        <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-[0.2em] ml-1">Account Deletion</h3>
+                        <div className="bg-red-50/50 p-4 sm:p-5 rounded-3xl border border-red-100 space-y-3">
+                          <div className="flex flex-col gap-1">
+                            <span className="text-xs font-bold text-gray-900">
+                              Signed up by mistake or want to delete your account?
+                            </span>
+                            <span className="text-[11px] font-medium text-gray-600">
+                              {isAdmin
+                                ? 'The built-in Admin account is protected. Lecturer deletion requests submitted from Settings appear in Admin Control.'
+                                : `Submit a deletion request for "${currentAdminName}" to notify the Administrator.`}
+                            </span>
+                          </div>
+                          {!isAdmin && (
+                            <div className="space-y-3 pt-1">
+                              <div className="flex flex-col sm:flex-row gap-2">
+                                <select
+                                  aria-label="Account deletion reason"
+                                  value={deleteReason}
+                                  onChange={(e) => setDeleteReason(e.target.value)}
+                                  className="flex-1 text-xs font-semibold rounded-xl border border-red-200 bg-white px-3 py-2.5 text-gray-800 outline-none focus:border-red-400"
+                                >
+                                  <option value="Signed up by mistake">Signed up by mistake</option>
+                                  <option value="Wrong email or username entered">Wrong email or username entered</option>
+                                  <option value="Account no longer needed">Account no longer needed</option>
+                                  <option value="Other">Other reason...</option>
+                                </select>
+                                <button
+                                  type="button"
+                                  disabled={isSubmittingDeleteRequest}
+                                  onClick={async () => {
+                                    if (isSubmittingDeleteRequest) return;
+                                    const finalReason =
+                                      deleteReason === 'Other'
+                                        ? customDeleteReason.trim() || 'Requested account deletion via settings'
+                                        : deleteReason;
+                                    setIsSubmittingDeleteRequest(true);
+                                    setDeleteRequestFeedback(null);
+                                    try {
+                                      const result = await onRequestAccountDeletion({
+                                        usernameOrEmail: currentAdminName,
+                                        reason: finalReason,
+                                      });
+                                      setDeleteRequestFeedback({
+                                        type: result.success ? 'success' : 'error',
+                                        message: result.message,
+                                      });
+                                      if (result.success) {
+                                        setCustomDeleteReason('');
+                                        showToast('success', result.message);
+                                      } else {
+                                        showToast('error', result.message);
+                                      }
+                                    } finally {
+                                      setIsSubmittingDeleteRequest(false);
+                                    }
+                                  }}
+                                  className="px-4 py-2.5 bg-red-600 text-white rounded-xl text-[11px] font-bold uppercase tracking-wider hover:bg-red-700 transition-colors active:scale-95 disabled:opacity-50 whitespace-nowrap shrink-0"
+                                >
+                                  {isSubmittingDeleteRequest ? 'Sending...' : 'Request Admin'}
+                                </button>
+                              </div>
+                              {deleteReason === 'Other' && (
+                                <textarea
+                                  value={customDeleteReason}
+                                  onChange={(e) => setCustomDeleteReason(e.target.value)}
+                                  placeholder="Explain why you want Admin to delete this account..."
+                                  className="w-full text-xs font-medium rounded-xl border border-red-200 bg-white p-3 text-gray-800 outline-none focus:border-red-400 min-h-[72px]"
+                                />
+                              )}
+                              {deleteRequestFeedback && (
+                                <div
+                                  className={`text-[11px] font-bold px-3 py-2 rounded-xl border ${
+                                    deleteRequestFeedback.type === 'success'
+                                      ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                      : 'bg-red-50 text-red-700 border-red-200'
+                                  }`}
+                                >
+                                  {deleteRequestFeedback.message}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                 </div>
             </div>
         </div>

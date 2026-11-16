@@ -1963,7 +1963,7 @@ async function startServer() {
           success: false,
           provider: 'none',
           message:
-            'No email service configured. Add RESEND_API_KEY or SMTP_* environment variables, or deploy your Google Apps Script /exec URL in Settings.',
+            'No email service configured yet. Deploy your Google Apps Script /exec URL in Settings, or use the Copy Link button for pending accounts.',
         });
         return;
       }
@@ -1992,7 +1992,7 @@ async function startServer() {
         res.json({
           success: false,
           message:
-            'Apps Script lacks email permission (script.send_mail). Configure RESEND_API_KEY / SMTP_* env vars, or re-authorize Apps Script MailApp.',
+            'Apps Script lacks email permission (script.send_mail). Please re-authorize Apps Script MailApp in your deployment.',
         });
         return;
       }
