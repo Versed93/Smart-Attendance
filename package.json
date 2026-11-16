@@ -7,9 +7,6 @@
     "url": "https://github.com/Versed93/Smart-Attendance-Plus.git"
   },
   "type": "module",
-  "engines": {
-    "node": ">=18.0.0"
-  },
   "scripts": {
     "dev": "tsx server.ts",
     "start": "node server.ts",
