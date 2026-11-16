@@ -1,8 +1,9 @@
-const CACHE_NAME = 'uts-attendance-v2';
+const CACHE_NAME = 'uts-attendance-v3';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
-  '/manifest.json'
+  '/manifest.json',
+  '/favicon.svg'
 ];
 
 // Install Event: Cache app shell
