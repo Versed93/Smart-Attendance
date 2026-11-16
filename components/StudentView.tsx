@@ -5,7 +5,7 @@ import { LockClosedIcon } from './icons/LockClosedIcon';
 import { ExclamationTriangleIcon } from './icons/ExclamationTriangleIcon';
 import { QrScanner } from './QrScanner';
 import { CameraIcon } from './icons/CameraIcon';
-import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
+import { BrandLogoIcon } from './icons/BrandLogoIcon';
 import { HistoryIcon } from './icons/HistoryIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { MapPinIcon } from './icons/MapPinIcon';
@@ -451,7 +451,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
           <div className="text-center space-y-8 animate-in fade-in duration-500 py-4">
               <div className="flex flex-col items-center">
                   <div className="w-16 h-16 bg-brand-primary text-white rounded-2xl flex items-center justify-center shadow-xl shadow-brand-primary/10 mb-4 relative">
-                      <ShieldCheckIcon className="w-10 h-10" />
+                      <BrandLogoIcon className="w-10 h-10" />
                   </div>
                   <h1 className="text-3xl font-bold text-gray-900 tracking-tight leading-tight">Attendance Portal</h1>
                   <p className="text-[10px] font-bold text-gray-400 mt-2 uppercase tracking-[0.3em]">Access Point</p>

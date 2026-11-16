@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
+import { BrandLogoIcon } from './icons/BrandLogoIcon';
 import { UserPlusIcon } from './icons/UserPlusIcon';
 import { EyeIcon } from './icons/EyeIcon';
 import { EyeSlashIcon } from './icons/EyeSlashIcon';
@@ -90,7 +90,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
             className="flex items-center justify-center w-16 h-16 rounded-2xl shadow-lg mb-4 bg-gradient-to-br from-brand-primary to-brand-secondary text-white shadow-brand-primary/20"
             aria-hidden="true"
           >
-            {isSignUp ? <UserPlusIcon className="w-9 h-9" /> : <ShieldCheckIcon className="w-9 h-9" />}
+            {isSignUp ? <UserPlusIcon className="w-9 h-9" /> : <BrandLogoIcon className="w-9 h-9" />}
           </div>
           <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
             {isSignUp ? 'Create Account' : 'Main Access'}

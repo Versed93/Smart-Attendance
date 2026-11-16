@@ -13,7 +13,7 @@ import type {
 } from '../types';
 import type { PreRegisteredStudent } from '../studentList';
 import QRCode from 'qrcode';
-import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
+import { BrandLogoIcon } from './icons/BrandLogoIcon';
 import { PencilSquareIcon } from './icons/PencilSquareIcon';
 import { CameraIcon } from './icons/CameraIcon';
 import { LockClosedIcon } from './icons/LockClosedIcon';
@@ -1369,7 +1369,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     <div className="w-full max-w-[1600px] mx-auto p-1 sm:p-6 space-y-4 sm:space-y-6 pb-20 sm:pb-6 animate-in fade-in duration-500">
        <div className="relative z-10 flex flex-col xl:flex-row justify-between items-stretch xl:items-center bg-white p-4 rounded-2xl shadow-sm border border-gray-100 gap-3 sm:gap-4">
          <div className="flex items-center gap-3 sm:gap-4">
-             <div className="flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl shadow-lg shrink-0"><ShieldCheckIcon className="w-6 h-6 sm:w-7 sm:h-7" /></div>
+             <div className="flex items-center justify-center w-11 h-11 sm:w-12 sm:h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl shadow-lg shrink-0"><BrandLogoIcon className="w-6 h-6 sm:w-7 sm:h-7" /></div>
              <div className="min-w-0"><h1 className="text-lg sm:text-2xl font-black text-gray-900 tracking-tight leading-none truncate">SMART ATTENDANCE</h1><p className="text-[10px] text-gray-400 font-bold tracking-[0.15em] sm:tracking-[0.2em] mt-1.5 uppercase truncate">Lecturer Dashboard {currentAdminName ? `• User: ${currentAdminName}` : ''}</p></div>
          </div>
          <div className="flex items-center justify-between sm:justify-end flex-wrap gap-2 w-full xl:w-auto pt-1 sm:pt-0 border-t border-gray-50 xl:border-t-0">
