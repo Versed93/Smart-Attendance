@@ -82,24 +82,24 @@ const App: React.FC = () => {
   });
 
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    localStorage.removeItem(VIEW_PREF_KEY);
+    localStorage.removeItem(KIOSK_PREF_KEY);
     if ((activateTokenParam && activateUserParam) || testEmailParam === 'verified') return false;
     const auth = localStorage.getItem(AUTH_KEY) === 'true';
     const savedToken = localStorage.getItem(AUTH_TOKEN_KEY);
-    const kiosk = localStorage.getItem(KIOSK_PREF_KEY) === 'true';
-    return auth && Boolean(savedToken) && !kiosk;
+    return auth && Boolean(savedToken);
   });
 
-  const savedView = localStorage.getItem(VIEW_PREF_KEY) as View;
-
-  // SECURITY: If not authenticated and no token is present, always force 'student' view unless opening an activation or test email link.
+  // Always direct root URL opens to Main Access ('teacher' -> LoginView when unauthenticated),
+  // reserving 'student' view strictly for QR scan links (?t=...) or active Kiosk sessions.
   const initialView: View = (activateTokenParam && activateUserParam) || testEmailParam === 'verified'
     ? 'teacher'
-    : (token || !isAuthenticated)
+    : token
       ? 'student'
-      : (savedView || 'teacher');
+      : 'teacher';
 
   const [view, setView] = useState<View>(initialView);
-  const [isKioskMode, setIsKioskMode] = useState(() => localStorage.getItem(KIOSK_PREF_KEY) === 'true');
+  const [isKioskMode, setIsKioskMode] = useState(false);
   const [activeCourse, setActiveCourse] = useState(() => localStorage.getItem('attendance-course-name') || '');
   const [selectedWeek, setSelectedWeek] = useState<string>(() => {
     localStorage.removeItem('attendance-active-week');
@@ -272,16 +272,6 @@ const App: React.FC = () => {
     localStorage.setItem(SCRIPT_URL_KEY, scriptUrl);
   }, [scriptUrl]);
 
-  useEffect(() => {
-    if (!token && !(activateTokenParam && activateUserParam) && testEmailParam !== 'verified') {
-      localStorage.setItem(VIEW_PREF_KEY, view);
-    }
-  }, [view, token, activateTokenParam, activateUserParam, testEmailParam]);
-
-  useEffect(() => {
-    localStorage.setItem(KIOSK_PREF_KEY, isKioskMode.toString());
-  }, [isKioskMode]);
-
   const clearClientSession = useCallback((noticeMessage?: string) => {
     setIsAuthenticated(false);
     setAuthToken('');
@@ -305,7 +295,7 @@ const App: React.FC = () => {
     if (noticeMessage) {
       setActivationNotice({ type: 'error', message: noticeMessage });
     }
-    setView('student');
+    setView('teacher');
     setIsKioskMode(false);
   }, []);
 
@@ -1000,6 +990,12 @@ const App: React.FC = () => {
             message: 'This preview link requires your developer Google login. On mobile, please open the Shared App URL (ais-pre-...) instead.',
           };
         }
+        if (res.status === 405) {
+          return {
+            success: false,
+            message: 'Sign-in API returned HTTP 405 (static-only host). Please redeploy the latest update or open the live full-stack Shared App URL.',
+          };
+        }
         return {
           success: false,
           message: `Sign-in server returned an unexpected response (HTTP ${res.status}). Please refresh and try again.`,
@@ -1569,7 +1565,10 @@ const App: React.FC = () => {
               bypassRestrictions={isKioskMode}
               isOfflineScan={isOfflineScan}
               knownStudents={knownStudents}
-              onSwitchToTeacher={() => setView('teacher')}
+              onSwitchToTeacher={() => {
+                setIsKioskMode(false);
+                setView('teacher');
+              }}
             />
           </div>
         </div>

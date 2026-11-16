@@ -746,7 +746,7 @@ async function resolveRosterForCourse(params: {
   return cfg.knownStudentsV2;
 }
 
-async function startServer() {
+export function createApiApp(): express.Express {
   const app = express();
   app.use(express.json({ limit: '5mb' }));
 
@@ -2106,6 +2106,12 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  return app;
+}
+
+export async function startServer() {
+  const app = createApiApp();
+
   // Frontend Vite / Static Serving
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
@@ -2127,4 +2133,6 @@ async function startServer() {
   });
 }
 
-void startServer();
+if (!process.env.VERCEL && !process.env.AWS_LAMBDA_FUNCTION_NAME) {
+  void startServer();
+}
