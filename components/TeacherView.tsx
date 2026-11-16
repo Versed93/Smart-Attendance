@@ -58,7 +58,10 @@ interface TeacherViewProps {
   onAddCourse?: (courseName: string, initialStudents?: PreRegisteredStudent[], ownerId?: string, sharedWith?: string[]) => CourseProfile | null;
   onDeleteCourse?: (courseId: string) => Promise<void> | void;
   onCheckSheetTabOwnership?: (sheetTabs: SheetTabCandidate[]) => Promise<SheetTabOwnershipResult[]>;
-  onSyncSheetCourses?: (sheetTabs: SheetTabCandidate[]) => Promise<SyncSheetCoursesResult> | void;
+  onSyncSheetCourses?: (
+    sheetTabs: SheetTabCandidate[],
+    options?: { allowUpdateExisting?: boolean }
+  ) => Promise<SyncSheetCoursesResult> | void;
   onAssignCourseOwner?: (
     courseId: string,
     ownerId: string
@@ -225,6 +228,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [sheetSyncModalItems, setSheetSyncModalItems] = useState<Array<{
     tab: SheetTabCandidate;
     status: SheetTabOwnershipResult['status'];
+    alreadySynced?: boolean;
     ownerId?: string;
     ownerLabel?: string;
     sharedWith?: string[];
@@ -315,7 +319,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           if (!s) continue;
           const cleanCourse = String(s.courseName || '').trim();
           if (!cleanCourse) continue;
-          const key = cleanCourse.toUpperCase();
+          const key = cleanCourse.replace(/\s+/g, ' ').trim().toUpperCase();
           if (seenCourses.has(key)) continue;
           seenCourses.add(key);
           valid.push({
@@ -331,17 +335,20 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   const resolveLocalTabOwnershipFallback = useCallback(
       (tabs: SheetTabCandidate[]): SheetTabOwnershipResult[] => {
+          const norm = (n: string) => n.replace(/\s+/g, ' ').trim().toUpperCase();
           return tabs.map((tab) => {
-              const key = tab.courseName.trim().toUpperCase();
-              const matched = courses.find((c) => c.courseName.trim().toUpperCase() === key);
+              const key = norm(tab.courseName);
+              const matched = courses.find((c) => norm(c.courseName) === key);
               if (matched) {
                   return {
                       courseName: tab.courseName,
                       status: 'mine',
+                      alreadySynced: true,
+                      ownerId: matched.ownerId,
                       ownerLabel: matched.createdBy || currentAdminName || 'You',
                   };
               }
-              return { courseName: tab.courseName, status: 'unclaimed' };
+              return { courseName: tab.courseName, status: 'unclaimed', alreadySynced: false };
           });
       },
       [courses, currentAdminName]
@@ -417,7 +424,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   showToast('error', `Cannot sync "${matchedSheet.courseName}": ${ownership.reason || 'Owned by another lecturer'}.`);
                   return;
               }
-              const result = await onSyncSheetCourses?.([matchedSheet]);
+              const result = await onSyncSheetCourses?.([matchedSheet], { allowUpdateExisting: true });
               if (result && result.skippedCourses.length > 0 && result.courses.length === 0) {
                   showToast('error', `Skipped "${matchedSheet.courseName}": ${result.skippedCourses[0].reason}.`);
                   return;
@@ -441,13 +448,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               ? await onCheckSheetTabOwnership(validCourseSheets)
               : resolveLocalTabOwnershipFallback(validCourseSheets);
           const ownershipMap = new Map<string, SheetTabOwnershipResult>();
-          ownershipList.forEach((item) => ownershipMap.set(item.courseName.trim().toUpperCase(), item));
+          const normKey = (name: string) => name.replace(/\s+/g, ' ').trim().toUpperCase();
+          ownershipList.forEach((item) => ownershipMap.set(normKey(item.courseName), item));
 
           const pickerItems = validCourseSheets.map((tab) => {
-              const ownership = ownershipMap.get(tab.courseName.trim().toUpperCase());
+              const ownership = ownershipMap.get(normKey(tab.courseName));
+              const locallyExists = courses.some((c) => normKey(c.courseName) === normKey(tab.courseName));
               return {
                   tab,
-                  status: ownership?.status || 'unclaimed',
+                  status: ownership?.status || (locallyExists ? 'mine' : 'unclaimed'),
+                  alreadySynced: ownership?.alreadySynced ?? locallyExists,
                   ownerId: ownership?.ownerId,
                   ownerLabel: ownership?.ownerLabel,
                   sharedWith: ownership?.sharedWith,
@@ -464,8 +474,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               collaboratorPool.find((u) => u.role === 'admin' || u.username.toLowerCase() === (currentAdminName || 'admin').toLowerCase())?.id ||
               '';
           pickerItems.forEach((item) => {
-              const key = item.tab.courseName.trim().toUpperCase();
-              if (item.status === 'mine' || item.status === 'assigned_to_me') {
+              const key = normKey(item.tab.courseName);
+              if (!item.alreadySynced && item.status === 'assigned_to_me') {
                   preselected.add(key);
               }
               const ownerIdForTab = item.ownerId || fallbackAdminOwner;
@@ -490,10 +500,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   const handleConfirmSheetSync = async () => {
       if (!sheetSyncModalItems || isConfirmingSheetSync) return;
+      const normKey = (name: string) => name.replace(/\s+/g, ' ').trim().toUpperCase();
       const chosenTabs = sheetSyncModalItems
-          .filter((item) => item.status !== 'other' && selectedSyncCourseKeys.has(item.tab.courseName.trim().toUpperCase()))
+          .filter((item) => !item.alreadySynced && item.status !== 'other' && selectedSyncCourseKeys.has(normKey(item.tab.courseName)))
           .map((item) => {
-              const key = item.tab.courseName.trim().toUpperCase();
+              const key = normKey(item.tab.courseName);
               if (!isAdmin) return item.tab;
               const assignedOwnerId = selectedSyncOwnerByCourse[key];
               const assignedShared = (selectedSyncSharedByCourse[key] || []).filter((id) => id !== assignedOwnerId);
@@ -505,35 +516,30 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           });
 
       if (chosenTabs.length === 0) {
-          showToast('error', 'Select at least one subject tab belonging to you.');
+          showToast('error', 'Select at least one new subject tab to sync.');
           return;
       }
 
       setIsConfirmingSheetSync(true);
       try {
-          const result = await onSyncSheetCourses?.(chosenTabs);
+          const result = await onSyncSheetCourses?.(chosenTabs, { allowUpdateExisting: false });
           const syncedCourses = result?.courses || [];
           const skippedCourses = result?.skippedCourses || [];
 
-          const activeUpper = courseName.trim().toUpperCase();
-          const syncedActiveTab = activeUpper
-              ? chosenTabs.find((t) => t.courseName.trim().toUpperCase() === activeUpper)
+          const activeUpper = normKey(courseName);
+          const syncedActiveCourse = activeUpper
+              ? syncedCourses.find((c) => normKey(c.courseName) === activeUpper)
               : undefined;
 
-          if (syncedActiveTab) {
-              if (syncedActiveTab.students.length > 0) {
-                  onUpdateKnownStudents(syncedActiveTab.students);
+          if (syncedActiveCourse) {
+              if (syncedActiveCourse.students.length > 0) {
+                  onUpdateKnownStudents(syncedActiveCourse.students);
               }
-          } else if (!activeUpper) {
+          } else if (!activeUpper && syncedCourses.length > 0) {
               const firstSynced = syncedCourses[0];
-              const fallbackTab = firstSynced
-                  ? chosenTabs.find((t) => t.courseName.trim().toUpperCase() === firstSynced.courseName.trim().toUpperCase())
-                  : chosenTabs[0];
-              if (fallbackTab) {
-                  setCourseName(fallbackTab.courseName);
-                  if (fallbackTab.students.length > 0) {
-                      onUpdateKnownStudents(fallbackTab.students);
-                  }
+              setCourseName(firstSynced.courseName);
+              if (firstSynced.students.length > 0) {
+                  onUpdateKnownStudents(firstSynced.students);
               }
           }
 
@@ -542,11 +548,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           } else if (skippedCourses.length > 0) {
               showToast(
                   'success',
-                  `Synced ${syncedCourses.length} subject${syncedCourses.length === 1 ? '' : 's'}; skipped ${skippedCourses.length} owned by another lecturer.`
+                  `Synced ${syncedCourses.length} new subject${syncedCourses.length === 1 ? '' : 's'}; skipped ${skippedCourses.length} already synced or owned by another lecturer.`
               );
           } else {
-              const count = syncedCourses.length || chosenTabs.length;
-              showToast('success', `Synced ${count} selected subject${count === 1 ? '' : 's'} from Google Sheet.`);
+              const count = syncedCourses.length;
+              showToast('success', `Synced ${count} new subject${count === 1 ? '' : 's'} from Google Sheet.`);
           }
           setSheetSyncModalItems(null);
       } finally {
@@ -3467,183 +3473,212 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </h2>
             <p className="text-xs text-gray-500 mt-1 mb-4 leading-relaxed">
               {isAdmin
-                ? 'Choose the tabs you want to sync and assign each subject to its lecturer or Admin. Subjects assigned to a lecturer are locked for all other lecturer accounts.'
-                : 'Select only the subjects that belong to you. Subjects already owned by another lecturer or Admin are locked and will not sync.'}
+                ? 'Choose only new tabs to sync and assign each subject to its lecturer or Admin. Subjects already available in Subjects are skipped automatically so they will not be duplicated or re-synced.'
+                : 'Select only new subjects that belong to you. Subjects already available in your Subjects or owned by another lecturer cannot be duplicated or re-synced.'}
             </p>
 
-            <div className="flex items-center justify-between gap-2 pb-3 border-b border-gray-100 text-[11px] font-semibold">
-              <span className="text-gray-500 tabular-nums">
-                {selectedSyncCourseKeys.size} selected · {sheetSyncModalItems.filter((i) => i.status === 'other').length} locked
-              </span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    const next = new Set<string>();
-                    sheetSyncModalItems.forEach((item) => {
-                      if (item.status === 'mine' || item.status === 'assigned_to_me') {
-                        next.add(item.tab.courseName.trim().toUpperCase());
-                      }
-                    });
-                    setSelectedSyncCourseKeys(next);
-                  }}
-                  className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors"
-                >
-                  Select Mine
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedSyncCourseKeys(new Set())}
-                  className="px-2.5 py-1 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
+            {(() => {
+              const normKey = (name: string) => name.replace(/\s+/g, ' ').trim().toUpperCase();
+              const alreadySyncedCount = sheetSyncModalItems.filter((i) => i.alreadySynced).length;
+              const lockedOnlyCount = sheetSyncModalItems.filter((i) => !i.alreadySynced && i.status === 'other').length;
+              const syncableCount = sheetSyncModalItems.filter((i) => !i.alreadySynced && i.status !== 'other').length;
 
-            <div className="my-3 overflow-y-auto custom-scrollbar space-y-2 pr-1 flex-1">
-              {(() => {
-                const activeUsers = collaboratorPool;
-                return sheetSyncModalItems.map((item) => {
-                  const key = item.tab.courseName.trim().toUpperCase();
-                  const isLocked = item.status === 'other';
-                  const isChecked = !isLocked && selectedSyncCourseKeys.has(key);
-                  const chosenOwnerId = selectedSyncOwnerByCourse[key] || '';
-                  const chosenSharedIds = selectedSyncSharedByCourse[key] || [];
-                  const eligibleCoLecturers = activeUsers.filter((u) => u.id !== chosenOwnerId);
-
-                  let statusLabel = 'Unassigned — check to claim';
-                  let statusTone = 'text-gray-500';
-                  if (item.status === 'mine') {
-                    statusLabel = item.sharedBy
-                      ? `Shared with you by ${item.sharedBy} (Co-lecturer)`
-                      : 'Your Subject';
-                    statusTone = item.sharedBy ? 'text-indigo-700' : 'text-emerald-700';
-                  } else if (item.status === 'assigned_to_me') {
-                    statusLabel = 'Assigned to You';
-                    statusTone = 'text-indigo-700';
-                  } else if (item.status === 'other') {
-                    statusLabel = item.reason || `Owned by ${item.ownerLabel || 'another lecturer'} — locked`;
-                    statusTone = 'text-red-600';
-                  } else if (item.status === 'other_managed') {
-                    statusLabel = `Owner: ${item.ownerLabel || 'Lecturer'}`;
-                    statusTone = 'text-amber-700';
-                  }
-
-                  return (
-                    <div
-                      key={key}
-                      className={`p-3 rounded-2xl border transition-colors ${
-                        isLocked
-                          ? 'bg-gray-50 border-gray-200 opacity-65'
-                          : isChecked
-                            ? 'bg-emerald-50/40 border-emerald-300'
-                            : 'bg-white border-gray-200 hover:bg-gray-50'
-                      }`}
-                    >
-                      <label className={`flex items-start gap-3 ${isLocked ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
-                        <input
-                          type="checkbox"
-                          disabled={isLocked || isConfirmingSheetSync}
-                          checked={isChecked}
-                          onChange={() => {
-                            if (isLocked) return;
-                            setSelectedSyncCourseKeys((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(key)) next.delete(key);
-                              else next.add(key);
-                              return next;
-                            });
-                          }}
-                          className="mt-0.5 h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 disabled:opacity-50"
-                        />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-2 flex-wrap">
-                            <span className="text-sm font-bold text-gray-900 truncate">
-                              {item.tab.courseName}
-                            </span>
-                            <span className="text-[11px] font-medium text-gray-400 tabular-nums shrink-0">
-                              {item.tab.students.length} student{item.tab.students.length === 1 ? '' : 's'}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2 mt-0.5 flex-wrap text-[11px] font-semibold">
-                            {item.tab.sheetName && item.tab.sheetName.trim().toUpperCase() !== item.tab.courseName.trim().toUpperCase() && (
-                              <span className="text-gray-400">Tab: {item.tab.sheetName}</span>
-                            )}
-                            <span className={statusTone}>{statusLabel}</span>
-                          </div>
-                        </div>
-                      </label>
-
-                      {isAdmin && !isLocked && activeUsers.length > 0 && (
-                        <div className="mt-2.5 pt-2 border-t border-gray-100 space-y-2 pl-7">
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[10px] font-semibold text-gray-500">Assign Owner</span>
-                            <select
-                              aria-label={`Assign owner for ${item.tab.courseName}`}
-                              disabled={isConfirmingSheetSync}
-                              value={chosenOwnerId}
-                              onChange={(e) => {
-                                const nextOwner = e.target.value;
-                                setSelectedSyncOwnerByCourse((prev) => ({ ...prev, [key]: nextOwner }));
-                                setSelectedSyncSharedByCourse((prev) => ({
-                                  ...prev,
-                                  [key]: (prev[key] || []).filter((id) => id !== nextOwner),
-                                }));
-                              }}
-                              className="font-sans text-[11px] font-semibold rounded-lg pl-2.5 pr-7 py-1 outline-none max-w-[190px] bg-white text-gray-800 border border-gray-200 shadow-sm"
-                            >
-                              {activeUsers.map((u) => (
-                                <option key={u.id} value={u.id}>
-                                  {u.username}{u.role === 'admin' ? ' (Admin)' : ''}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          {eligibleCoLecturers.length > 0 && (
-                            <div className="flex items-start justify-between gap-2 flex-wrap">
-                              <span className="text-[10px] font-semibold text-gray-500 pt-1">Co-Lecturers</span>
-                              <div className="flex flex-wrap gap-1 flex-1 justify-end">
-                                {eligibleCoLecturers.map((u) => {
-                                  const isShared = chosenSharedIds.includes(u.id);
-                                  return (
-                                    <label
-                                      key={u.id}
-                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[10px] font-semibold cursor-pointer transition-colors ${
-                                        isShared
-                                          ? 'bg-indigo-50 border-indigo-300 text-indigo-800'
-                                          : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
-                                      }`}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        disabled={isConfirmingSheetSync}
-                                        checked={isShared}
-                                        onChange={() => {
-                                          setSelectedSyncSharedByCourse((prev) => {
-                                            const curr = prev[key] || [];
-                                            const next = curr.includes(u.id)
-                                              ? curr.filter((id) => id !== u.id)
-                                              : [...curr, u.id];
-                                            return { ...prev, [key]: next };
-                                          });
-                                        }}
-                                        className="h-3 w-3 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                                      />
-                                      <span>{u.username}</span>
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
+              return (
+                <>
+                  <div className="flex items-center justify-between gap-2 pb-3 border-b border-gray-100 text-[11px] font-semibold">
+                    <span className="text-gray-500 tabular-nums">
+                      {selectedSyncCourseKeys.size} new selected · {alreadySyncedCount} already synced · {lockedOnlyCount} locked
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        disabled={syncableCount === 0}
+                        onClick={() => {
+                          const next = new Set<string>();
+                          sheetSyncModalItems.forEach((item) => {
+                            if (!item.alreadySynced && item.status === 'assigned_to_me') {
+                              next.add(normKey(item.tab.courseName));
+                            }
+                          });
+                          setSelectedSyncCourseKeys(next);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors disabled:opacity-40"
+                      >
+                        Select Mine
+                      </button>
+                      <button
+                        type="button"
+                        disabled={selectedSyncCourseKeys.size === 0}
+                        onClick={() => setSelectedSyncCourseKeys(new Set())}
+                        className="px-2.5 py-1 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors disabled:opacity-40"
+                      >
+                        Clear
+                      </button>
                     </div>
-                  );
-                });
-              })()}
-            </div>
+                  </div>
+
+                  {syncableCount === 0 && (
+                    <div className="mt-3 px-3.5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-[11px] font-semibold text-emerald-800">
+                      All available subjects from this Google Sheet are already in Subjects (or owned by other lecturers) and will not be duplicated or re-synced.
+                    </div>
+                  )}
+
+                  <div className="my-3 overflow-y-auto custom-scrollbar space-y-2 pr-1 flex-1">
+                    {(() => {
+                      const activeUsers = collaboratorPool;
+                      return sheetSyncModalItems.map((item) => {
+                        const key = normKey(item.tab.courseName);
+                        const isLocked = item.status === 'other';
+                        const isAlreadySynced = Boolean(item.alreadySynced);
+                        const isDisabled = isLocked || isAlreadySynced;
+                        const isChecked = !isDisabled && selectedSyncCourseKeys.has(key);
+                        const chosenOwnerId = selectedSyncOwnerByCourse[key] || '';
+                        const chosenSharedIds = selectedSyncSharedByCourse[key] || [];
+                        const eligibleCoLecturers = activeUsers.filter((u) => u.id !== chosenOwnerId);
+
+                        let statusLabel = 'New — check to sync';
+                        let statusTone = 'text-gray-500';
+                        if (isAlreadySynced && item.status === 'mine') {
+                          statusLabel = item.sharedBy
+                            ? `Already Synced · Shared with you by ${item.sharedBy} (Co-lecturer)`
+                            : 'Already Synced · In your Subjects';
+                          statusTone = 'text-emerald-700';
+                        } else if (isAlreadySynced && item.status === 'other_managed') {
+                          statusLabel = `Already Synced · Owner: ${item.ownerLabel || 'Lecturer'}`;
+                          statusTone = 'text-emerald-700';
+                        } else if (isAlreadySynced && item.status === 'other') {
+                          statusLabel = item.reason || `Owned by ${item.ownerLabel || 'another lecturer'} — locked`;
+                          statusTone = 'text-red-600';
+                        } else if (item.status === 'assigned_to_me') {
+                          statusLabel = 'New · Assigned to You';
+                          statusTone = 'text-indigo-700';
+                        } else if (item.status === 'other') {
+                          statusLabel = item.reason || `Owned by ${item.ownerLabel || 'another lecturer'} — locked`;
+                          statusTone = 'text-red-600';
+                        } else if (item.status === 'other_managed') {
+                          statusLabel = `New · Sheet Owner: ${item.ownerLabel || 'Lecturer'}`;
+                          statusTone = 'text-amber-700';
+                        }
+
+                        return (
+                          <div
+                            key={key}
+                            className={`p-3 rounded-2xl border transition-colors ${
+                              isLocked
+                                ? 'bg-gray-50 border-gray-200 opacity-65'
+                                : isAlreadySynced
+                                  ? 'bg-emerald-50/25 border-emerald-200/80 opacity-80'
+                                  : isChecked
+                                    ? 'bg-emerald-50/40 border-emerald-300'
+                                    : 'bg-white border-gray-200 hover:bg-gray-50'
+                            }`}
+                          >
+                            <label className={`flex items-start gap-3 ${isDisabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+                              <input
+                                type="checkbox"
+                                disabled={isDisabled || isConfirmingSheetSync}
+                                checked={isChecked}
+                                onChange={() => {
+                                  if (isDisabled) return;
+                                  setSelectedSyncCourseKeys((prev) => {
+                                    const next = new Set(prev);
+                                    if (next.has(key)) next.delete(key);
+                                    else next.add(key);
+                                    return next;
+                                  });
+                                }}
+                                className="mt-0.5 h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 disabled:opacity-50"
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-center justify-between gap-2 flex-wrap">
+                                  <span className="text-sm font-bold text-gray-900 truncate">
+                                    {item.tab.courseName}
+                                  </span>
+                                  <span className="text-[11px] font-medium text-gray-400 tabular-nums shrink-0">
+                                    {item.tab.students.length} student{item.tab.students.length === 1 ? '' : 's'}
+                                  </span>
+                                </div>
+                                <div className="flex items-center gap-2 mt-0.5 flex-wrap text-[11px] font-semibold">
+                                  {item.tab.sheetName && normKey(item.tab.sheetName) !== key && (
+                                    <span className="text-gray-400">Tab: {item.tab.sheetName}</span>
+                                  )}
+                                  <span className={statusTone}>{statusLabel}</span>
+                                </div>
+                              </div>
+                            </label>
+
+                            {isAdmin && !isDisabled && activeUsers.length > 0 && (
+                              <div className="mt-2.5 pt-2 border-t border-gray-100 space-y-2 pl-7">
+                                <div className="flex items-center justify-between gap-2">
+                                  <span className="text-[10px] font-semibold text-gray-500">Assign Owner</span>
+                                  <select
+                                    aria-label={`Assign owner for ${item.tab.courseName}`}
+                                    disabled={isConfirmingSheetSync}
+                                    value={chosenOwnerId}
+                                    onChange={(e) => {
+                                      const nextOwner = e.target.value;
+                                      setSelectedSyncOwnerByCourse((prev) => ({ ...prev, [key]: nextOwner }));
+                                      setSelectedSyncSharedByCourse((prev) => ({
+                                        ...prev,
+                                        [key]: (prev[key] || []).filter((id) => id !== nextOwner),
+                                      }));
+                                    }}
+                                    className="font-sans text-[11px] font-semibold rounded-lg pl-2.5 pr-7 py-1 outline-none max-w-[190px] bg-white text-gray-800 border border-gray-200 shadow-sm"
+                                  >
+                                    {activeUsers.map((u) => (
+                                      <option key={u.id} value={u.id}>
+                                        {u.username}{u.role === 'admin' ? ' (Admin)' : ''}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                {eligibleCoLecturers.length > 0 && (
+                                  <div className="flex items-start justify-between gap-2 flex-wrap">
+                                    <span className="text-[10px] font-semibold text-gray-500 pt-1">Co-Lecturers</span>
+                                    <div className="flex flex-wrap gap-1 flex-1 justify-end">
+                                      {eligibleCoLecturers.map((u) => {
+                                        const isShared = chosenSharedIds.includes(u.id);
+                                        return (
+                                          <label
+                                            key={u.id}
+                                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[10px] font-semibold cursor-pointer transition-colors ${
+                                              isShared
+                                                ? 'bg-indigo-50 border-indigo-300 text-indigo-800'
+                                                : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                                            }`}
+                                          >
+                                            <input
+                                              type="checkbox"
+                                              disabled={isConfirmingSheetSync}
+                                              checked={isShared}
+                                              onChange={() => {
+                                                setSelectedSyncSharedByCourse((prev) => {
+                                                  const curr = prev[key] || [];
+                                                  const next = curr.includes(u.id)
+                                                    ? curr.filter((id) => id !== u.id)
+                                                    : [...curr, u.id];
+                                                  return { ...prev, [key]: next };
+                                                });
+                                              }}
+                                              className="h-3 w-3 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                            />
+                                            <span>{u.username}</span>
+                                          </label>
+                                        );
+                                      })}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </>
+              );
+            })()}
 
             <div className="flex items-center gap-3 pt-3 border-t border-gray-100">
               <button

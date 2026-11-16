@@ -106,6 +106,7 @@ export type SheetTabOwnershipStatus =
 export interface SheetTabOwnershipResult {
   courseName: string;
   status: SheetTabOwnershipStatus;
+  alreadySynced?: boolean;
   ownerId?: string;
   ownerLabel?: string;
   sharedWith?: string[];

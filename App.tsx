@@ -703,7 +703,18 @@ const App: React.FC = () => {
       .then((resData: { course?: CourseProfile } | null) => {
         if (resData?.course) {
           const saved = normalizeCourses([resData.course])[0];
-          setCourses(prev => prev.map(c => (c.id === tempId || c.id === saved.id ? saved : c)));
+          setCourses(prev => {
+            const byId = new Map<string, CourseProfile>();
+            prev.forEach(c => {
+              if (c.id === tempId || c.id === saved.id) {
+                byId.set(saved.id, saved);
+              } else {
+                byId.set(c.id, c);
+              }
+            });
+            if (!byId.has(saved.id)) byId.set(saved.id, saved);
+            return Array.from(byId.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+          });
         }
       })
       .catch(() => { /* ignore */ });
@@ -755,7 +766,8 @@ const App: React.FC = () => {
   }, [apiFetch]);
 
   const handleSyncSheetCourses = useCallback(async (
-    sheetTabs: SheetTabCandidate[]
+    sheetTabs: SheetTabCandidate[],
+    options?: { allowUpdateExisting?: boolean }
   ): Promise<SyncSheetCoursesResult> => {
     if (!Array.isArray(sheetTabs) || sheetTabs.length === 0) {
       return { success: true, courses: [], skippedCourses: [] };
@@ -764,7 +776,10 @@ const App: React.FC = () => {
     try {
       const res = await apiFetch('/api/courses/sync-tabs', {
         method: 'POST',
-        body: JSON.stringify({ tabs: sheetTabs }),
+        body: JSON.stringify({
+          tabs: sheetTabs,
+          allowUpdateExisting: Boolean(options?.allowUpdateExisting),
+        }),
       });
       if (!res.ok) {
         return { success: false, courses: [], skippedCourses: [] };
@@ -778,8 +793,17 @@ const App: React.FC = () => {
       if (syncedList.length > 0) {
         setCourses(prev => {
           const byId = new Map<string, CourseProfile>();
+          const nameKey = (n: string) => n.replace(/\s+/g, ' ').trim().toUpperCase();
           prev.forEach(c => byId.set(c.id, c));
-          syncedList.forEach(c => byId.set(c.id, c));
+          syncedList.forEach(c => {
+            const targetKey = nameKey(c.courseName);
+            for (const [existingId, existingCourse] of byId.entries()) {
+              if (existingId !== c.id && nameKey(existingCourse.courseName) === targetKey && existingCourse.ownerId === c.ownerId) {
+                byId.delete(existingId);
+              }
+            }
+            byId.set(c.id, c);
+          });
           return Array.from(byId.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
         });
       }

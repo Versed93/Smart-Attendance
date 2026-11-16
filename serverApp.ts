@@ -61,6 +61,14 @@ const toCourseKey = (name: string): string => {
   const clean = name.trim();
   return clean ? clean.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase() : 'GENERAL_SESSION';
 };
+const normalizeCourseNameKey = (name: string): string =>
+  name.replace(/\s+/g, ' ').trim().toUpperCase();
+const isSameCourse = (course: CourseProfile, cleanName: string): boolean => {
+  if (!cleanName) return false;
+  if (normalizeCourseNameKey(course.courseName) === normalizeCourseNameKey(cleanName)) return true;
+  if (course.id === toCourseKey(cleanName)) return true;
+  return false;
+};
 const sanitizeCoursePath = (str: string): string => str.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
 const getSessionDateId = (): string => new Date().toISOString().slice(0, 10);
 
@@ -1420,7 +1428,7 @@ export function createApiApp(): express.Express {
       const targetSharedWith = sanitizeSharedWithIds(req.body?.sharedWith, allUsers, targetOwnerId);
 
       const existingOwned = allCourses.find(
-        (c) => canAccessCourse(c, auth) && c.courseName.trim().toUpperCase() === cleanName.toUpperCase()
+        (c) => canAccessCourse(c, auth) && isSameCourse(c, cleanName)
       );
       if (existingOwned) {
         res.json({ success: true, course: existingOwned });
@@ -1565,13 +1573,15 @@ export function createApiApp(): express.Express {
       const authUser = allUsers.find((u) => u.id === auth.uid) || null;
 
       const results: SheetTabOwnershipResult[] = [];
+      const seenCheckKeys = new Set<string>();
       for (const tab of tabs) {
         const cleanName = String(tab?.courseName || '').trim();
         if (!cleanName) continue;
-        const targetUpper = cleanName.toUpperCase();
-        const matchingCourses = allCourses.filter(
-          (c) => c.courseName.trim().toUpperCase() === targetUpper
-        );
+        const normKey = normalizeCourseNameKey(cleanName);
+        if (seenCheckKeys.has(normKey)) continue;
+        seenCheckKeys.add(normKey);
+
+        const matchingCourses = allCourses.filter((c) => isSameCourse(c, cleanName));
         const directMine = matchingCourses.find((c) => isDirectOwnerOrShared(c, auth));
         const otherCourse = matchingCourses.find((c) => !isDirectOwnerOrShared(c, auth));
         const sheetOwner = resolveSheetTabOwner(tab?.owner, Boolean(tab?.ownerExplicit), allUsers);
@@ -1585,6 +1595,36 @@ export function createApiApp(): express.Express {
             directMine.sharedWith.some((entry) => entry.toLowerCase() === auth.username.toLowerCase()))
         );
 
+        // If subject already exists in the system for the caller (owner or co-lecturer), never duplicate or re-sync
+        if (directMine) {
+          results.push({
+            courseName: cleanName,
+            status: 'mine',
+            alreadySynced: true,
+            ownerId: directMine.ownerId || auth.uid,
+            ownerLabel: directMine.createdBy || auth.username,
+            sharedWith: directMine.sharedWith || [],
+            sharedBy: isCoLecturerOnMine ? (directMine.createdBy || 'Owner') : undefined,
+          });
+          continue;
+        }
+
+        // If subject already exists in the system under another lecturer, never duplicate or re-sync
+        if (otherCourse) {
+          const ownerName = otherCourse.createdBy || 'another lecturer';
+          results.push({
+            courseName: cleanName,
+            status: auth.role === 'admin' ? 'other_managed' : 'other',
+            alreadySynced: true,
+            ownerId: auth.role === 'admin' ? otherCourse.ownerId : undefined,
+            ownerLabel: ownerName,
+            sharedWith: auth.role === 'admin' ? (otherCourse.sharedWith || []) : undefined,
+            reason: auth.role === 'admin' ? `Already synced (Owner: ${ownerName})` : `Owned by ${ownerName}`,
+          });
+          continue;
+        }
+
+        // Brand-new subject not yet in the system
         if (sheetOwner.recognized) {
           const matchesCaller = doesAuthMatchSheetOwner(sheetOwner.tokens, auth, authUser);
           if (!matchesCaller) {
@@ -1592,53 +1632,26 @@ export function createApiApp(): express.Express {
               results.push({
                 courseName: cleanName,
                 status: 'other',
+                alreadySynced: false,
                 ownerLabel: sheetOwner.displayLabel,
                 reason: `Assigned to ${sheetOwner.displayLabel} in Google Sheet`,
               });
-              continue;
-            }
-            if (directMine) {
+            } else {
               results.push({
                 courseName: cleanName,
-                status: 'mine',
-                ownerId: directMine.ownerId || auth.uid,
-                ownerLabel: directMine.createdBy || auth.username,
-                sharedWith: directMine.sharedWith || [],
-                sharedBy: isCoLecturerOnMine ? (directMine.createdBy || 'Owner') : undefined,
+                status: 'other_managed',
+                alreadySynced: false,
+                ownerId: sheetOwner.matchedUsers[0]?.id,
+                ownerLabel: sheetOwner.displayLabel,
+                sharedWith: [],
+                reason: `Assigned to ${sheetOwner.displayLabel} in Google Sheet`,
               });
-              continue;
             }
-            results.push({
-              courseName: cleanName,
-              status: 'other_managed',
-              ownerId: otherCourse?.ownerId || sheetOwner.matchedUsers[0]?.id,
-              ownerLabel: otherCourse?.createdBy || sheetOwner.displayLabel,
-              sharedWith: otherCourse?.sharedWith || [],
-              reason: `Assigned to ${otherCourse?.createdBy || sheetOwner.displayLabel}`,
-            });
-            continue;
-          }
-
-          if (directMine) {
-            results.push({
-              courseName: cleanName,
-              status: 'mine',
-              ownerId: directMine.ownerId || auth.uid,
-              ownerLabel: directMine.createdBy || auth.username,
-              sharedWith: directMine.sharedWith || [],
-              sharedBy: isCoLecturerOnMine ? (directMine.createdBy || 'Owner') : undefined,
-            });
-          } else if (otherCourse && auth.role !== 'admin') {
-            results.push({
-              courseName: cleanName,
-              status: 'other',
-              ownerLabel: otherCourse.createdBy || 'another lecturer',
-              reason: `Owned by ${otherCourse.createdBy || 'another lecturer'}`,
-            });
           } else {
             results.push({
               courseName: cleanName,
               status: 'assigned_to_me',
+              alreadySynced: false,
               ownerId: auth.uid,
               ownerLabel: auth.username,
               sharedWith: [],
@@ -1647,31 +1660,11 @@ export function createApiApp(): express.Express {
           continue;
         }
 
-        if (directMine) {
-          results.push({
-            courseName: cleanName,
-            status: 'mine',
-            ownerId: directMine.ownerId || auth.uid,
-            ownerLabel: directMine.createdBy || auth.username,
-            sharedWith: directMine.sharedWith || [],
-            sharedBy: isCoLecturerOnMine ? (directMine.createdBy || 'Owner') : undefined,
-          });
-        } else if (otherCourse) {
-          const ownerName = otherCourse.createdBy || 'another lecturer';
-          results.push({
-            courseName: cleanName,
-            status: auth.role === 'admin' ? 'other_managed' : 'other',
-            ownerId: auth.role === 'admin' ? otherCourse.ownerId : undefined,
-            ownerLabel: ownerName,
-            sharedWith: auth.role === 'admin' ? (otherCourse.sharedWith || []) : undefined,
-            reason: `Owned by ${ownerName}`,
-          });
-        } else {
-          results.push({
-            courseName: cleanName,
-            status: 'unclaimed',
-          });
-        }
+        results.push({
+          courseName: cleanName,
+          status: 'unclaimed',
+          alreadySynced: false,
+        });
       }
 
       res.json({ success: true, results });
@@ -1710,15 +1703,69 @@ export function createApiApp(): express.Express {
         ? Object.values(usersObj).filter((u) => u && u.id)
         : [];
       const authUser = allUsers.find((u) => u.id === auth.uid) || null;
+      const allowUpdateExisting = Boolean(req.body?.allowUpdateExisting);
       const now = Date.now();
       const synced: CourseProfile[] = [];
       const skippedCourses: Array<{ courseName: string; reason: string; owner?: string }> = [];
+      const seenSyncKeys = new Set<string>();
+      const mutableCoursesMap: Record<string, CourseProfile> =
+        coursesObj && typeof coursesObj === 'object' ? { ...coursesObj } : {};
 
       for (const tab of tabs) {
         const cleanName = String(tab.courseName || '').trim();
         if (!cleanName) continue;
+        const normKey = normalizeCourseNameKey(cleanName);
+        if (seenSyncKeys.has(normKey)) continue;
+        seenSyncKeys.add(normKey);
+
         const students = Array.isArray(tab.students) ? tab.students : [];
         const sheetOwner = resolveSheetTabOwner(tab.owner, Boolean(tab.ownerExplicit), allUsers);
+        const existingCourse = allCourses.find((c) => isSameCourse(c, cleanName));
+
+        if (existingCourse) {
+          if (!allowUpdateExisting) {
+            const ownerName = existingCourse.createdBy || 'another lecturer';
+            skippedCourses.push({
+              courseName: cleanName,
+              owner: ownerName,
+              reason: canAccessCourse(existingCourse, auth)
+                ? 'Already exists in Subjects (not re-synced)'
+                : `Already owned by ${ownerName}`,
+            });
+            continue;
+          }
+
+          if (!canAccessCourse(existingCourse, auth)) {
+            const ownerName = existingCourse.createdBy || 'another lecturer';
+            skippedCourses.push({
+              courseName: cleanName,
+              owner: ownerName,
+              reason: `Already owned by ${ownerName}`,
+            });
+            continue;
+          }
+
+          if (sheetOwner.recognized && auth.role !== 'admin') {
+            if (!doesAuthMatchSheetOwner(sheetOwner.tokens, auth, authUser) && !isDirectOwnerOrShared(existingCourse, auth)) {
+              skippedCourses.push({
+                courseName: cleanName,
+                owner: sheetOwner.displayLabel,
+                reason: `Assigned to ${sheetOwner.displayLabel} in Google Sheet`,
+              });
+              continue;
+            }
+          }
+
+          const updated: CourseProfile = {
+            ...existingCourse,
+            sheetName: tab.sheetName || existingCourse.sheetName,
+            students: students.length > 0 ? students : existingCourse.students,
+            updatedAt: now,
+          };
+          await fbPut(`courses/${updated.id}`, updated);
+          synced.push(updated);
+          continue;
+        }
 
         if (sheetOwner.recognized && auth.role !== 'admin') {
           if (!doesAuthMatchSheetOwner(sheetOwner.tokens, auth, authUser)) {
@@ -1736,76 +1783,42 @@ export function createApiApp(): express.Express {
             ? allUsers.find((u) => u.id === tab.ownerId!.trim()) || null
             : null;
 
-        const existingOwned = allCourses.find(
-          (c) => canAccessCourse(c, auth) && c.courseName.trim().toUpperCase() === cleanName.toUpperCase()
-        );
-        if (existingOwned) {
-          const resolvedOwnerId = requestedTabOwner ? requestedTabOwner.id : (existingOwned.ownerId || auth.uid);
-          const resolvedSharedWith =
-            auth.role === 'admin' && Array.isArray(tab.sharedWith)
-              ? sanitizeSharedWithIds(tab.sharedWith, allUsers, resolvedOwnerId)
-              : (existingOwned.sharedWith || []).filter((id) => id !== resolvedOwnerId);
-          const updated: CourseProfile = {
-            ...existingOwned,
-            sheetName: tab.sheetName || existingOwned.sheetName,
-            students: students.length > 0 ? students : existingOwned.students,
-            ownerId: resolvedOwnerId,
-            createdBy: requestedTabOwner ? requestedTabOwner.username : (existingOwned.createdBy || auth.username),
-            sharedWith: resolvedSharedWith,
-            updatedAt: now,
-          };
-          await fbPut(`courses/${updated.id}`, updated);
-          synced.push(updated);
-        } else {
-          const otherOwners = allCourses.filter(
-            (c) => !canAccessCourse(c, auth) && c.courseName.trim().toUpperCase() === cleanName.toUpperCase()
-          );
-          if (otherOwners.length > 0) {
-            const ownerName = otherOwners[0].createdBy || 'another lecturer';
-            skippedCourses.push({
-              courseName: cleanName,
-              owner: ownerName,
-              reason: `Already owned by ${ownerName}`,
-            });
-            continue;
+        let targetOwnerId = auth.uid;
+        let targetCreatedBy = auth.username;
+        let targetSharedWith: string[] = [];
+        if (requestedTabOwner) {
+          targetOwnerId = requestedTabOwner.id;
+          targetCreatedBy = requestedTabOwner.username;
+        } else if (auth.role === 'admin' && sheetOwner.recognized && sheetOwner.matchedUsers.length > 0) {
+          targetOwnerId = sheetOwner.matchedUsers[0].id;
+          targetCreatedBy = sheetOwner.matchedUsers[0].username;
+          if (sheetOwner.matchedUsers.length > 1) {
+            targetSharedWith = sheetOwner.matchedUsers.slice(1).map((u) => u.id);
           }
-
-          let targetOwnerId = auth.uid;
-          let targetCreatedBy = auth.username;
-          let targetSharedWith: string[] = [];
-          if (requestedTabOwner) {
-            targetOwnerId = requestedTabOwner.id;
-            targetCreatedBy = requestedTabOwner.username;
-          } else if (auth.role === 'admin' && sheetOwner.recognized && sheetOwner.matchedUsers.length > 0) {
-            targetOwnerId = sheetOwner.matchedUsers[0].id;
-            targetCreatedBy = sheetOwner.matchedUsers[0].username;
-            if (sheetOwner.matchedUsers.length > 1) {
-              targetSharedWith = sheetOwner.matchedUsers.slice(1).map((u) => u.id);
-            }
-          }
-          if (auth.role === 'admin' && Array.isArray(tab.sharedWith)) {
-            targetSharedWith = sanitizeSharedWithIds(tab.sharedWith, allUsers, targetOwnerId);
-          }
-
-          const baseId = toCourseKey(cleanName);
-          const idTaken = Boolean(coursesObj && coursesObj[baseId]);
-          const finalId = idTaken ? `${baseId}__${toFirebaseKey(targetOwnerId)}` : baseId;
-          const created: CourseProfile = {
-            id: finalId,
-            courseName: cleanName,
-            sheetName: tab.sheetName || '',
-            selectedWeek: 'W1',
-            students,
-            ownerId: targetOwnerId,
-            createdBy: targetCreatedBy,
-            sharedWith: targetSharedWith,
-            createdAt: now,
-            updatedAt: now,
-          };
-          await fbPut(`courses/${finalId}`, created);
-          allCourses.push(created);
-          synced.push(created);
         }
+        if (auth.role === 'admin' && Array.isArray(tab.sharedWith)) {
+          targetSharedWith = sanitizeSharedWithIds(tab.sharedWith, allUsers, targetOwnerId);
+        }
+
+        const baseId = toCourseKey(cleanName);
+        const idTaken = Boolean(mutableCoursesMap[baseId]);
+        const finalId = idTaken ? `${baseId}__${toFirebaseKey(targetOwnerId)}` : baseId;
+        const created: CourseProfile = {
+          id: finalId,
+          courseName: cleanName,
+          sheetName: tab.sheetName || '',
+          selectedWeek: 'W1',
+          students,
+          ownerId: targetOwnerId,
+          createdBy: targetCreatedBy,
+          sharedWith: targetSharedWith,
+          createdAt: now,
+          updatedAt: now,
+        };
+        await fbPut(`courses/${finalId}`, created);
+        mutableCoursesMap[finalId] = created;
+        allCourses.push(created);
+        synced.push(created);
       }
 
       res.json({ success: true, courses: synced, skippedCourses });
