@@ -80,3 +80,41 @@ export interface EmailDeliveryStatus {
   fromAddress?: string;
 }
 
+export interface CollaboratorOption {
+  id: string;
+  username: string;
+  role: 'admin' | 'lecturer';
+}
+
+export interface SheetTabCandidate {
+  sheetName: string;
+  courseName: string;
+  owner?: string;
+  ownerExplicit?: boolean;
+  ownerId?: string;
+  sharedWith?: string[];
+  students: CourseStudentRef[];
+}
+
+export type SheetTabOwnershipStatus =
+  | 'mine'
+  | 'assigned_to_me'
+  | 'other'
+  | 'other_managed'
+  | 'unclaimed';
+
+export interface SheetTabOwnershipResult {
+  courseName: string;
+  status: SheetTabOwnershipStatus;
+  ownerId?: string;
+  ownerLabel?: string;
+  sharedWith?: string[];
+  sharedBy?: string;
+  reason?: string;
+}
+
+export interface SyncSheetCoursesResult {
+  success: boolean;
+  courses: CourseProfile[];
+  skippedCourses: Array<{ courseName: string; reason: string; owner?: string }>;
+}

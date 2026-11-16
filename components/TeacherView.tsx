@@ -1,6 +1,16 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import type { Student, AppUser, AdminSessionActivity, AdminNotification, CourseProfile } from '../types';
+import type {
+  Student,
+  AppUser,
+  AdminSessionActivity,
+  AdminNotification,
+  CollaboratorOption,
+  CourseProfile,
+  SheetTabCandidate,
+  SheetTabOwnershipResult,
+  SyncSheetCoursesResult,
+} from '../types';
 import type { PreRegisteredStudent } from '../studentList';
 import QRCode from 'qrcode';
 import { ShieldCheckIcon } from './icons/ShieldCheckIcon';
@@ -45,13 +55,23 @@ interface TeacherViewProps {
   onCourseChange: (courseName: string) => void;
   courses?: CourseProfile[];
   onSelectCourse?: (course: CourseProfile) => void;
-  onAddCourse?: (courseName: string, initialStudents?: PreRegisteredStudent[]) => CourseProfile | null;
+  onAddCourse?: (courseName: string, initialStudents?: PreRegisteredStudent[], ownerId?: string, sharedWith?: string[]) => CourseProfile | null;
   onDeleteCourse?: (courseId: string) => Promise<void> | void;
-  onSyncSheetCourses?: (sheetTabs: Array<{ sheetName: string; courseName: string; students: PreRegisteredStudent[] }>) => void;
-  onAssignCourseOwner?: (courseId: string, ownerId: string) => Promise<void> | void;
+  onCheckSheetTabOwnership?: (sheetTabs: SheetTabCandidate[]) => Promise<SheetTabOwnershipResult[]>;
+  onSyncSheetCourses?: (sheetTabs: SheetTabCandidate[]) => Promise<SyncSheetCoursesResult> | void;
+  onAssignCourseOwner?: (
+    courseId: string,
+    ownerId: string
+  ) => Promise<{ success: boolean; course?: CourseProfile; error?: string } | void> | void;
+  onUpdateCourseCoLecturers?: (
+    courseId: string,
+    sharedWith: string[]
+  ) => Promise<{ success: boolean; course?: CourseProfile; error?: string } | void> | void;
+  coLecturerOptions?: CollaboratorOption[];
   selectedWeek?: string;
   onWeekChange?: (week: string) => void;
   currentAdminName?: string;
+  currentUserId?: string;
   currentUserRole?: 'admin' | 'lecturer';
   integrationType?: 'google_sheets' | 'airtable' | 'firebase';
   onIntegrationTypeChange?: (type: 'google_sheets' | 'airtable' | 'firebase') => void;
@@ -108,11 +128,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onSelectCourse,
   onAddCourse,
   onDeleteCourse,
+  onCheckSheetTabOwnership,
   onSyncSheetCourses,
   onAssignCourseOwner,
+  onUpdateCourseCoLecturers,
+  coLecturerOptions = [],
   selectedWeek = 'W1',
   onWeekChange,
   currentAdminName = 'admin',
+  currentUserId = '',
   currentUserRole,
   integrationType = 'google_sheets',
   onIntegrationTypeChange,
@@ -198,13 +222,41 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [showWeekPromptModal, setShowWeekPromptModal] = useState(true);
   const [isLoadingSheetCourse, setIsLoadingSheetCourse] = useState(false);
   const [sheetReadError, setSheetReadError] = useState<string | null>(null);
+  const [sheetSyncModalItems, setSheetSyncModalItems] = useState<Array<{
+    tab: SheetTabCandidate;
+    status: SheetTabOwnershipResult['status'];
+    ownerId?: string;
+    ownerLabel?: string;
+    sharedWith?: string[];
+    sharedBy?: string;
+    reason?: string;
+  }> | null>(null);
+  const [selectedSyncCourseKeys, setSelectedSyncCourseKeys] = useState<Set<string>>(new Set());
+  const [selectedSyncOwnerByCourse, setSelectedSyncOwnerByCourse] = useState<Record<string, string>>({});
+  const [selectedSyncSharedByCourse, setSelectedSyncSharedByCourse] = useState<Record<string, string[]>>({});
+  const [isConfirmingSheetSync, setIsConfirmingSheetSync] = useState(false);
   const [showAddCourseModal, setShowAddCourseModal] = useState(false);
   const [newCourseNameInput, setNewCourseNameInput] = useState('');
+  const [newCourseOwnerId, setNewCourseOwnerId] = useState('');
+  const [newCourseSharedWith, setNewCourseSharedWith] = useState<string[]>([]);
   const [newCourseStudents, setNewCourseStudents] = useState<PreRegisteredStudent[]>([]);
   const [newCourseUploadFileName, setNewCourseUploadFileName] = useState('');
   const [newCourseUploadError, setNewCourseUploadError] = useState<string | null>(null);
+  const [editingCoLecturersCourse, setEditingCoLecturersCourse] = useState<{
+    course: CourseProfile;
+    selectedIds: string[];
+  } | null>(null);
+  const [isSavingCoLecturers, setIsSavingCoLecturers] = useState(false);
   const [subjectFilter, setSubjectFilter] = useState('');
+  const [subjectScope, setSubjectScope] = useState<'all' | 'mine'>('all');
   const [historyScope, setHistoryScope] = useState<'course' | 'all'>('course');
+
+  const collaboratorPool = useMemo<CollaboratorOption[]>(() => {
+    if (coLecturerOptions.length > 0) return coLecturerOptions;
+    return registeredUsers
+      .filter((u) => u.status === 'active')
+      .map((u) => ({ id: u.id, username: u.username, role: u.role }));
+  }, [coLecturerOptions, registeredUsers]);
   const [pendingDeleteAction, setPendingDeleteAction] = useState<
     | { type: 'single'; id: string; name: string }
     | { type: 'bulk'; count: number }
@@ -245,57 +297,57 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       return cleaned;
   };
 
-  const applySheetResponse = (
-      data: { courseName?: unknown; students?: unknown; sheets?: Array<{ sheetName?: string; courseName?: string; students?: unknown }> },
-      preferredCourse: string,
-      replaceCourseIfPresent: boolean,
-      syncAllTabs = false
-  ) => {
-      const sheets = Array.isArray(data.sheets)
-          ? data.sheets
-              .filter((s) => s && (s.courseName || (Array.isArray(s.students) && s.students.length > 0)))
-              .map((s) => ({
-                  sheetName: String(s.sheetName || ''),
-                  courseName: String(s.courseName || '').trim(),
-                  students: normalizeSheetStudents(s.students),
-              }))
-          : [];
-
-      const validCourseSheets = sheets.filter((s) => s.courseName);
-      if (syncAllTabs && validCourseSheets.length > 0) {
-          onSyncSheetCourses?.(validCourseSheets);
+  const parseValidCourseSheets = (
+      data: {
+          sheets?: Array<{
+              sheetName?: string;
+              courseName?: string;
+              owner?: string;
+              ownerExplicit?: boolean;
+              students?: unknown;
+          }>;
       }
-
-      const firstNonEmpty = validCourseSheets[0]?.courseName || '';
-      const resolvedCourse = String(data.courseName || firstNonEmpty || '').trim();
-      const activeTarget = (replaceCourseIfPresent ? resolvedCourse : (preferredCourse || resolvedCourse)).trim();
-
-      if (resolvedCourse && syncAllTabs) {
-          if (replaceCourseIfPresent) {
-              setCourseName(resolvedCourse);
-          } else {
-              setCourseName(prev => (!prev || prev === 'General Session') ? resolvedCourse : prev);
-          }
+  ): SheetTabCandidate[] => {
+      if (!Array.isArray(data?.sheets)) return [];
+      const seenCourses = new Set<string>();
+      const valid: SheetTabCandidate[] = [];
+      for (const s of data.sheets) {
+          if (!s) continue;
+          const cleanCourse = String(s.courseName || '').trim();
+          if (!cleanCourse) continue;
+          const key = cleanCourse.toUpperCase();
+          if (seenCourses.has(key)) continue;
+          seenCourses.add(key);
+          valid.push({
+              sheetName: String(s.sheetName || ''),
+              courseName: cleanCourse,
+              owner: typeof s.owner === 'string' ? s.owner.trim() : '',
+              ownerExplicit: Boolean(s.ownerExplicit),
+              students: normalizeSheetStudents(s.students),
+          });
       }
-
-      const matchedSheet = activeTarget
-          ? validCourseSheets.find((s) => s.courseName.toUpperCase() === activeTarget.toUpperCase())
-          : undefined;
-      const shouldUseFallbackStudents = !activeTarget || validCourseSheets.length === 0;
-      const resolvedStudents = matchedSheet
-          ? matchedSheet.students
-          : shouldUseFallbackStudents
-            ? normalizeSheetStudents(data.students)
-            : [];
-
-      if (resolvedStudents.length > 0 && (matchedSheet || shouldUseFallbackStudents)) {
-          onUpdateKnownStudents(resolvedStudents);
-      }
-
-      return { resolvedCourse, studentCount: resolvedStudents.length, tabCount: validCourseSheets.length };
+      return valid;
   };
 
-  const fetchCourseFromB1 = async (manual = false) => {
+  const resolveLocalTabOwnershipFallback = useCallback(
+      (tabs: SheetTabCandidate[]): SheetTabOwnershipResult[] => {
+          return tabs.map((tab) => {
+              const key = tab.courseName.trim().toUpperCase();
+              const matched = courses.find((c) => c.courseName.trim().toUpperCase() === key);
+              if (matched) {
+                  return {
+                      courseName: tab.courseName,
+                      status: 'mine',
+                      ownerLabel: matched.createdBy || currentAdminName || 'You',
+                  };
+              }
+              return { courseName: tab.courseName, status: 'unclaimed' };
+          });
+      },
+      [courses, currentAdminName]
+  );
+
+  const fetchCourseFromB1 = async (manual = false, mode: 'select-tabs' | 'active-only' = manual ? 'select-tabs' : 'active-only') => {
       if (!scriptUrl || integrationType !== 'google_sheets') {
           const msg = 'Configure Google Sheets Apps Script URL in Settings first.';
           setSheetReadError(msg);
@@ -324,28 +376,107 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               return;
           }
           const data = JSON.parse(rawText);
-          if (data && data.success) {
-              const { resolvedCourse, studentCount, tabCount } = applySheetResponse(data, courseName, !courseName.trim(), manual);
-              if (resolvedCourse || studentCount > 0 || tabCount > 0) {
-                  setSheetReadError(null);
-                  if (manual) {
-                      const courseLabel = resolvedCourse || courseName || 'Sheet';
-                      showToast(
-                        'success',
-                        tabCount > 1
-                          ? `Synced ${tabCount} course tabs from Google Sheet`
-                          : `Loaded ${courseLabel} (${studentCount} students from Sheet)`
-                      );
-                  }
-              } else {
-                  setSheetReadError('Course name and student list on the Google Sheet are empty.');
-                  if (manual) showToast('error', 'Course name and student list on the Google Sheet are empty.');
-              }
-          } else {
+          if (!data || !data.success) {
               const msg = data?.error ? `Sheet error: ${data.error}` : 'Could not read Course Name from Google Sheet. Re-deploy updated Apps Script.';
               setSheetReadError(msg);
               if (manual) showToast('error', msg);
+              return;
           }
+
+          const validCourseSheets = parseValidCourseSheets(data);
+          setSheetReadError(null);
+
+          // Automatic background refresh: NEVER import other tabs or change active subject; only refresh current owned course roster.
+          if (!manual) {
+              const targetUpper = courseName.trim().toUpperCase();
+              if (!targetUpper) return;
+              const ownsCurrent = courses.some((c) => c.courseName.trim().toUpperCase() === targetUpper);
+              if (!ownsCurrent) return;
+              const matchedSheet = validCourseSheets.find((s) => s.courseName.toUpperCase() === targetUpper);
+              if (matchedSheet && matchedSheet.students.length > 0) {
+                  onUpdateKnownStudents(matchedSheet.students);
+              }
+              return;
+          }
+
+          const effectiveMode: 'select-tabs' | 'active-only' =
+              mode === 'active-only' && !courseName.trim() ? 'select-tabs' : mode;
+
+          if (effectiveMode === 'active-only') {
+              const targetUpper = courseName.trim().toUpperCase();
+              const matchedSheet = validCourseSheets.find((s) => s.courseName.toUpperCase() === targetUpper);
+              if (!matchedSheet) {
+                  showToast('error', `No Google Sheet tab found for "${courseName}". Use "Sync Sheet Tabs" to choose from available tabs.`);
+                  return;
+              }
+              const ownershipList = onCheckSheetTabOwnership
+                  ? await onCheckSheetTabOwnership([matchedSheet])
+                  : resolveLocalTabOwnershipFallback([matchedSheet]);
+              const ownership = ownershipList[0];
+              if (ownership?.status === 'other') {
+                  showToast('error', `Cannot sync "${matchedSheet.courseName}": ${ownership.reason || 'Owned by another lecturer'}.`);
+                  return;
+              }
+              const result = await onSyncSheetCourses?.([matchedSheet]);
+              if (result && result.skippedCourses.length > 0 && result.courses.length === 0) {
+                  showToast('error', `Skipped "${matchedSheet.courseName}": ${result.skippedCourses[0].reason}.`);
+                  return;
+              }
+              if (matchedSheet.students.length > 0) {
+                  onUpdateKnownStudents(matchedSheet.students);
+              }
+              showToast('success', `Synced "${matchedSheet.courseName}" (${matchedSheet.students.length} students from Sheet).`);
+              return;
+          }
+
+          // Select-tabs mode: verify ownership for each tab and show the picker modal instead of auto-importing all tabs
+          if (validCourseSheets.length === 0) {
+              const msg = 'No tabs with a Course Name in cell B1 were found on the Google Sheet.';
+              setSheetReadError(msg);
+              showToast('error', msg);
+              return;
+          }
+
+          const ownershipList = onCheckSheetTabOwnership
+              ? await onCheckSheetTabOwnership(validCourseSheets)
+              : resolveLocalTabOwnershipFallback(validCourseSheets);
+          const ownershipMap = new Map<string, SheetTabOwnershipResult>();
+          ownershipList.forEach((item) => ownershipMap.set(item.courseName.trim().toUpperCase(), item));
+
+          const pickerItems = validCourseSheets.map((tab) => {
+              const ownership = ownershipMap.get(tab.courseName.trim().toUpperCase());
+              return {
+                  tab,
+                  status: ownership?.status || 'unclaimed',
+                  ownerId: ownership?.ownerId,
+                  ownerLabel: ownership?.ownerLabel,
+                  sharedWith: ownership?.sharedWith,
+                  sharedBy: ownership?.sharedBy,
+                  reason: ownership?.reason,
+              };
+          });
+
+          const preselected = new Set<string>();
+          const initialOwners: Record<string, string> = {};
+          const initialShared: Record<string, string[]> = {};
+          const fallbackAdminOwner =
+              currentUserId ||
+              collaboratorPool.find((u) => u.role === 'admin' || u.username.toLowerCase() === (currentAdminName || 'admin').toLowerCase())?.id ||
+              '';
+          pickerItems.forEach((item) => {
+              const key = item.tab.courseName.trim().toUpperCase();
+              if (item.status === 'mine' || item.status === 'assigned_to_me') {
+                  preselected.add(key);
+              }
+              const ownerIdForTab = item.ownerId || fallbackAdminOwner;
+              initialOwners[key] = ownerIdForTab;
+              initialShared[key] = (item.sharedWith || []).filter((id) => id !== ownerIdForTab);
+          });
+
+          setSelectedSyncOwnerByCourse(initialOwners);
+          setSelectedSyncSharedByCourse(initialShared);
+          setSelectedSyncCourseKeys(preselected);
+          setSheetSyncModalItems(pickerItems);
       } catch {
           const msg = 'Could not read Google Sheet. Check Apps Script URL in Settings (must be /exec with access = Anyone).';
           setSheetReadError(msg);
@@ -354,6 +485,72 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           }
       } finally {
           setIsLoadingSheetCourse(false);
+      }
+  };
+
+  const handleConfirmSheetSync = async () => {
+      if (!sheetSyncModalItems || isConfirmingSheetSync) return;
+      const chosenTabs = sheetSyncModalItems
+          .filter((item) => item.status !== 'other' && selectedSyncCourseKeys.has(item.tab.courseName.trim().toUpperCase()))
+          .map((item) => {
+              const key = item.tab.courseName.trim().toUpperCase();
+              if (!isAdmin) return item.tab;
+              const assignedOwnerId = selectedSyncOwnerByCourse[key];
+              const assignedShared = (selectedSyncSharedByCourse[key] || []).filter((id) => id !== assignedOwnerId);
+              return {
+                  ...item.tab,
+                  ownerId: assignedOwnerId || item.tab.ownerId,
+                  sharedWith: assignedShared,
+              };
+          });
+
+      if (chosenTabs.length === 0) {
+          showToast('error', 'Select at least one subject tab belonging to you.');
+          return;
+      }
+
+      setIsConfirmingSheetSync(true);
+      try {
+          const result = await onSyncSheetCourses?.(chosenTabs);
+          const syncedCourses = result?.courses || [];
+          const skippedCourses = result?.skippedCourses || [];
+
+          const activeUpper = courseName.trim().toUpperCase();
+          const syncedActiveTab = activeUpper
+              ? chosenTabs.find((t) => t.courseName.trim().toUpperCase() === activeUpper)
+              : undefined;
+
+          if (syncedActiveTab) {
+              if (syncedActiveTab.students.length > 0) {
+                  onUpdateKnownStudents(syncedActiveTab.students);
+              }
+          } else if (!activeUpper) {
+              const firstSynced = syncedCourses[0];
+              const fallbackTab = firstSynced
+                  ? chosenTabs.find((t) => t.courseName.trim().toUpperCase() === firstSynced.courseName.trim().toUpperCase())
+                  : chosenTabs[0];
+              if (fallbackTab) {
+                  setCourseName(fallbackTab.courseName);
+                  if (fallbackTab.students.length > 0) {
+                      onUpdateKnownStudents(fallbackTab.students);
+                  }
+              }
+          }
+
+          if (skippedCourses.length > 0 && syncedCourses.length === 0) {
+              showToast('error', `Could not sync selected tab(s): ${skippedCourses[0].reason}.`);
+          } else if (skippedCourses.length > 0) {
+              showToast(
+                  'success',
+                  `Synced ${syncedCourses.length} subject${syncedCourses.length === 1 ? '' : 's'}; skipped ${skippedCourses.length} owned by another lecturer.`
+              );
+          } else {
+              const count = syncedCourses.length || chosenTabs.length;
+              showToast('success', `Synced ${count} selected subject${count === 1 ? '' : 's'} from Google Sheet.`);
+          }
+          setSheetSyncModalItems(null);
+      } finally {
+          setIsConfirmingSheetSync(false);
       }
   };
 
@@ -381,7 +578,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               const data = JSON.parse(rawText);
               if (cancelled || !data?.success) return;
               setSheetReadError(null);
-              applySheetResponse(data, courseName, false, false);
+              const targetUpper = courseName.trim().toUpperCase();
+              if (!targetUpper) return;
+              const ownsCurrent = courses.some((c) => c.courseName.trim().toUpperCase() === targetUpper);
+              if (!ownsCurrent) return;
+              const validCourseSheets = parseValidCourseSheets(data);
+              const matchedSheet = validCourseSheets.find((s) => s.courseName.toUpperCase() === targetUpper);
+              if (matchedSheet && matchedSheet.students.length > 0) {
+                  onUpdateKnownStudents(matchedSheet.students);
+              }
           } catch {
               if (!cancelled) {
                   setSheetReadError('Could not connect to Apps Script URL. Check Settings → Apps Script URL.');
@@ -906,6 +1111,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const closeAddCourseModal = () => {
     setShowAddCourseModal(false);
     setNewCourseNameInput('');
+    setNewCourseOwnerId('');
+    setNewCourseSharedWith([]);
     setNewCourseStudents([]);
     setNewCourseUploadFileName('');
     setNewCourseUploadError(null);
@@ -1594,86 +1801,134 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
       {/* Subjects / Courses Panel */}
       <section className="bg-white p-4 sm:p-5 rounded-3xl shadow-sm border border-gray-100 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <h2 className="text-sm font-bold text-gray-900 tracking-tight whitespace-nowrap">SUBJECTS</h2>
-            <span className="text-xs font-medium text-gray-400 tabular-nums whitespace-nowrap">
-              · {courses.length} {courses.length === 1 ? 'course' : 'courses'}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
-            {courses.length > 6 && (
-              <div className="relative flex-1 sm:flex-initial sm:w-52">
-                <MagnifyingGlassIcon className="w-3.5 h-3.5 text-gray-400 absolute top-1/2 left-3 -translate-y-1/2 pointer-events-none" />
-                <input
-                  type="text"
-                  value={subjectFilter}
-                  onChange={(e) => setSubjectFilter(e.target.value)}
-                  placeholder="Filter subjects..."
-                  className="w-full pl-8 pr-3 py-2 text-xs font-medium bg-gray-50 border border-gray-200 rounded-xl text-gray-800 placeholder-gray-400 focus:bg-white focus:border-indigo-500 outline-none transition-colors"
-                />
-              </div>
-            )}
-            {integrationType === 'google_sheets' && (
-              <button
-                type="button"
-                onClick={() => fetchCourseFromB1(true)}
-                disabled={isLoadingSheetCourse}
-                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors active:scale-95 disabled:opacity-50 whitespace-nowrap shrink-0"
-              >
-                {isLoadingSheetCourse ? 'Syncing...' : 'Sync Sheet Tabs'}
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setNewCourseNameInput('');
-                setShowAddCourseModal(true);
-              }}
-              className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-gray-900 text-white hover:bg-black transition-colors active:scale-95 shadow-sm whitespace-nowrap shrink-0"
-            >
-              <PlusIcon className="w-3.5 h-3.5" />
-              Add Subject
-            </button>
-          </div>
-        </div>
-
-        {courses.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/60 px-4 py-6 text-center">
-            <p className="text-xs font-semibold text-gray-700">No subjects added yet</p>
-            <p className="text-xs text-gray-500 mt-1">
-              Sync tabs from your Google Sheet or add a subject to manage its own roster, week, and attendance list.
-            </p>
-          </div>
-        ) : (() => {
+        {(() => {
+          const activeUsers = registeredUsers.filter((u) => u.status === 'active');
+          const isCourseOwnedByMe = (c: CourseProfile) => {
+            if (currentUserId && c.ownerId) return c.ownerId === currentUserId;
+            return String(c.createdBy || '').trim().toLowerCase() === (currentAdminName || 'admin').trim().toLowerCase();
+          };
+          const showAdminScopeToggle = isAdmin && activeUsers.length > 1 && courses.length > 0;
+          const scopedCourses = showAdminScopeToggle && subjectScope === 'mine'
+            ? courses.filter(isCourseOwnedByMe)
+            : courses;
           const query = subjectFilter.trim().toLowerCase();
           const visibleCourses = query
-            ? courses.filter(c => c.courseName.toLowerCase().includes(query))
-            : courses;
-
-          if (visibleCourses.length === 0) {
-            return (
-              <div className="rounded-2xl border border-gray-100 bg-gray-50/60 px-4 py-5 text-center text-xs text-gray-500">
-                No subjects match &ldquo;{subjectFilter.trim()}&rdquo;.
-              </div>
-            );
-          }
+            ? scopedCourses.filter(c => c.courseName.toLowerCase().includes(query))
+            : scopedCourses;
 
           return (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 max-h-60 overflow-y-auto pr-0.5 custom-scrollbar">
+            <>
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5 min-w-0 flex-wrap">
+                  <h2 className="text-sm font-bold text-gray-900 tracking-tight whitespace-nowrap">SUBJECTS</h2>
+                  <span className="text-xs font-medium text-gray-400 tabular-nums whitespace-nowrap">
+                    · {scopedCourses.length} {scopedCourses.length === 1 ? 'course' : 'courses'}
+                  </span>
+                  {showAdminScopeToggle && (
+                    <div className="inline-flex bg-gray-100 p-0.5 rounded-xl border border-gray-200/70">
+                      <button
+                        type="button"
+                        onClick={() => setSubjectScope('all')}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
+                          subjectScope === 'all'
+                            ? 'bg-white text-gray-900 shadow-sm'
+                            : 'text-gray-500 hover:text-gray-800'
+                        }`}
+                      >
+                        All ({courses.length})
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSubjectScope('mine')}
+                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition-colors ${
+                          subjectScope === 'mine'
+                            ? 'bg-white text-indigo-700 shadow-sm'
+                            : 'text-gray-500 hover:text-gray-800'
+                        }`}
+                      >
+                        Mine ({courses.filter(isCourseOwnedByMe).length})
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                  {courses.length > 6 && (
+                    <div className="relative flex-1 sm:flex-initial sm:w-52">
+                      <MagnifyingGlassIcon className="w-3.5 h-3.5 text-gray-400 absolute top-1/2 left-3 -translate-y-1/2 pointer-events-none" />
+                      <input
+                        type="text"
+                        value={subjectFilter}
+                        onChange={(e) => setSubjectFilter(e.target.value)}
+                        placeholder="Filter subjects..."
+                        className="w-full pl-8 pr-3 py-2 text-xs font-medium bg-gray-50 border border-gray-200 rounded-xl text-gray-800 placeholder-gray-400 focus:bg-white focus:border-indigo-500 outline-none transition-colors"
+                      />
+                    </div>
+                  )}
+                  {integrationType === 'google_sheets' && (
+                    <button
+                      type="button"
+                      onClick={() => fetchCourseFromB1(true, 'select-tabs')}
+                      disabled={isLoadingSheetCourse}
+                      className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors active:scale-95 disabled:opacity-50 whitespace-nowrap shrink-0"
+                    >
+                      {isLoadingSheetCourse ? 'Syncing...' : 'Sync Sheet Tabs'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNewCourseNameInput('');
+                      setNewCourseOwnerId(currentUserId || activeUsers.find(u => u.role === 'admin')?.id || '');
+                      setNewCourseSharedWith([]);
+                      setShowAddCourseModal(true);
+                    }}
+                    className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-gray-900 text-white hover:bg-black transition-colors active:scale-95 shadow-sm whitespace-nowrap shrink-0"
+                  >
+                    <PlusIcon className="w-3.5 h-3.5" />
+                    Add Subject
+                  </button>
+                </div>
+              </div>
+
+              {courses.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-gray-200 bg-gray-50/60 px-4 py-6 text-center">
+                  <p className="text-xs font-semibold text-gray-700">No subjects added yet</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Sync tabs from your Google Sheet or add a subject to manage its own roster, week, and attendance list.
+                  </p>
+                </div>
+              ) : visibleCourses.length === 0 ? (
+                <div className="rounded-2xl border border-gray-100 bg-gray-50/60 px-4 py-5 text-center text-xs text-gray-500">
+                  {query
+                    ? <>No subjects match &ldquo;{subjectFilter.trim()}&rdquo;.</>
+                    : 'No subjects assigned to your account yet. Switch to "All" or sync/add a subject.'}
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2.5 max-h-60 overflow-y-auto pr-0.5 custom-scrollbar">
               {visibleCourses.map((c) => {
                 const isActive = courseName.trim().toUpperCase() === c.courseName.trim().toUpperCase();
                 const studentCount = c.students?.length ?? 0;
                 const weekLabel = (c.selectedWeek || 'W1').replace(/^W(\d+)$/i, 'Week $1');
-                const activeUsers = registeredUsers.filter((u) => u.status === 'active');
                 const showOwnerSelector = isAdmin && Boolean(onAssignCourseOwner) && activeUsers.length > 0;
                 const matchedOwner =
-                  activeUsers.find((u) => u.id === c.ownerId) ||
-                  activeUsers.find(
+                  collaboratorPool.find((u) => u.id === c.ownerId) ||
+                  collaboratorPool.find(
                     (u) => u.username.toLowerCase() === String(c.createdBy || '').trim().toLowerCase()
                   );
                 const resolvedOwnerValue = matchedOwner?.id || c.ownerId || '';
+                const isPrimaryOwner =
+                  isAdmin ||
+                  (currentUserId
+                    ? c.ownerId === currentUserId
+                    : String(c.createdBy || '').trim().toLowerCase() === (currentAdminName || '').trim().toLowerCase());
+                const sharedIds = Array.isArray(c.sharedWith)
+                  ? c.sharedWith.filter((id) => id && id !== resolvedOwnerValue)
+                  : [];
+                const canManageCoLecturers = Boolean(onUpdateCourseCoLecturers) && isPrimaryOwner && collaboratorPool.length > 1;
+                const sharedNames = sharedIds
+                  .map((id) => collaboratorPool.find((u) => u.id === id || u.username.toLowerCase() === id.toLowerCase())?.username || id)
+                  .filter(Boolean);
 
                 return (
                   <div
@@ -1708,6 +1963,18 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                               ? `${studentCount} ${studentCount === 1 ? 'student' : 'students'}`
                               : 'No roster'}
                           </span>
+                          {!isPrimaryOwner && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="truncate">Shared by {c.createdBy || 'owner'}</span>
+                            </>
+                          )}
+                          {isPrimaryOwner && sharedIds.length > 0 && !canManageCoLecturers && (
+                            <>
+                              <span aria-hidden="true">·</span>
+                              <span className="truncate">+{sharedIds.length} co-lecturer</span>
+                            </>
+                          )}
                           {isAdmin && !showOwnerSelector && (
                             <>
                               <span aria-hidden="true">·</span>
@@ -1736,42 +2003,78 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         <XMarkIcon className="w-4 h-4" />
                       </button>
                     </div>
-                    {showOwnerSelector && (
+                    {(showOwnerSelector || canManageCoLecturers) && (
                       <div
-                        className={`px-3.5 pb-2.5 pt-1.5 border-t flex items-center justify-between gap-2 ${
+                        className={`px-3.5 pb-2.5 pt-2 border-t space-y-1.5 ${
                           isActive ? 'border-white/15' : 'border-gray-200/70'
                         }`}
                       >
-                        <span className={`text-[10px] font-semibold shrink-0 ${isActive ? 'text-indigo-100' : 'text-gray-500'}`}>
-                          Owner
-                        </span>
-                        <select
-                          aria-label={`Assign owner for ${c.courseName}`}
-                          value={resolvedOwnerValue}
-                          onChange={(e) => {
-                            if (e.target.value && onAssignCourseOwner) {
-                              void onAssignCourseOwner(c.id, e.target.value);
-                            }
-                          }}
-                          className="font-sans text-[11px] font-semibold rounded-lg pl-2.5 pr-7 py-1 outline-none max-w-[170px] cursor-pointer bg-white text-gray-800 border border-gray-200 shadow-sm"
-                        >
-                          {!matchedOwner && (
-                            <option value="" className="text-gray-900">
-                              {c.createdBy || 'Unassigned'}
-                            </option>
-                          )}
-                          {activeUsers.map((u) => (
-                            <option key={u.id} value={u.id} className="text-gray-900">
-                              {u.username}{u.role === 'admin' ? ' (Admin)' : ''}
-                            </option>
-                          ))}
-                        </select>
+                        {showOwnerSelector && (
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`text-[10px] font-semibold shrink-0 ${isActive ? 'text-indigo-100' : 'text-gray-500'}`}>
+                              Owner
+                            </span>
+                            <select
+                              aria-label={`Assign owner for ${c.courseName}`}
+                              value={resolvedOwnerValue}
+                              onChange={async (e) => {
+                                const nextOwnerId = e.target.value;
+                                if (nextOwnerId && onAssignCourseOwner) {
+                                  const res = await onAssignCourseOwner(c.id, nextOwnerId);
+                                  if (res && res.success === false) {
+                                    showToast('error', res.error || 'Could not update subject owner.');
+                                  } else {
+                                    const assignedUser = activeUsers.find(u => u.id === nextOwnerId);
+                                    showToast('success', `Assigned "${c.courseName}" to ${assignedUser?.username || 'selected user'}.`);
+                                  }
+                                }
+                              }}
+                              className="font-sans text-[11px] font-semibold rounded-lg pl-2.5 pr-7 py-1 outline-none max-w-[170px] cursor-pointer bg-white text-gray-800 border border-gray-200 shadow-sm"
+                            >
+                              {!matchedOwner && (
+                                <option value="" className="text-gray-900">
+                                  {c.createdBy || 'Unassigned'}
+                                </option>
+                              )}
+                              {activeUsers.map((u) => (
+                                <option key={u.id} value={u.id} className="text-gray-900">
+                                  {u.username}{u.role === 'admin' ? ' (Admin)' : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+                        {canManageCoLecturers && (
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`text-[10px] font-semibold truncate ${isActive ? 'text-indigo-100' : 'text-gray-500'}`}>
+                              {sharedNames.length > 0 ? `Shared: ${sharedNames.join(', ')}` : 'Co-lecturers'}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingCoLecturersCourse({
+                                  course: c,
+                                  selectedIds: sharedIds,
+                                })
+                              }
+                              className={`shrink-0 text-[10px] font-semibold px-2.5 py-1 rounded-lg border transition-colors ${
+                                isActive
+                                  ? 'bg-white/15 hover:bg-white/25 text-white border-white/25'
+                                  : 'bg-white hover:bg-indigo-50 text-indigo-700 border-gray-200 shadow-sm'
+                              }`}
+                            >
+                              {sharedIds.length > 0 ? `Share (${sharedIds.length})` : '+ Share'}
+                            </button>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
                 );
               })}
-            </div>
+                </div>
+              )}
+            </>
           );
         })()}
       </section>
@@ -1793,7 +2096,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     </button>
                     <button
                         type="button"
-                        onClick={() => fetchCourseFromB1(true)}
+                        onClick={() => fetchCourseFromB1(true, 'active-only')}
                         disabled={isLoadingSheetCourse}
                         className="text-[10px] font-bold text-emerald-700 uppercase tracking-widest bg-emerald-50 hover:bg-emerald-100 px-3.5 py-1.5 rounded-full border border-emerald-200 transition-all active:scale-95 disabled:opacity-50"
                         title="Sync Course Name & Student List from Google Sheet"
@@ -2395,7 +2698,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     <div className="flex items-center gap-2">
                         <button
                             type="button"
-                            onClick={() => fetchCourseFromB1(true)}
+                            onClick={() => fetchCourseFromB1(true, 'active-only')}
                             disabled={isLoadingSheetCourse}
                             className="text-[10px] font-bold uppercase tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 px-3 py-1.5 rounded-xl transition-all disabled:opacity-50"
                         >
@@ -2734,7 +3037,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     <span>Course Name: <strong className="text-gray-800">{courseName || 'Not set'}</strong></span>
                     <button
                       type="button"
-                      onClick={() => fetchCourseFromB1(true)}
+                      onClick={() => fetchCourseFromB1(true, 'active-only')}
                       disabled={isLoadingSheetCourse}
                       className="text-[10px] text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-md border border-emerald-200 font-bold"
                     >
@@ -2845,7 +3148,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 const clean = newCourseNameInput.trim();
                 if (!clean) return;
                 const count = newCourseStudents.length;
-                onAddCourse?.(clean, newCourseStudents);
+                const ownerToAssign = isAdmin && newCourseOwnerId ? newCourseOwnerId : undefined;
+                const effectiveOwnerId = ownerToAssign || currentUserId;
+                const cleanedCoLecturers = newCourseSharedWith.filter((id) => id && id !== effectiveOwnerId);
+                onAddCourse?.(clean, newCourseStudents, ownerToAssign, cleanedCoLecturers);
                 closeAddCourseModal();
                 showToast(
                   'success',
@@ -2870,6 +3176,76 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   required
                 />
               </div>
+
+              {isAdmin && collaboratorPool.length > 1 && (
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5 ml-1">
+                    Assign Owner
+                  </label>
+                  <select
+                    value={newCourseOwnerId}
+                    onChange={(e) => {
+                      const nextOwner = e.target.value;
+                      setNewCourseOwnerId(nextOwner);
+                      setNewCourseSharedWith((prev) => prev.filter((id) => id !== nextOwner));
+                    }}
+                    className="font-sans w-full border-2 border-gray-100 bg-gray-50 rounded-2xl px-4 py-3 text-sm font-semibold text-gray-900 focus:bg-white focus:border-indigo-600 outline-none transition-all"
+                  >
+                    {collaboratorPool.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.username}{u.role === 'admin' ? ' (Admin)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {(() => {
+                const effectiveOwnerId = (isAdmin && newCourseOwnerId) || currentUserId;
+                const eligibleCoLecturers = collaboratorPool.filter((u) => u.id !== effectiveOwnerId);
+                if (eligibleCoLecturers.length === 0) return null;
+                return (
+                  <div className="bg-gray-50 border border-gray-200 rounded-2xl p-3.5 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">
+                        Share with Co-Lecturers (Optional)
+                      </span>
+                      {newCourseSharedWith.length > 0 && (
+                        <span className="text-[10px] font-semibold text-indigo-600 tabular-nums">
+                          {newCourseSharedWith.length} selected
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto custom-scrollbar">
+                      {eligibleCoLecturers.map((u) => {
+                        const checked = newCourseSharedWith.includes(u.id);
+                        return (
+                          <label
+                            key={u.id}
+                            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border text-xs font-semibold cursor-pointer transition-colors ${
+                              checked
+                                ? 'bg-indigo-50 border-indigo-300 text-indigo-800'
+                                : 'bg-white border-gray-200 text-gray-700 hover:bg-gray-100'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() =>
+                                setNewCourseSharedWith((prev) =>
+                                  prev.includes(u.id) ? prev.filter((id) => id !== u.id) : [...prev, u.id]
+                                )
+                              }
+                              className="h-3.5 w-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <span>{u.username}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
 
               <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 space-y-3">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
@@ -3068,6 +3444,343 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 className="w-full py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-widest text-gray-500 bg-gray-100 hover:bg-gray-200 transition-all"
               >
                 Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {sheetSyncModalItems && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[250] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-xl rounded-3xl sm:rounded-[2rem] shadow-2xl p-5 sm:p-7 relative border-t-8 border-emerald-600 flex flex-col max-h-[90vh] animate-in zoom-in duration-200">
+            <button
+              type="button"
+              disabled={isConfirmingSheetSync}
+              onClick={() => setSheetSyncModalItems(null)}
+              className="absolute top-5 right-5 text-gray-300 hover:text-gray-900 transition-all"
+            >
+              <XCircleIcon className="w-7 h-7" />
+            </button>
+
+            <h2 className="text-lg sm:text-xl font-bold text-gray-900 tracking-tight pr-8">
+              Select Sheet Tabs to Sync
+            </h2>
+            <p className="text-xs text-gray-500 mt-1 mb-4 leading-relaxed">
+              {isAdmin
+                ? 'Choose the tabs you want to sync and assign each subject to its lecturer or Admin. Subjects assigned to a lecturer are locked for all other lecturer accounts.'
+                : 'Select only the subjects that belong to you. Subjects already owned by another lecturer or Admin are locked and will not sync.'}
+            </p>
+
+            <div className="flex items-center justify-between gap-2 pb-3 border-b border-gray-100 text-[11px] font-semibold">
+              <span className="text-gray-500 tabular-nums">
+                {selectedSyncCourseKeys.size} selected · {sheetSyncModalItems.filter((i) => i.status === 'other').length} locked
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const next = new Set<string>();
+                    sheetSyncModalItems.forEach((item) => {
+                      if (item.status === 'mine' || item.status === 'assigned_to_me') {
+                        next.add(item.tab.courseName.trim().toUpperCase());
+                      }
+                    });
+                    setSelectedSyncCourseKeys(next);
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200 transition-colors"
+                >
+                  Select Mine
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedSyncCourseKeys(new Set())}
+                  className="px-2.5 py-1 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+
+            <div className="my-3 overflow-y-auto custom-scrollbar space-y-2 pr-1 flex-1">
+              {(() => {
+                const activeUsers = collaboratorPool;
+                return sheetSyncModalItems.map((item) => {
+                  const key = item.tab.courseName.trim().toUpperCase();
+                  const isLocked = item.status === 'other';
+                  const isChecked = !isLocked && selectedSyncCourseKeys.has(key);
+                  const chosenOwnerId = selectedSyncOwnerByCourse[key] || '';
+                  const chosenSharedIds = selectedSyncSharedByCourse[key] || [];
+                  const eligibleCoLecturers = activeUsers.filter((u) => u.id !== chosenOwnerId);
+
+                  let statusLabel = 'Unassigned — check to claim';
+                  let statusTone = 'text-gray-500';
+                  if (item.status === 'mine') {
+                    statusLabel = item.sharedBy
+                      ? `Shared with you by ${item.sharedBy} (Co-lecturer)`
+                      : 'Your Subject';
+                    statusTone = item.sharedBy ? 'text-indigo-700' : 'text-emerald-700';
+                  } else if (item.status === 'assigned_to_me') {
+                    statusLabel = 'Assigned to You';
+                    statusTone = 'text-indigo-700';
+                  } else if (item.status === 'other') {
+                    statusLabel = item.reason || `Owned by ${item.ownerLabel || 'another lecturer'} — locked`;
+                    statusTone = 'text-red-600';
+                  } else if (item.status === 'other_managed') {
+                    statusLabel = `Owner: ${item.ownerLabel || 'Lecturer'}`;
+                    statusTone = 'text-amber-700';
+                  }
+
+                  return (
+                    <div
+                      key={key}
+                      className={`p-3 rounded-2xl border transition-colors ${
+                        isLocked
+                          ? 'bg-gray-50 border-gray-200 opacity-65'
+                          : isChecked
+                            ? 'bg-emerald-50/40 border-emerald-300'
+                            : 'bg-white border-gray-200 hover:bg-gray-50'
+                      }`}
+                    >
+                      <label className={`flex items-start gap-3 ${isLocked ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
+                        <input
+                          type="checkbox"
+                          disabled={isLocked || isConfirmingSheetSync}
+                          checked={isChecked}
+                          onChange={() => {
+                            if (isLocked) return;
+                            setSelectedSyncCourseKeys((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(key)) next.delete(key);
+                              else next.add(key);
+                              return next;
+                            });
+                          }}
+                          className="mt-0.5 h-4 w-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500 disabled:opacity-50"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between gap-2 flex-wrap">
+                            <span className="text-sm font-bold text-gray-900 truncate">
+                              {item.tab.courseName}
+                            </span>
+                            <span className="text-[11px] font-medium text-gray-400 tabular-nums shrink-0">
+                              {item.tab.students.length} student{item.tab.students.length === 1 ? '' : 's'}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap text-[11px] font-semibold">
+                            {item.tab.sheetName && item.tab.sheetName.trim().toUpperCase() !== item.tab.courseName.trim().toUpperCase() && (
+                              <span className="text-gray-400">Tab: {item.tab.sheetName}</span>
+                            )}
+                            <span className={statusTone}>{statusLabel}</span>
+                          </div>
+                        </div>
+                      </label>
+
+                      {isAdmin && !isLocked && activeUsers.length > 0 && (
+                        <div className="mt-2.5 pt-2 border-t border-gray-100 space-y-2 pl-7">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[10px] font-semibold text-gray-500">Assign Owner</span>
+                            <select
+                              aria-label={`Assign owner for ${item.tab.courseName}`}
+                              disabled={isConfirmingSheetSync}
+                              value={chosenOwnerId}
+                              onChange={(e) => {
+                                const nextOwner = e.target.value;
+                                setSelectedSyncOwnerByCourse((prev) => ({ ...prev, [key]: nextOwner }));
+                                setSelectedSyncSharedByCourse((prev) => ({
+                                  ...prev,
+                                  [key]: (prev[key] || []).filter((id) => id !== nextOwner),
+                                }));
+                              }}
+                              className="font-sans text-[11px] font-semibold rounded-lg pl-2.5 pr-7 py-1 outline-none max-w-[190px] bg-white text-gray-800 border border-gray-200 shadow-sm"
+                            >
+                              {activeUsers.map((u) => (
+                                <option key={u.id} value={u.id}>
+                                  {u.username}{u.role === 'admin' ? ' (Admin)' : ''}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          {eligibleCoLecturers.length > 0 && (
+                            <div className="flex items-start justify-between gap-2 flex-wrap">
+                              <span className="text-[10px] font-semibold text-gray-500 pt-1">Co-Lecturers</span>
+                              <div className="flex flex-wrap gap-1 flex-1 justify-end">
+                                {eligibleCoLecturers.map((u) => {
+                                  const isShared = chosenSharedIds.includes(u.id);
+                                  return (
+                                    <label
+                                      key={u.id}
+                                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[10px] font-semibold cursor-pointer transition-colors ${
+                                        isShared
+                                          ? 'bg-indigo-50 border-indigo-300 text-indigo-800'
+                                          : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                                      }`}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        disabled={isConfirmingSheetSync}
+                                        checked={isShared}
+                                        onChange={() => {
+                                          setSelectedSyncSharedByCourse((prev) => {
+                                            const curr = prev[key] || [];
+                                            const next = curr.includes(u.id)
+                                              ? curr.filter((id) => id !== u.id)
+                                              : [...curr, u.id];
+                                            return { ...prev, [key]: next };
+                                          });
+                                        }}
+                                        className="h-3 w-3 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                                      />
+                                      <span>{u.username}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+
+            <div className="flex items-center gap-3 pt-3 border-t border-gray-100">
+              <button
+                type="button"
+                disabled={isConfirmingSheetSync}
+                onClick={() => setSheetSyncModalItems(null)}
+                className="flex-1 py-3 rounded-2xl bg-gray-100 text-gray-600 hover:bg-gray-200 text-xs font-bold uppercase tracking-wider transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isConfirmingSheetSync || selectedSyncCourseKeys.size === 0}
+                onClick={() => void handleConfirmSheetSync()}
+                className="flex-1 py-3 rounded-2xl bg-emerald-600 text-white hover:bg-emerald-700 text-xs font-bold uppercase tracking-wider transition-all shadow-md shadow-emerald-100 disabled:opacity-50"
+              >
+                {isConfirmingSheetSync
+                  ? 'Syncing...'
+                  : `Sync Selected (${selectedSyncCourseKeys.size})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingCoLecturersCourse && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[255] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6 relative border-t-8 border-indigo-600 animate-in zoom-in duration-200">
+            <button
+              type="button"
+              disabled={isSavingCoLecturers}
+              onClick={() => setEditingCoLecturersCourse(null)}
+              className="absolute top-5 right-5 text-gray-300 hover:text-gray-900 transition-all"
+            >
+              <XCircleIcon className="w-6 h-6" />
+            </button>
+            <h3 className="text-lg font-bold text-gray-900 tracking-tight pr-7">
+              Share Subject with Co-Lecturers
+            </h3>
+            <p className="text-xs font-semibold text-gray-500 mt-1 mb-4">
+              {editingCoLecturersCourse.course.courseName} · Owner:{' '}
+              <span className="text-gray-800">{editingCoLecturersCourse.course.createdBy || 'Owner'}</span>
+            </p>
+
+            {(() => {
+              const ownerId = editingCoLecturersCourse.course.ownerId;
+              const ownerNameLower = String(editingCoLecturersCourse.course.createdBy || '').trim().toLowerCase();
+              const eligible = collaboratorPool.filter(
+                (u) => u.id !== ownerId && u.username.toLowerCase() !== ownerNameLower
+              );
+              if (eligible.length === 0) {
+                return (
+                  <div className="bg-gray-50 border border-gray-200 rounded-2xl p-4 text-xs text-gray-500 text-center">
+                    No other active lecturer accounts available yet.
+                  </div>
+                );
+              }
+              return (
+                <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar pr-1">
+                  {eligible.map((u) => {
+                    const checked = editingCoLecturersCourse.selectedIds.includes(u.id);
+                    return (
+                      <label
+                        key={u.id}
+                        className={`flex items-center justify-between gap-3 p-3 rounded-2xl border cursor-pointer transition-colors ${
+                          checked
+                            ? 'bg-indigo-50/50 border-indigo-300'
+                            : 'bg-white border-gray-200 hover:bg-gray-50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3 min-w-0">
+                          <input
+                            type="checkbox"
+                            disabled={isSavingCoLecturers}
+                            checked={checked}
+                            onChange={() => {
+                              setEditingCoLecturersCourse((prev) => {
+                                if (!prev) return null;
+                                const next = prev.selectedIds.includes(u.id)
+                                  ? prev.selectedIds.filter((id) => id !== u.id)
+                                  : [...prev.selectedIds, u.id];
+                                return { ...prev, selectedIds: next };
+                              });
+                            }}
+                            className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                          />
+                          <span className="text-sm font-bold text-gray-900 truncate">{u.username}</span>
+                        </div>
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
+                          {u.role}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
+            <div className="flex items-center gap-3 pt-4 mt-4 border-t border-gray-100">
+              <button
+                type="button"
+                disabled={isSavingCoLecturers}
+                onClick={() => setEditingCoLecturersCourse(null)}
+                className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-600 hover:bg-gray-200 text-xs font-bold uppercase tracking-wider transition-all"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={isSavingCoLecturers}
+                onClick={async () => {
+                  if (!editingCoLecturersCourse || !onUpdateCourseCoLecturers) return;
+                  setIsSavingCoLecturers(true);
+                  try {
+                    const res = await onUpdateCourseCoLecturers(
+                      editingCoLecturersCourse.course.id,
+                      editingCoLecturersCourse.selectedIds
+                    );
+                    if (res && res.success === false) {
+                      showToast('error', res.error || 'Failed to update co-lecturers.');
+                    } else {
+                      const count = editingCoLecturersCourse.selectedIds.length;
+                      showToast(
+                        'success',
+                        count > 0
+                          ? `Shared "${editingCoLecturersCourse.course.courseName}" with ${count} co-lecturer${count === 1 ? '' : 's'}.`
+                          : `Removed co-lecturers from "${editingCoLecturersCourse.course.courseName}".`
+                      );
+                      setEditingCoLecturersCourse(null);
+                    }
+                  } finally {
+                    setIsSavingCoLecturers(false);
+                  }
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 text-xs font-bold uppercase tracking-wider transition-all shadow-md shadow-indigo-100 disabled:opacity-50"
+              >
+                {isSavingCoLecturers ? 'Saving...' : 'Save'}
               </button>
             </div>
           </div>

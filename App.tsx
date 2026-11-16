@@ -2,7 +2,17 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { TeacherView } from './components/TeacherView';
 import { StudentView } from './components/StudentView';
 import { LoginView } from './components/LoginView';
-import type { Student, AppUser, AdminSessionActivity, AdminNotification, CourseProfile } from './types';
+import type {
+  Student,
+  AppUser,
+  AdminSessionActivity,
+  AdminNotification,
+  CollaboratorOption,
+  CourseProfile,
+  SheetTabCandidate,
+  SheetTabOwnershipResult,
+  SyncSheetCoursesResult,
+} from './types';
 import { PRE_REGISTERED_STUDENTS, PreRegisteredStudent } from './studentList';
 
 type View = 'teacher' | 'student';
@@ -138,6 +148,7 @@ const App: React.FC = () => {
   });
 
   const [attendanceList, setAttendanceList] = useState<Student[]>([]);
+  const [coLecturerOptions, setCoLecturerOptions] = useState<CollaboratorOption[]>([]);
   const [teacherHistory, setTeacherHistory] = useState<Student[]>(() => {
     const saved = localStorage.getItem(TEACHER_HISTORY_KEY);
     if (saved) {
@@ -280,9 +291,14 @@ const App: React.FC = () => {
     setCurrentUserRole('lecturer');
     setActiveSessionId('');
     setRegisteredUsers([]);
+    setCoLecturerOptions([]);
     setAdminSessions([]);
     setAdminNotifications([]);
     setAttendanceList([]);
+    setCourses([]);
+    setActiveCourse('');
+    setKnownStudents([]);
+    setTeacherHistory([]);
     hasInitializedUserPrefRef.current = false;
     courseEditedAtRef.current = 0;
     localStorage.removeItem(AUTH_KEY);
@@ -292,6 +308,9 @@ const App: React.FC = () => {
     localStorage.removeItem(CURRENT_USER_ROLE_KEY);
     localStorage.removeItem(ACTIVE_SESSION_ID_KEY);
     localStorage.removeItem(KIOSK_PREF_KEY);
+    localStorage.removeItem(COURSES_KEY);
+    localStorage.removeItem(KNOWN_STUDENTS_KEY);
+    localStorage.removeItem(TEACHER_HISTORY_KEY);
     if (noticeMessage) {
       setActivationNotice({ type: 'error', message: noticeMessage });
     }
@@ -413,12 +432,14 @@ const App: React.FC = () => {
               setKnownStudents(loadedCourses[0].students || []);
             } else {
               setActiveCourse('');
+              setKnownStudents([]);
             }
           } else if (loadedCourses.length > 0) {
             setActiveCourse(loadedCourses[0].courseName);
             setKnownStudents(loadedCourses[0].students || []);
           } else {
             setActiveCourse('');
+            setKnownStudents([]);
           }
         }
         if (typeof pref.selectedWeek === 'string' && /^W\d+$/i.test(pref.selectedWeek)) {
@@ -436,6 +457,9 @@ const App: React.FC = () => {
             setActiveCourse(loadedCourses[0].courseName);
             setKnownStudents(loadedCourses[0].students || []);
           }
+        } else {
+          setActiveCourse('');
+          setKnownStudents([]);
         }
       }
 
@@ -444,6 +468,9 @@ const App: React.FC = () => {
       }
       if (Array.isArray(data.users)) {
         setRegisteredUsers(data.users);
+      }
+      if (Array.isArray(data.coLecturerOptions)) {
+        setCoLecturerOptions(data.coLecturerOptions);
       }
       if (Array.isArray(data.sessions)) {
         setAdminSessions(data.sessions);
@@ -610,7 +637,7 @@ const App: React.FC = () => {
     saveUserCoursePref(course.courseName, nextWeek);
   }, [saveUserCoursePref]);
 
-  const handleAddCourse = useCallback((rawCourseName: string, initialStudents: PreRegisteredStudent[] = []): CourseProfile | null => {
+  const handleAddCourse = useCallback((rawCourseName: string, initialStudents: PreRegisteredStudent[] = [], ownerId?: string, sharedWith: string[] = []): CourseProfile | null => {
     const cleanName = rawCourseName.trim();
     if (!cleanName) return null;
     const existing = coursesRef.current.find(c => c.courseName.trim().toUpperCase() === cleanName.toUpperCase());
@@ -633,17 +660,23 @@ const App: React.FC = () => {
       handleSelectCourse(existing);
       return existing;
     }
+    const assignedUser = ownerId
+      ? (registeredUsers.find(u => u.id === ownerId) || coLecturerOptions.find(u => u.id === ownerId))
+      : undefined;
+    const resolvedOwnerId = assignedUser?.id || currentUserId || undefined;
+    const resolvedCreatedBy = assignedUser?.username || currentAdminName || 'lecturer';
+    const cleanedSharedWith = sharedWith.filter(id => id && id !== resolvedOwnerId);
     const now = Date.now();
-    const uidSuffix = currentUserId ? `__${currentUserId}` : '';
+    const uidSuffix = resolvedOwnerId ? `__${resolvedOwnerId}` : '';
     const tempId = `${toCourseKey(cleanName)}${uidSuffix}`;
     const optimisticCourse: CourseProfile = {
       id: tempId,
       courseName: cleanName,
       selectedWeek: 'W1',
       students: initialStudents,
-      ownerId: currentUserId || undefined,
-      createdBy: currentAdminName || 'lecturer',
-      sharedWith: [],
+      ownerId: resolvedOwnerId,
+      createdBy: resolvedCreatedBy,
+      sharedWith: cleanedSharedWith,
       createdAt: now,
       updatedAt: now,
     };
@@ -662,6 +695,8 @@ const App: React.FC = () => {
         courseName: cleanName,
         selectedWeek: 'W1',
         students: initialStudents,
+        ownerId: assignedUser?.id || undefined,
+        sharedWith: cleanedSharedWith,
       }),
     })
       .then(r => (r.ok ? r.json() : null))
@@ -674,7 +709,7 @@ const App: React.FC = () => {
       .catch(() => { /* ignore */ });
 
     return optimisticCourse;
-  }, [apiFetch, currentAdminName, currentUserId, handleSelectCourse, persistCourseToServer, toCourseKey]);
+  }, [apiFetch, coLecturerOptions, currentAdminName, currentUserId, handleSelectCourse, persistCourseToServer, registeredUsers, toCourseKey]);
 
   const handleDeleteCourse = useCallback(async (courseId: string) => {
     courseEditedAtRef.current = Date.now();
@@ -696,42 +731,116 @@ const App: React.FC = () => {
     }
   }, [apiFetch, handleSelectCourse, saveUserCoursePref, selectedWeek]);
 
-  const handleSyncSheetCourses = useCallback((sheetTabs: Array<{ sheetName: string; courseName: string; students: PreRegisteredStudent[] }>) => {
-    if (!Array.isArray(sheetTabs) || sheetTabs.length === 0) return;
-    courseEditedAtRef.current = Date.now();
-    void apiFetch('/api/courses/sync-tabs', {
-      method: 'POST',
-      body: JSON.stringify({ tabs: sheetTabs }),
-    })
-      .then(r => (r.ok ? r.json() : null))
-      .then((resData: { courses?: CourseProfile[] } | null) => {
-        if (resData?.courses) {
-          const syncedList = normalizeCourses(resData.courses);
-          setCourses(prev => {
-            const byId = new Map<string, CourseProfile>();
-            prev.forEach(c => byId.set(c.id, c));
-            syncedList.forEach(c => byId.set(c.id, c));
-            return Array.from(byId.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-          });
-        }
-      })
-      .catch(() => { /* ignore */ });
+  const handleCheckSheetTabOwnership = useCallback(async (
+    sheetTabs: SheetTabCandidate[]
+  ): Promise<SheetTabOwnershipResult[]> => {
+    if (!Array.isArray(sheetTabs) || sheetTabs.length === 0) return [];
+    try {
+      const res = await apiFetch('/api/courses/check-tab-ownership', {
+        method: 'POST',
+        body: JSON.stringify({
+          tabs: sheetTabs.map((t) => ({
+            courseName: t.courseName,
+            owner: t.owner || '',
+            ownerExplicit: Boolean(t.ownerExplicit),
+          })),
+        }),
+      });
+      if (!res.ok) return [];
+      const data = (await res.json()) as { success?: boolean; results?: SheetTabOwnershipResult[] };
+      return Array.isArray(data?.results) ? data.results : [];
+    } catch {
+      return [];
+    }
   }, [apiFetch]);
 
-  const handleAssignCourseOwner = useCallback(async (courseId: string, ownerId: string) => {
+  const handleSyncSheetCourses = useCallback(async (
+    sheetTabs: SheetTabCandidate[]
+  ): Promise<SyncSheetCoursesResult> => {
+    if (!Array.isArray(sheetTabs) || sheetTabs.length === 0) {
+      return { success: true, courses: [], skippedCourses: [] };
+    }
+    courseEditedAtRef.current = Date.now();
+    try {
+      const res = await apiFetch('/api/courses/sync-tabs', {
+        method: 'POST',
+        body: JSON.stringify({ tabs: sheetTabs }),
+      });
+      if (!res.ok) {
+        return { success: false, courses: [], skippedCourses: [] };
+      }
+      const resData = (await res.json()) as {
+        success?: boolean;
+        courses?: CourseProfile[];
+        skippedCourses?: Array<{ courseName: string; reason: string; owner?: string }>;
+      } | null;
+      const syncedList = normalizeCourses(resData?.courses);
+      if (syncedList.length > 0) {
+        setCourses(prev => {
+          const byId = new Map<string, CourseProfile>();
+          prev.forEach(c => byId.set(c.id, c));
+          syncedList.forEach(c => byId.set(c.id, c));
+          return Array.from(byId.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+        });
+      }
+      return {
+        success: Boolean(resData?.success),
+        courses: syncedList,
+        skippedCourses: Array.isArray(resData?.skippedCourses) ? resData.skippedCourses : [],
+      };
+    } catch {
+      return { success: false, courses: [], skippedCourses: [] };
+    }
+  }, [apiFetch]);
+
+  const handleAssignCourseOwner = useCallback(async (
+    courseId: string,
+    ownerId: string
+  ): Promise<{ success: boolean; course?: CourseProfile; error?: string }> => {
     courseEditedAtRef.current = Date.now();
     try {
       const res = await apiFetch(`/api/courses/${encodeURIComponent(courseId)}/owner`, {
         method: 'PATCH',
         body: JSON.stringify({ ownerId }),
       });
-      if (!res.ok) return;
-      const data = await res.json();
+      const data = await res.json().catch(() => ({})) as { course?: CourseProfile; error?: string };
+      if (!res.ok) {
+        return { success: false, error: data?.error || 'Could not update subject owner.' };
+      }
       if (data?.course) {
         const updated = normalizeCourses([data.course])[0];
         setCourses(prev => prev.map(c => (c.id === updated.id ? updated : c)));
+        return { success: true, course: updated };
       }
-    } catch { /* ignore */ }
+      return { success: false, error: 'Could not update subject owner.' };
+    } catch {
+      return { success: false, error: 'Network error while updating subject owner.' };
+    }
+  }, [apiFetch]);
+
+  const handleUpdateCourseCoLecturers = useCallback(async (
+    courseId: string,
+    sharedWith: string[]
+  ): Promise<{ success: boolean; course?: CourseProfile; error?: string }> => {
+    courseEditedAtRef.current = Date.now();
+    try {
+      const res = await apiFetch(`/api/courses/${encodeURIComponent(courseId)}/co-lecturers`, {
+        method: 'PATCH',
+        body: JSON.stringify({ sharedWith }),
+      });
+      const data = await res.json().catch(() => ({})) as { course?: CourseProfile; error?: string };
+      if (!res.ok) {
+        return { success: false, error: data?.error || 'Could not update co-lecturers.' };
+      }
+      if (data?.course) {
+        const updated = normalizeCourses([data.course])[0];
+        setCourses(prev => prev.map(c => (c.id === updated.id ? updated : c)));
+        return { success: true, course: updated };
+      }
+      return { success: false, error: 'Could not update co-lecturers.' };
+    } catch {
+      return { success: false, error: 'Network error while updating co-lecturers.' };
+    }
   }, [apiFetch]);
 
   const handleWeekChange = useCallback((week: string) => {
@@ -1514,11 +1623,15 @@ const App: React.FC = () => {
               onSelectCourse={handleSelectCourse}
               onAddCourse={handleAddCourse}
               onDeleteCourse={handleDeleteCourse}
+              onCheckSheetTabOwnership={handleCheckSheetTabOwnership}
               onSyncSheetCourses={handleSyncSheetCourses}
               onAssignCourseOwner={handleAssignCourseOwner}
+              onUpdateCourseCoLecturers={handleUpdateCourseCoLecturers}
+              coLecturerOptions={coLecturerOptions}
               selectedWeek={selectedWeek}
               onWeekChange={handleWeekChange}
               currentAdminName={currentAdminName}
+              currentUserId={currentUserId}
               currentUserRole={currentUserRole}
               integrationType={integrationType}
               onIntegrationTypeChange={handleIntegrationTypeChange}

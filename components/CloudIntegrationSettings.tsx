@@ -64,6 +64,22 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
         }
       }
 
+      var a2Val = String(sheet.getRange("A2").getDisplayValue() || "").trim();
+      var b2Range = sheet.getRange("B2");
+      var b2Val = String(b2Range.getDisplayValue() || "").trim();
+      if (!b2Val && b2Range.isPartOfMerge()) {
+        var mergedB2 = b2Range.getMergedRanges();
+        if (mergedB2 && mergedB2.length > 0) {
+          b2Val = String(mergedB2[0].getCell(1, 1).getDisplayValue() || "").trim();
+        }
+      }
+      var ownerExplicit = /^(owner|lecturer|instructor|staff)\b/i.test(a2Val);
+      var ownerMatch = b2Val.match(/^(?:owner|lecturer|instructor|staff)\\s*[:-]\\s*(.+)$/i);
+      if (ownerMatch) {
+        b2Val = String(ownerMatch[1] || "").trim();
+        ownerExplicit = true;
+      }
+
       // Read students starting from Row 4 (B4+ = Name, C4+ = Student ID)
       var lastRow = sheet.getLastRow();
       var students = [];
@@ -81,6 +97,8 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
       sheetCourses.push({
         sheetName: sheet.getName(),
         courseName: b1Val,
+        owner: b2Val,
+        ownerExplicit: ownerExplicit,
         students: students
       });
 
@@ -404,7 +422,7 @@ function authorizeMail() {
               <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-start gap-3">
                   <div className="bg-amber-100 p-1.5 rounded-lg text-amber-600 shrink-0">ℹ️</div>
                   <p className="text-[10px] text-amber-800 leading-relaxed font-bold uppercase">
-                      Sheet Sync &amp; Emails: Automatically syncs Course Name, Student Roster, and Weeks W1–W14 (recording to {selectedWeek}). Re-deploy the updated script above as a Web App (Access: Anyone) to also enable automatic activation &amp; admin signup emails.
+                      Sheet Sync &amp; Lecturer Ownership: Reads Course Name (B1), optional Lecturer Username/Email (B2), Roster (B4:C), and Weeks W1–W14 (recording to {selectedWeek}). Put a lecturer&apos;s username or email in cell B2 (and re-deploy Apps Script as Web App: Anyone) to lock tabs to their specific account.
                   </p>
               </div>
               <div>

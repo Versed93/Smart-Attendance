@@ -149,6 +149,52 @@ function canAccessCourse(course, auth) {
   }
   return false;
 }
+function isDirectOwnerOrShared(course, auth) {
+  if (course.ownerId && course.ownerId === auth.uid) return true;
+  if (!course.ownerId && course.createdBy && course.createdBy.toLowerCase() === auth.username.toLowerCase()) {
+    return true;
+  }
+  if (!course.ownerId && !course.createdBy && auth.role === "admin") {
+    return true;
+  }
+  if (Array.isArray(course.sharedWith) && (course.sharedWith.includes(auth.uid) || course.sharedWith.some((entry) => entry.toLowerCase() === auth.username.toLowerCase()))) {
+    return true;
+  }
+  return false;
+}
+function parseOwnerTokens(rawOwner) {
+  return String(rawOwner || "").split(/[,;]+/).map((s) => s.trim()).filter(Boolean);
+}
+function resolveSheetTabOwner(rawOwner, ownerExplicit, allUsers) {
+  const tokens = parseOwnerTokens(rawOwner);
+  if (tokens.length === 0) {
+    return { recognized: false, tokens: [], matchedUsers: [], displayLabel: "" };
+  }
+  const matchedUsers = [];
+  const seenIds = /* @__PURE__ */ new Set();
+  for (const token of tokens) {
+    const lower = token.toLowerCase();
+    const user = allUsers.find(
+      (u) => u.username?.trim().toLowerCase() === lower || u.email && u.email.trim().toLowerCase() === lower
+    );
+    if (user && !seenIds.has(user.id)) {
+      seenIds.add(user.id);
+      matchedUsers.push(user);
+    }
+  }
+  const looksLikeEmail = tokens.some((t) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(t));
+  const recognized = ownerExplicit || matchedUsers.length > 0 || looksLikeEmail;
+  const displayLabel = matchedUsers.length > 0 ? matchedUsers.map((u) => u.username).join(", ") : tokens.join(", ");
+  return { recognized, tokens, matchedUsers, displayLabel };
+}
+function doesAuthMatchSheetOwner(tokens, auth, authUser) {
+  const authUsername = auth.username.trim().toLowerCase();
+  const authEmail = (authUser?.email || "").trim().toLowerCase();
+  return tokens.some((token) => {
+    const lower = token.toLowerCase();
+    return lower === authUsername || authEmail !== "" && lower === authEmail;
+  });
+}
 function getDeviceLabel(ua) {
   let os = "Desktop";
   if (/iPhone/i.test(ua)) os = "iPhone";
@@ -1003,12 +1049,22 @@ function createApiApp() {
       const cleanName = String(req.body?.courseName || "").trim();
       const initialStudents = Array.isArray(req.body?.students) ? req.body.students : [];
       const selectedWeek = String(req.body?.selectedWeek || "W1").trim() || "W1";
+      const requestedOwnerId = auth.role === "admin" && typeof req.body?.ownerId === "string" ? req.body.ownerId.trim() : "";
       if (!cleanName) {
         res.status(400).json({ success: false, error: "Course name is required." });
         return;
       }
-      const coursesObj = await fbGet("courses") || {};
-      const allCourses = Object.values(coursesObj).filter((c) => c && c.id).map(normalizeCourse);
+      const [coursesObj, requestedOwnerUser] = await Promise.all([
+        fbGet("courses"),
+        requestedOwnerId ? fbGet(`app_users/${requestedOwnerId}`) : Promise.resolve(null)
+      ]);
+      const allCourses = coursesObj && typeof coursesObj === "object" ? Object.values(coursesObj).filter((c) => c && c.id).map(normalizeCourse) : [];
+      let targetOwnerId = auth.uid;
+      let targetCreatedBy = auth.username;
+      if (auth.role === "admin" && requestedOwnerId && requestedOwnerUser && requestedOwnerUser.id) {
+        targetOwnerId = requestedOwnerUser.id;
+        targetCreatedBy = requestedOwnerUser.username;
+      }
       const existingOwned = allCourses.find(
         (c) => canAccessCourse(c, auth) && c.courseName.trim().toUpperCase() === cleanName.toUpperCase()
       );
@@ -1017,16 +1073,18 @@ function createApiApp() {
         return;
       }
       const baseId = toCourseKey(cleanName);
-      const idTakenByOther = Boolean(coursesObj[baseId] && !canAccessCourse(normalizeCourse(coursesObj[baseId]), auth));
-      const finalId = idTakenByOther ? `${baseId}__${toFirebaseKey(auth.uid)}` : baseId;
+      const idTakenByOther = Boolean(
+        coursesObj && coursesObj[baseId] && !canAccessCourse(normalizeCourse(coursesObj[baseId]), auth)
+      );
+      const finalId = idTakenByOther ? `${baseId}__${toFirebaseKey(targetOwnerId)}` : baseId;
       const now = Date.now();
       const newCourse = {
         id: finalId,
         courseName: cleanName,
         selectedWeek,
         students: initialStudents,
-        ownerId: auth.uid,
-        createdBy: auth.username,
+        ownerId: targetOwnerId,
+        createdBy: targetCreatedBy,
         sharedWith: [],
         createdAt: now,
         updatedAt: now
@@ -1113,22 +1171,148 @@ function createApiApp() {
       res.status(500).json({ success: false, error: "Failed to delete course." });
     }
   });
+  app2.post("/api/courses/check-tab-ownership", requireAuth, async (req, res) => {
+    try {
+      const auth = req.auth;
+      const tabs = Array.isArray(req.body?.tabs) ? req.body.tabs : [];
+      if (tabs.length === 0) {
+        res.json({ success: true, results: [] });
+        return;
+      }
+      const [coursesObj, usersObj] = await Promise.all([
+        fbGet("courses"),
+        fbGet("app_users")
+      ]);
+      const allCourses = coursesObj && typeof coursesObj === "object" ? Object.values(coursesObj).filter((c) => c && c.id).map(normalizeCourse) : [];
+      const allUsers = usersObj && typeof usersObj === "object" ? Object.values(usersObj).filter((u) => u && u.id) : [];
+      const authUser = allUsers.find((u) => u.id === auth.uid) || null;
+      const results = [];
+      for (const tab of tabs) {
+        const cleanName = String(tab?.courseName || "").trim();
+        if (!cleanName) continue;
+        const targetUpper = cleanName.toUpperCase();
+        const matchingCourses = allCourses.filter(
+          (c) => c.courseName.trim().toUpperCase() === targetUpper
+        );
+        const directMine = matchingCourses.find((c) => isDirectOwnerOrShared(c, auth));
+        const otherCourse = matchingCourses.find((c) => !isDirectOwnerOrShared(c, auth));
+        const sheetOwner = resolveSheetTabOwner(tab?.owner, Boolean(tab?.ownerExplicit), allUsers);
+        if (sheetOwner.recognized) {
+          const matchesCaller = doesAuthMatchSheetOwner(sheetOwner.tokens, auth, authUser);
+          if (!matchesCaller) {
+            if (auth.role !== "admin") {
+              results.push({
+                courseName: cleanName,
+                status: "other",
+                ownerLabel: sheetOwner.displayLabel,
+                reason: `Assigned to ${sheetOwner.displayLabel} in Google Sheet`
+              });
+              continue;
+            }
+            if (directMine) {
+              results.push({
+                courseName: cleanName,
+                status: "mine",
+                ownerId: directMine.ownerId || auth.uid,
+                ownerLabel: directMine.createdBy || auth.username
+              });
+              continue;
+            }
+            results.push({
+              courseName: cleanName,
+              status: "other_managed",
+              ownerId: otherCourse?.ownerId || sheetOwner.matchedUsers[0]?.id,
+              ownerLabel: otherCourse?.createdBy || sheetOwner.displayLabel,
+              reason: `Assigned to ${otherCourse?.createdBy || sheetOwner.displayLabel}`
+            });
+            continue;
+          }
+          if (directMine) {
+            results.push({
+              courseName: cleanName,
+              status: "mine",
+              ownerId: directMine.ownerId || auth.uid,
+              ownerLabel: directMine.createdBy || auth.username
+            });
+          } else if (otherCourse && auth.role !== "admin") {
+            results.push({
+              courseName: cleanName,
+              status: "other",
+              ownerLabel: otherCourse.createdBy || "another lecturer",
+              reason: `Owned by ${otherCourse.createdBy || "another lecturer"}`
+            });
+          } else {
+            results.push({
+              courseName: cleanName,
+              status: "assigned_to_me",
+              ownerId: auth.uid,
+              ownerLabel: auth.username
+            });
+          }
+          continue;
+        }
+        if (directMine) {
+          results.push({
+            courseName: cleanName,
+            status: "mine",
+            ownerId: directMine.ownerId || auth.uid,
+            ownerLabel: directMine.createdBy || auth.username
+          });
+        } else if (otherCourse) {
+          const ownerName = otherCourse.createdBy || "another lecturer";
+          results.push({
+            courseName: cleanName,
+            status: auth.role === "admin" ? "other_managed" : "other",
+            ownerId: auth.role === "admin" ? otherCourse.ownerId : void 0,
+            ownerLabel: ownerName,
+            reason: `Owned by ${ownerName}`
+          });
+        } else {
+          results.push({
+            courseName: cleanName,
+            status: "unclaimed"
+          });
+        }
+      }
+      res.json({ success: true, results });
+    } catch {
+      res.status(500).json({ success: false, error: "Failed to check sheet tab ownership." });
+    }
+  });
   app2.post("/api/courses/sync-tabs", requireAuth, async (req, res) => {
     try {
       const auth = req.auth;
       const tabs = Array.isArray(req.body?.tabs) ? req.body.tabs : [];
       if (tabs.length === 0) {
-        res.json({ success: true, courses: [] });
+        res.json({ success: true, courses: [], skippedCourses: [] });
         return;
       }
-      const coursesObj = await fbGet("courses") || {};
-      const allCourses = Object.values(coursesObj).filter((c) => c && c.id).map(normalizeCourse);
+      const [coursesObj, usersObj] = await Promise.all([
+        fbGet("courses"),
+        fbGet("app_users")
+      ]);
+      const allCourses = coursesObj && typeof coursesObj === "object" ? Object.values(coursesObj).filter((c) => c && c.id).map(normalizeCourse) : [];
+      const allUsers = usersObj && typeof usersObj === "object" ? Object.values(usersObj).filter((u) => u && u.id) : [];
+      const authUser = allUsers.find((u) => u.id === auth.uid) || null;
       const now = Date.now();
       const synced = [];
+      const skippedCourses = [];
       for (const tab of tabs) {
         const cleanName = String(tab.courseName || "").trim();
         if (!cleanName) continue;
         const students = Array.isArray(tab.students) ? tab.students : [];
+        const sheetOwner = resolveSheetTabOwner(tab.owner, Boolean(tab.ownerExplicit), allUsers);
+        if (sheetOwner.recognized && auth.role !== "admin") {
+          if (!doesAuthMatchSheetOwner(sheetOwner.tokens, auth, authUser)) {
+            skippedCourses.push({
+              courseName: cleanName,
+              owner: sheetOwner.displayLabel,
+              reason: `Assigned to ${sheetOwner.displayLabel} in Google Sheet`
+            });
+            continue;
+          }
+        }
+        const requestedTabOwner = auth.role === "admin" && typeof tab.ownerId === "string" && tab.ownerId.trim() ? allUsers.find((u) => u.id === tab.ownerId.trim()) || null : null;
         const existingOwned = allCourses.find(
           (c) => canAccessCourse(c, auth) && c.courseName.trim().toUpperCase() === cleanName.toUpperCase()
         );
@@ -1137,32 +1321,59 @@ function createApiApp() {
             ...existingOwned,
             sheetName: tab.sheetName || existingOwned.sheetName,
             students: students.length > 0 ? students : existingOwned.students,
-            ownerId: existingOwned.ownerId || auth.uid,
+            ownerId: requestedTabOwner ? requestedTabOwner.id : existingOwned.ownerId || auth.uid,
+            createdBy: requestedTabOwner ? requestedTabOwner.username : existingOwned.createdBy || auth.username,
             updatedAt: now
           };
           await fbPut(`courses/${updated.id}`, updated);
           synced.push(updated);
         } else {
+          const otherOwners = allCourses.filter(
+            (c) => !canAccessCourse(c, auth) && c.courseName.trim().toUpperCase() === cleanName.toUpperCase()
+          );
+          if (otherOwners.length > 0) {
+            const ownerName = otherOwners[0].createdBy || "another lecturer";
+            skippedCourses.push({
+              courseName: cleanName,
+              owner: ownerName,
+              reason: `Already owned by ${ownerName}`
+            });
+            continue;
+          }
+          let targetOwnerId = auth.uid;
+          let targetCreatedBy = auth.username;
+          let targetSharedWith = [];
+          if (requestedTabOwner) {
+            targetOwnerId = requestedTabOwner.id;
+            targetCreatedBy = requestedTabOwner.username;
+          } else if (auth.role === "admin" && sheetOwner.recognized && sheetOwner.matchedUsers.length > 0) {
+            targetOwnerId = sheetOwner.matchedUsers[0].id;
+            targetCreatedBy = sheetOwner.matchedUsers[0].username;
+            if (sheetOwner.matchedUsers.length > 1) {
+              targetSharedWith = sheetOwner.matchedUsers.slice(1).map((u) => u.id);
+            }
+          }
           const baseId = toCourseKey(cleanName);
-          const takenByOther = Boolean(coursesObj[baseId] && !canAccessCourse(normalizeCourse(coursesObj[baseId]), auth));
-          const finalId = takenByOther ? `${baseId}__${toFirebaseKey(auth.uid)}` : baseId;
+          const idTaken = Boolean(coursesObj && coursesObj[baseId]);
+          const finalId = idTaken ? `${baseId}__${toFirebaseKey(targetOwnerId)}` : baseId;
           const created = {
             id: finalId,
             courseName: cleanName,
             sheetName: tab.sheetName || "",
             selectedWeek: "W1",
             students,
-            ownerId: auth.uid,
-            createdBy: auth.username,
-            sharedWith: [],
+            ownerId: targetOwnerId,
+            createdBy: targetCreatedBy,
+            sharedWith: targetSharedWith,
             createdAt: now,
             updatedAt: now
           };
           await fbPut(`courses/${finalId}`, created);
+          allCourses.push(created);
           synced.push(created);
         }
       }
-      res.json({ success: true, courses: synced });
+      res.json({ success: true, courses: synced, skippedCourses });
     } catch {
       res.status(500).json({ success: false, error: "Failed to sync sheet tabs." });
     }
