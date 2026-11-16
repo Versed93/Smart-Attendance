@@ -97,17 +97,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const normalizeName = (val: string) => val.trim().replace(/\s+/g, ' ').toUpperCase();
   
   useEffect(() => {
-    const savedProfile = localStorage.getItem(STUDENT_PROFILE_KEY);
-    if (savedProfile) {
-        try {
-            const { name: sName, studentId: sId } = JSON.parse(savedProfile);
-            // Use timeout to avoid synchronous setState in effect
-            setTimeout(() => {
-                if (sName) setName(String(sName).toUpperCase());
-                if (sId) setStudentId(String(sId).toUpperCase());
-            }, 0);
-        } catch { /* ignore */ }
-    }
+    localStorage.removeItem(STUDENT_PROFILE_KEY);
   }, []);
 
   const requestGpsVerification = React.useCallback((constraints: { lat: number; lng: number; radius: number }) => {
@@ -256,8 +246,6 @@ export const StudentView: React.FC<StudentViewProps> = ({
       setFormError('Warning: Student ID does not match the registered student name. Please verify your details.');
       return;
     }
-    
-    localStorage.setItem(STUDENT_PROFILE_KEY, JSON.stringify({ name: cleanName, studentId: cleanId }));
     
     const addHistory = (entry: Omit<ScanHistory, 'id'>) => {
       const newHistory = [{ ...entry, id: Date.now().toString() }, ...history];
@@ -423,6 +411,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
           const rad = url.searchParams.get('rad');
           const offline = url.searchParams.get('offline') === 'true';
           if (t) {
+              setName('');
+              setStudentId('');
+              setFormError('');
+              autoFillRef.current = {};
+              setActiveSuggestionField(null);
               setToken(t);
               if (c) setCourseName(c);
               if (w) setScannedWeek(w);
@@ -655,6 +648,9 @@ export const StudentView: React.FC<StudentViewProps> = ({
           type="button"
           onClick={() => {
             window.history.replaceState({}, '', window.location.pathname);
+            setName('');
+            setStudentId('');
+            setFormError('');
             setToken('');
             setStatus('landing');
           }}
@@ -756,8 +752,12 @@ export const StudentView: React.FC<StudentViewProps> = ({
         <button 
           onClick={() => {
             if (bypassRestrictions) {
+              setName('');
+              setStudentId('');
               onSwitchToTeacher?.();
             } else {
+              setName('');
+              setStudentId('');
               setToken('');
               setStatus('landing');
             }
@@ -821,7 +821,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
             className="w-full border-2 border-gray-100 bg-gray-50 rounded-2xl p-4 font-bold uppercase focus:bg-white focus:border-indigo-600 transition-all outline-none placeholder:text-gray-400 placeholder:text-xs placeholder:normal-case" 
             placeholder="Enter Full Name (auto-fills Student ID)"
             required
-            autoComplete="name"
+            autoComplete="off"
           />
           {nameSuggestions.length > 0 && (
             <ul className="absolute z-20 left-0 right-0 mt-1.5 bg-white border-2 border-indigo-100 rounded-2xl shadow-xl max-h-48 overflow-y-auto divide-y divide-gray-50">
