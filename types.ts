@@ -60,7 +60,7 @@ export interface AdminSessionActivity {
 
 export interface AdminNotification {
   id: string;
-  type: 'user_signup' | 'delete_request';
+  type: 'user_signup' | 'delete_request' | 'account_activated';
   userId: string;
   username: string;
   email: string;
@@ -69,6 +69,16 @@ export interface AdminNotification {
   emailSent: boolean;
   message: string;
   reason?: string;
+}
+
+export interface UserNotification {
+  id: string;
+  userId: string;
+  type: 'account_activated' | 'system_update';
+  title: string;
+  message: string;
+  createdAt: number;
+  read: boolean;
 }
 
 export type EmailProviderType = 'resend' | 'smtp' | 'apps_script' | 'none';

@@ -13,6 +13,7 @@ import type {
   EmailProviderType,
   SheetTabOwnershipResult,
   Student,
+  UserNotification,
 } from './types.ts';
 import { PRE_REGISTERED_STUDENTS, type PreRegisteredStudent } from './studentList.ts';
 
@@ -712,6 +713,111 @@ async function dispatchDeleteRequestEmail(params: {
   };
 }
 
+async function createActivationNotifications(
+  userRecord: StoredAppUser,
+  activatedBy: 'admin' | 'email_link'
+): Promise<{ adminNotification: AdminNotification; userNotification: UserNotification }> {
+  const now = Date.now();
+  const suffix = crypto.randomBytes(2).toString('hex');
+  const adminNotifId = `activated_${now}_${suffix}`;
+  const userNotifId = `user_activated_${now}_${suffix}`;
+
+  const [cfg, existingAdminNotifs] = await Promise.all([
+    getAppConfig(),
+    fbGet<Record<string, AdminNotification>>('admin_notifications').catch(() => null),
+  ]);
+
+  if (existingAdminNotifs && typeof existingAdminNotifs === 'object') {
+    await Promise.all(
+      Object.values(existingAdminNotifs)
+        .filter((n) => n && !n.read && n.type === 'user_signup' && n.userId === userRecord.id)
+        .map((n) => fbPatch(`admin_notifications/${n.id}`, { read: true }).catch(() => { /* ignore */ }))
+    );
+  }
+
+  let emailSent = false;
+  try {
+    const status = getEmailDeliveryStatus(cfg.scriptUrl);
+    if (status.provider === 'resend' || status.provider === 'smtp') {
+      const safeUser = escapeHtml(userRecord.username);
+      const safeEmail = escapeHtml(userRecord.email || 'no email');
+      const actorText =
+        activatedBy === 'admin' ? 'by the Administrator' : 'via email verification link';
+
+      if (userRecord.email) {
+        const userEmailRes = await sendDirectEmail({
+          to: userRecord.email,
+          subject: 'Your Smart Attendance Account Is Now Active',
+          text:
+            `Hello ${userRecord.username},\n\n` +
+            `Good news! Your lecturer account on the Smart Attendance system has been activated ${actorText}.\n` +
+            `You can now sign in and manage your attendance sessions.\n`,
+          html:
+            `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;">` +
+            `<h2 style="color:#065f46;margin:0 0 10px;">Account Activated</h2>` +
+            `<p style="color:#374151;font-size:14px;">Hello <strong>${safeUser}</strong>,</p>` +
+            `<p style="color:#374151;font-size:14px;">Your Smart Attendance lecturer account has been activated ${escapeHtml(actorText)} and is now ready to use.</p>` +
+            `</div>`,
+        });
+        if (userEmailRes.ok) emailSent = true;
+      }
+
+      if (activatedBy === 'email_link' && cfg.adminEmail) {
+        const adminEmailRes = await sendDirectEmail({
+          to: cfg.adminEmail,
+          subject: `[Smart Attendance] Account Activated: ${userRecord.username}`,
+          text:
+            `Lecturer account activated ${actorText}.\n\n` +
+            `Username: ${userRecord.username}\nEmail: ${userRecord.email || 'N/A'}\n`,
+          html:
+            `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;">` +
+            `<h3 style="color:#065f46;margin:0 0 8px;">Lecturer Account Activated</h3>` +
+            `<p style="color:#374151;font-size:14px;"><strong>Username:</strong> ${safeUser}<br/><strong>Email:</strong> ${safeEmail}<br/><strong>Method:</strong> Email verification link</p>` +
+            `</div>`,
+        });
+        if (adminEmailRes.ok) emailSent = true;
+      }
+    }
+  } catch {
+    // Email confirmation is best-effort; in-system notifications still proceed
+  }
+
+  const adminNotification: AdminNotification = {
+    id: adminNotifId,
+    type: 'account_activated',
+    userId: userRecord.id,
+    username: userRecord.username,
+    email: userRecord.email || '',
+    createdAt: now,
+    read: false,
+    emailSent,
+    message:
+      activatedBy === 'admin'
+        ? `${userRecord.username} (${userRecord.email || 'no email'}) account has been activated by Admin.`
+        : `${userRecord.username} (${userRecord.email || 'no email'}) account has been activated via verification link.`,
+  };
+
+  const userNotification: UserNotification = {
+    id: userNotifId,
+    userId: userRecord.id,
+    type: 'account_activated',
+    title: 'Account Activated',
+    message:
+      activatedBy === 'admin'
+        ? `Your lecturer account (${userRecord.username}) has been activated by the Administrator and is ready to use.`
+        : `Your lecturer account (${userRecord.username}) has been activated via your verification link and is ready to use.`,
+    createdAt: now,
+    read: false,
+  };
+
+  await Promise.all([
+    fbPut(`admin_notifications/${adminNotifId}`, adminNotification),
+    fbPut(`user_notifications/${userRecord.id}/${userNotifId}`, userNotification),
+  ]);
+
+  return { adminNotification, userNotification };
+}
+
 async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> {
   const authHeader = req.headers.authorization || '';
   const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
@@ -1085,6 +1191,8 @@ export function createApiApp(): express.Express {
         activatedAt: Date.now(),
       });
 
+      await createActivationNotifications(userRecord, 'email_link').catch(() => { /* ignore */ });
+
       res.json({
         success: true,
         message: `Account "${userRecord.username}" has been activated! Please sign in below.`,
@@ -1280,7 +1388,7 @@ export function createApiApp(): express.Express {
   app.get('/api/dashboard/sync', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const auth = req.auth!;
-      const [cfg, coursesObj, userPref, historyRaw, usersObj, sessionsObj, notifsObj] = await Promise.all([
+      const [cfg, coursesObj, userPref, historyRaw, usersObj, sessionsObj, notifsObj, userNotifsObj] = await Promise.all([
         getAppConfig(),
         fbGet<Record<string, CourseProfile>>('courses'),
         fbGet<{ activeCourse?: string; selectedWeek?: string }>(`user_preferences/${auth.uid}`),
@@ -1288,6 +1396,7 @@ export function createApiApp(): express.Express {
         fbGet<Record<string, StoredAppUser>>('app_users'),
         auth.role === 'admin' ? fbGet<Record<string, AdminSessionActivity>>('admin_logins') : Promise.resolve(null),
         auth.role === 'admin' ? fbGet<Record<string, AdminNotification>>('admin_notifications') : Promise.resolve(null),
+        fbGet<Record<string, UserNotification>>(`user_notifications/${auth.uid}`),
       ]);
 
       const allCourses = coursesObj && typeof coursesObj === 'object'
@@ -1355,6 +1464,13 @@ export function createApiApp(): express.Express {
               .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
           : [];
 
+      const userNotifications: UserNotification[] =
+        userNotifsObj && typeof userNotifsObj === 'object'
+          ? Object.values(userNotifsObj)
+              .filter((n) => n && n.id)
+              .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+          : [];
+
       res.json({
         success: true,
         user: { id: auth.uid, username: auth.username, role: auth.role },
@@ -1371,13 +1487,42 @@ export function createApiApp(): express.Express {
         coLecturerOptions,
         sessions,
         notifications,
+        userNotifications,
       });
     } catch {
       res.status(500).json({ success: false, error: 'Failed to sync dashboard state.' });
     }
   });
 
-  // 9. User Preferences (Strictly scoped to req.auth.uid)
+  // 9. User Preferences & Personal Notifications (Strictly scoped to req.auth.uid)
+  app.patch('/api/user/notifications/:id/read', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const auth = req.auth!;
+    const notifId = String(req.params.id || '').trim();
+    if (!notifId) {
+      res.status(400).json({ success: false, error: 'Notification ID is required.' });
+      return;
+    }
+    await fbPatch(`user_notifications/${auth.uid}/${notifId}`, { read: true });
+    res.json({ success: true });
+  });
+
+  app.post('/api/user/notifications/read-all', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const auth = req.auth!;
+    const notifsObj = (await fbGet<Record<string, UserNotification>>(`user_notifications/${auth.uid}`)) || {};
+    await Promise.all(
+      Object.values(notifsObj)
+        .filter((n) => n && !n.read)
+        .map((n) => fbPatch(`user_notifications/${auth.uid}/${n.id}`, { read: true }))
+    );
+    res.json({ success: true });
+  });
+
+  app.delete('/api/user/notifications', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    const auth = req.auth!;
+    await fbDelete(`user_notifications/${auth.uid}`);
+    res.json({ success: true });
+  });
+
   app.put('/api/user/preferences', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     const auth = req.auth!;
     const activeCourse = String(req.body?.activeCourse || '').trim();
@@ -2412,9 +2557,28 @@ export function createApiApp(): express.Express {
 
   app.post('/api/admin/users/:id/activate', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const userId = String(req.params.id || '').trim();
+    const userRecord = await fbGet<StoredAppUser>(`app_users/${userId}`);
+    if (!userRecord || !userRecord.id) {
+      res.status(404).json({ success: false, error: 'User not found.' });
+      return;
+    }
+    if (userRecord.status === 'active') {
+      res.json({
+        success: true,
+        activatedAt: userRecord.activatedAt || Date.now(),
+        alreadyActive: true,
+      });
+      return;
+    }
     const now = Date.now();
     await fbPatch(`app_users/${userId}`, { status: 'active', activatedAt: now });
-    res.json({ success: true, activatedAt: now });
+    const { adminNotification, userNotification } = await createActivationNotifications(userRecord, 'admin');
+    res.json({
+      success: true,
+      activatedAt: now,
+      adminNotification,
+      userNotification,
+    });
   });
 
   app.delete('/api/admin/users/:id', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {

@@ -12,6 +12,7 @@ import type {
   SheetTabCandidate,
   SheetTabOwnershipResult,
   SyncSheetCoursesResult,
+  UserNotification,
 } from './types';
 import { PRE_REGISTERED_STUDENTS, PreRegisteredStudent } from './studentList';
 
@@ -123,6 +124,7 @@ const App: React.FC = () => {
   const [registeredUsers, setRegisteredUsers] = useState<AppUser[]>([]);
   const [adminSessions, setAdminSessions] = useState<AdminSessionActivity[]>([]);
   const [adminNotifications, setAdminNotifications] = useState<AdminNotification[]>([]);
+  const [userNotifications, setUserNotifications] = useState<UserNotification[]>([]);
   const [activationNotice, setActivationNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(() =>
     testEmailParam === 'verified'
       ? {
@@ -294,6 +296,7 @@ const App: React.FC = () => {
     setCoLecturerOptions([]);
     setAdminSessions([]);
     setAdminNotifications([]);
+    setUserNotifications([]);
     setAttendanceList([]);
     setCourses([]);
     setActiveCourse('');
@@ -477,6 +480,9 @@ const App: React.FC = () => {
       }
       if (Array.isArray(data.notifications)) {
         setAdminNotifications(data.notifications);
+      }
+      if (Array.isArray(data.userNotifications)) {
+        setUserNotifications(data.userNotifications);
       }
     } catch {
       // Ignore transient network errors
@@ -1245,8 +1251,34 @@ const App: React.FC = () => {
     setRegisteredUsers(prev =>
       prev.map(u => (u.id === userId ? { ...u, status: 'active', activatedAt: now } : u))
     );
-    await apiFetch(`/api/admin/users/${encodeURIComponent(userId)}/activate`, { method: 'POST' }).catch(() => { /* ignore */ });
-  }, [apiFetch]);
+    try {
+      const res = await apiFetch(`/api/admin/users/${encodeURIComponent(userId)}/activate`, { method: 'POST' });
+      const data = await readJsonSafe<{
+        success?: boolean;
+        activatedAt?: number;
+        adminNotification?: AdminNotification;
+        userNotification?: UserNotification;
+      }>(res);
+      if (data?.adminNotification) {
+        const newNotif = data.adminNotification;
+        setAdminNotifications(prev => {
+          const updated = prev.map(n =>
+            n.type === 'user_signup' && n.userId === userId ? { ...n, read: true } : n
+          );
+          if (updated.some(n => n.id === newNotif.id)) return updated;
+          return [newNotif, ...updated];
+        });
+      }
+      if (data?.userNotification && data.userNotification.userId === currentUserId) {
+        const newUserNotif = data.userNotification;
+        setUserNotifications(prev =>
+          prev.some(n => n.id === newUserNotif.id) ? prev : [newUserNotif, ...prev]
+        );
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [apiFetch, currentUserId]);
 
   const handleResendActivationEmail = useCallback(async (user: AppUser): Promise<{ sent: boolean; activationUrl: string }> => {
     try {
@@ -1291,6 +1323,21 @@ const App: React.FC = () => {
   const handleClearNotifications = useCallback(async () => {
     setAdminNotifications([]);
     await apiFetch('/api/admin/notifications', { method: 'DELETE' }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
+
+  const handleMarkUserNotificationRead = useCallback(async (notifId: string) => {
+    setUserNotifications(prev => prev.map(n => (n.id === notifId ? { ...n, read: true } : n)));
+    await apiFetch(`/api/user/notifications/${encodeURIComponent(notifId)}/read`, { method: 'PATCH' }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
+
+  const handleMarkAllUserNotificationsRead = useCallback(async () => {
+    setUserNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    await apiFetch('/api/user/notifications/read-all', { method: 'POST' }).catch(() => { /* ignore */ });
+  }, [apiFetch]);
+
+  const handleClearUserNotifications = useCallback(async () => {
+    setUserNotifications([]);
+    await apiFetch('/api/user/notifications', { method: 'DELETE' }).catch(() => { /* ignore */ });
   }, [apiFetch]);
 
   const handleNewSession = useCallback(async () => {
@@ -1666,6 +1713,7 @@ const App: React.FC = () => {
               registeredUsers={registeredUsers}
               adminSessions={adminSessions}
               adminNotifications={adminNotifications}
+              userNotifications={userNotifications}
               adminEmail={adminEmail}
               onAdminEmailChange={handleAdminEmailChange}
               onDeleteUser={handleDeleteUser}
@@ -1676,6 +1724,9 @@ const App: React.FC = () => {
               onMarkNotificationRead={handleMarkNotificationRead}
               onMarkAllNotificationsRead={handleMarkAllNotificationsRead}
               onClearNotifications={handleClearNotifications}
+              onMarkUserNotificationRead={handleMarkUserNotificationRead}
+              onMarkAllUserNotificationsRead={handleMarkAllUserNotificationsRead}
+              onClearUserNotifications={handleClearUserNotifications}
               onSendTestAdminEmail={sendTestAdminEmail}
               onRequestAccountDeletion={handleRequestAccountDeletion}
             />

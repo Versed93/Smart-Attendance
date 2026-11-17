@@ -10,10 +10,12 @@ import type {
   SheetTabCandidate,
   SheetTabOwnershipResult,
   SyncSheetCoursesResult,
+  UserNotification,
 } from '../types';
 import type { PreRegisteredStudent } from '../studentList';
 import QRCode from 'qrcode';
 import { BrandLogoIcon } from './icons/BrandLogoIcon';
+import { BellIcon } from './icons/BellIcon';
 import { PencilSquareIcon } from './icons/PencilSquareIcon';
 import { CameraIcon } from './icons/CameraIcon';
 import { LockClosedIcon } from './icons/LockClosedIcon';
@@ -92,6 +94,7 @@ interface TeacherViewProps {
   registeredUsers?: AppUser[];
   adminSessions?: AdminSessionActivity[];
   adminNotifications?: AdminNotification[];
+  userNotifications?: UserNotification[];
   adminEmail?: string;
   onAdminEmailChange?: (email: string) => void;
   onDeleteUser?: (userId: string) => Promise<void> | void;
@@ -102,6 +105,9 @@ interface TeacherViewProps {
   onMarkNotificationRead?: (notifId: string) => Promise<void> | void;
   onMarkAllNotificationsRead?: () => Promise<void> | void;
   onClearNotifications?: () => Promise<void> | void;
+  onMarkUserNotificationRead?: (notifId: string) => Promise<void> | void;
+  onMarkAllUserNotificationsRead?: () => Promise<void> | void;
+  onClearUserNotifications?: () => Promise<void> | void;
   onSendTestAdminEmail?: (targetEmail?: string) => Promise<{ success: boolean; message: string }>;
   onRequestAccountDeletion?: (params: { usernameOrEmail: string; reason: string }) => Promise<{ success: boolean; message: string }>;
 }
@@ -150,6 +156,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   registeredUsers = [],
   adminSessions = [],
   adminNotifications = [],
+  userNotifications = [],
   adminEmail = '',
   onAdminEmailChange,
   onDeleteUser,
@@ -160,6 +167,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onMarkNotificationRead,
   onMarkAllNotificationsRead,
   onClearNotifications,
+  onMarkUserNotificationRead,
+  onMarkAllUserNotificationsRead,
+  onClearUserNotifications,
   onSendTestAdminEmail,
   onRequestAccountDeletion,
 }) => {
@@ -172,6 +182,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     onCourseChange(next);
   };
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
+  const [showUserNotificationsModal, setShowUserNotificationsModal] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'teacher' | 'classroom'>('teacher');
   const [showClassroomGeoPrompt, setShowClassroomGeoPrompt] = useState(false);
   const [isLockingClassroomGeo, setIsLockingClassroomGeo] = useState(false);
@@ -1339,28 +1350,63 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     );
   };
 
+  const unreadUserNotifications = userNotifications.filter((n) => !n.read);
+
   if (viewMode === 'classroom') {
     return (
-        <div className="fixed inset-0 bg-gray-900/95 backdrop-blur-lg z-[100] flex flex-col items-center justify-center p-4 sm:p-6 overflow-y-auto animate-in fade-in duration-300">
-            <div className="w-full max-w-4xl text-center text-white mb-6 sm:mb-8">
-                <p className="text-xs sm:text-sm font-bold text-brand-light uppercase tracking-[0.3em] mb-2 opacity-70">Join Session</p>
-                <h2 className="text-2xl sm:text-4xl lg:text-5xl font-bold mb-4 px-2 sm:px-4 break-words whitespace-normal leading-tight">
-                  {courseName || 'General Session'}
-                </h2>
-                <div className="flex items-center justify-center gap-2.5 flex-wrap">
-                  <div className="flex items-center gap-3 bg-white/5 py-2 px-5 rounded-full border border-white/10">
-                      <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
-                      <p className="font-mono text-lg sm:text-2xl font-bold tracking-tight">{currentTime.toLocaleTimeString([], { hour12: false })}</p>
-                  </div>
-                  <span className="text-[11px] font-bold uppercase tracking-widest px-4 py-2 rounded-full bg-white/10 border border-white/15 text-amber-300">
-                    {selectedWeek.replace(/^W(\d+)$/i, 'WEEK $1')}
-                  </span>
+        <div className="fixed inset-0 bg-gray-900/95 backdrop-blur-lg z-[100] flex flex-col justify-between p-4 sm:p-6 overflow-y-auto animate-in fade-in duration-300">
+            <header className="w-full max-w-6xl mx-auto grid grid-cols-[2.25rem_1fr_2.25rem] sm:grid-cols-[2.5rem_1fr_2.5rem] items-center gap-2 shrink-0">
+                <div aria-hidden="true" />
+                <div className="flex items-center justify-center gap-2.5 sm:gap-3 min-w-0">
+                    <div className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-xl sm:rounded-2xl shadow-lg shrink-0">
+                        <BrandLogoIcon className="w-5 h-5 sm:w-6 sm:h-6" />
+                    </div>
+                    <div className="min-w-0 text-left">
+                        <span className="block text-sm sm:text-base font-black text-white tracking-tight leading-none truncate">
+                            SMART ATTENDANCE
+                        </span>
+                        <span className="block text-[9px] sm:text-[10px] font-bold text-white/50 uppercase tracking-[0.2em] mt-1 truncate">
+                            Classroom View
+                        </span>
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => toggleClassroomView('teacher')}
+                    title="Close Classroom View"
+                    aria-label="Close Classroom View"
+                    className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 bg-white/10 hover:bg-white/20 border border-white/15 text-white rounded-xl active:scale-95 transition-all justify-self-end shrink-0"
+                >
+                    <XMarkIcon className="w-5 h-5" />
+                </button>
+            </header>
+
+            <div className="flex-1 flex flex-col items-center justify-center py-4 sm:py-6">
+                <div className="w-full max-w-4xl text-center text-white mb-6 sm:mb-8">
+                    <p className="text-xs sm:text-sm font-bold text-brand-light uppercase tracking-[0.3em] mb-2 opacity-70">Join Session</p>
+                    <h2 className="text-2xl sm:text-4xl lg:text-5xl font-bold mb-4 px-2 sm:px-4 break-words whitespace-normal leading-tight">
+                      {courseName || 'General Session'}
+                    </h2>
+                    <div className="flex items-center justify-center gap-2.5 flex-wrap">
+                      <div className="flex items-center gap-3 bg-white/5 py-2 px-5 rounded-full border border-white/10">
+                          <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+                          <p className="font-mono text-lg sm:text-2xl font-bold tracking-tight">{currentTime.toLocaleTimeString([], { hour12: false })}</p>
+                      </div>
+                      <span className="text-[11px] font-bold uppercase tracking-widest px-4 py-2 rounded-full bg-white/10 border border-white/15 text-amber-300">
+                        {selectedWeek.replace(/^W(\d+)$/i, 'WEEK $1')}
+                      </span>
+                    </div>
+                </div>
+                <div className="bg-white p-3.5 sm:p-4 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl w-full max-w-[290px] sm:max-w-md aspect-square flex items-center justify-center relative border-8 border-brand-primary/10 shrink-0">
+                     <canvas ref={canvasRef} className="max-w-full max-h-full rounded-3xl" />
                 </div>
             </div>
-            <div className="bg-white p-3.5 sm:p-4 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl w-full max-w-[290px] sm:max-w-md aspect-square flex items-center justify-center relative border-8 border-brand-primary/10 shrink-0">
-                 <canvas ref={canvasRef} className="max-w-full max-h-full rounded-3xl" />
-            </div>
-            <button onClick={() => toggleClassroomView('teacher')} className="mt-6 sm:mt-10 bg-white/10 border border-white/20 text-white font-bold py-3.5 sm:py-4 px-10 sm:px-12 rounded-2xl hover:bg-white/20 active:scale-95 transition-all text-xs sm:text-sm uppercase tracking-widest shrink-0">Close Classroom View</button>
+
+            <footer className="w-full max-w-6xl mx-auto text-center pt-2 shrink-0">
+                <p className="text-[11px] sm:text-xs font-semibold text-white/60 tracking-wide">
+                    Developed with <span className="text-rose-400" aria-label="love">♥</span> by <span className="font-bold text-white/85">VERSED PLT</span> · Copyright © {new Date().getFullYear()}
+                </p>
+            </footer>
         </div>
     );
   }
@@ -1377,6 +1423,23 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               <button onClick={() => setShowNewSessionModal(true)} className="flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 bg-gray-900 text-white rounded-xl border border-gray-800 hover:bg-black transition-all shrink-0 active:scale-90" title="Clear Session"><PlusIcon className="w-5 h-5" /></button>
               <button onClick={() => { setShowManualModal(true); setManualId(''); setManualName(''); setManualError(''); }} className="flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 bg-brand-primary/5 text-brand-primary rounded-xl border-2 border-brand-primary/10 hover:bg-brand-primary/10 transition-all shrink-0 active:scale-90" title="Manual Entry"><PencilSquareIcon className="w-5 h-5" /></button>
               <button onClick={() => setShowSettingsModal(true)} className="flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 rounded-xl border-2 border-gray-100 bg-gray-50 text-gray-500 hover:bg-gray-100 transition-all shrink-0 active:scale-90" title="Settings"><AdjustmentsHorizontalIcon className="w-5 h-5" /></button>
+              <button
+                type="button"
+                onClick={() => setShowUserNotificationsModal(true)}
+                className={`relative flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 rounded-xl border-2 transition-all shrink-0 active:scale-90 ${
+                  unreadUserNotifications.length > 0
+                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                    : 'border-gray-100 bg-gray-50 text-gray-500 hover:bg-gray-100'
+                }`}
+                title="System Notifications"
+              >
+                <BellIcon className="w-5 h-5" />
+                {unreadUserNotifications.length > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-emerald-600 text-white text-[10px] font-black flex items-center justify-center shadow">
+                    {unreadUserNotifications.length}
+                  </span>
+                )}
+              </button>
             </div>
             <div className="flex items-center gap-2">
               <button onClick={handleOpenClassroomPrompt} className="flex group items-center gap-2.5 sm:gap-4 px-3.5 sm:px-5 py-2 sm:py-2.5 rounded-xl font-bold transition-all shrink-0 bg-gray-900 text-white hover:bg-black active:scale-95 shadow-lg shadow-gray-200">
@@ -1388,6 +1451,42 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </div>
          </div>
        </div>
+
+       {unreadUserNotifications.length > 0 && (
+         <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+           <div className="flex items-start gap-3 min-w-0">
+             <span className="mt-1 w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0 animate-pulse"></span>
+             <div className="min-w-0">
+               <p className="text-xs font-black text-emerald-900 uppercase tracking-wider">
+                 {unreadUserNotifications[0].title}
+                 {unreadUserNotifications.length > 1 ? ` (+${unreadUserNotifications.length - 1} more)` : ''}
+               </p>
+               <p className="text-xs font-semibold text-emerald-800 mt-0.5">
+                 {unreadUserNotifications[0].message}
+               </p>
+               <p className="text-[10px] font-bold text-emerald-700/75 mt-1 tabular-nums">
+                 {new Date(unreadUserNotifications[0].createdAt).toLocaleString()}
+               </p>
+             </div>
+           </div>
+           <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+             <button
+               type="button"
+               onClick={() => void onMarkUserNotificationRead?.(unreadUserNotifications[0].id)}
+               className="text-[10px] font-bold uppercase tracking-wider bg-emerald-600 text-white px-3 py-1.5 rounded-xl hover:bg-emerald-700 transition-all"
+             >
+               Mark Read
+             </button>
+             <button
+               type="button"
+               onClick={() => setShowUserNotificationsModal(true)}
+               className="text-[10px] font-bold uppercase tracking-wider bg-white text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-xl hover:bg-emerald-100 transition-all"
+             >
+               All Updates
+             </button>
+           </div>
+         </div>
+       )}
 
        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col">
@@ -1463,24 +1562,49 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                  </div>
               </div>
 
-              {unreadNotifications.length > 0 && adminPanelTab !== 'notifications' && (
-                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-xs font-bold text-amber-900">
-                    <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>
-                    <span>
-                      New email signup: {unreadNotifications[0].username} ({unreadNotifications[0].email})
-                      {unreadNotifications.length > 1 ? ` + ${unreadNotifications.length - 1} more` : ''}
-                    </span>
+              {unreadNotifications.length > 0 && adminPanelTab !== 'notifications' && (() => {
+                const topNotif = unreadNotifications[0];
+                const isActivation = topNotif.type === 'account_activated';
+                const isDeleteReq = topNotif.type === 'delete_request';
+                const bannerStyle = isActivation
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                  : isDeleteReq
+                    ? 'bg-red-50 border-red-200 text-red-900'
+                    : 'bg-amber-50 border-amber-200 text-amber-900';
+                const dotColor = isActivation
+                  ? 'bg-emerald-500'
+                  : isDeleteReq
+                    ? 'bg-red-500'
+                    : 'bg-amber-500';
+                const btnStyle = isActivation
+                  ? 'bg-emerald-600 hover:bg-emerald-700'
+                  : isDeleteReq
+                    ? 'bg-red-600 hover:bg-red-700'
+                    : 'bg-amber-600 hover:bg-amber-700';
+                const prefix = isActivation
+                  ? 'Account Activated:'
+                  : isDeleteReq
+                    ? 'Deletion Request:'
+                    : 'New Signup:';
+                return (
+                  <div className={`border rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${bannerStyle}`}>
+                    <div className="flex items-center gap-2 text-xs font-bold min-w-0">
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${dotColor}`}></span>
+                      <span className="truncate">
+                        {prefix} {topNotif.message || `${topNotif.username} (${topNotif.email})`}
+                        {unreadNotifications.length > 1 ? ` (+${unreadNotifications.length - 1} more)` : ''}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setAdminPanelTab('notifications')}
+                      className={`self-start sm:self-auto shrink-0 text-[10px] font-bold uppercase tracking-wider text-white px-3 py-1.5 rounded-xl transition-all ${btnStyle}`}
+                    >
+                      View Alerts
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setAdminPanelTab('notifications')}
-                    className="self-start sm:self-auto text-[10px] font-bold uppercase tracking-wider bg-amber-600 text-white px-3 py-1.5 rounded-xl hover:bg-amber-700 transition-all"
-                  >
-                    Review Signups
-                  </button>
-                </div>
-              )}
+                );
+              })()}
 
               {adminPanelTab === 'activity' && (
                 <div className="space-y-3">
@@ -1732,7 +1856,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-bold text-gray-500">
-                      Signup Notifications ({adminNotifications.length})
+                      System Alerts ({adminNotifications.length})
                     </span>
                     <div className="flex items-center gap-2">
                       {unreadNotifications.length > 0 && (
@@ -1758,45 +1882,79 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
                   {adminNotifications.length === 0 ? (
                     <div className="bg-gray-50 rounded-2xl p-4 text-center text-xs font-bold text-gray-400">
-                      No signup notifications yet.
+                      No system notifications yet.
                     </div>
                   ) : (
                     <div className="space-y-2 max-h-60 overflow-y-auto pr-1 custom-scrollbar">
-                      {adminNotifications.map((notif) => (
-                        <div
-                          key={notif.id}
-                          className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
-                            notif.read ? 'bg-gray-50 border-gray-100' : 'bg-amber-50/60 border-amber-200'
-                          }`}
-                        >
-                          <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              {!notif.read && <span className="w-2 h-2 rounded-full bg-amber-500 shrink-0"></span>}
-                              <span className="font-bold text-xs text-gray-900">{notif.message}</span>
+                      {adminNotifications.map((notif) => {
+                        const isActivation = notif.type === 'account_activated';
+                        const isDeleteReq = notif.type === 'delete_request';
+                        const typeLabel = isActivation
+                          ? 'Account Activated'
+                          : isDeleteReq
+                            ? 'Deletion Request'
+                            : 'New Signup';
+                        const badgeClass = isActivation
+                          ? 'bg-emerald-100 text-emerald-700'
+                          : isDeleteReq
+                            ? 'bg-red-100 text-red-700'
+                            : 'bg-amber-100 text-amber-700';
+                        const rowUnreadClass = isActivation
+                          ? 'bg-emerald-50/60 border-emerald-200'
+                          : isDeleteReq
+                            ? 'bg-red-50/60 border-red-200'
+                            : 'bg-amber-50/60 border-amber-200';
+                        const dotClass = isActivation
+                          ? 'bg-emerald-500'
+                          : isDeleteReq
+                            ? 'bg-red-500'
+                            : 'bg-amber-500';
+                        const deliveryLabel = notif.emailSent
+                          ? isActivation
+                            ? 'Confirmation Email Sent'
+                            : 'Notification Email Sent'
+                          : notif.type === 'user_signup'
+                            ? 'Manual Link Ready'
+                            : 'In-System Alert';
+                        return (
+                          <div
+                            key={notif.id}
+                            className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${
+                              notif.read ? 'bg-gray-50 border-gray-100' : rowUnreadClass
+                            }`}
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                {!notif.read && <span className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`}></span>}
+                                <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-md ${badgeClass}`}>
+                                  {typeLabel}
+                                </span>
+                                <span className="font-bold text-xs text-gray-900">{notif.message}</span>
+                              </div>
+                              <div className="flex items-center gap-2 mt-1 flex-wrap text-[10px] font-bold">
+                                <span
+                                  className={notif.emailSent || isActivation ? 'text-emerald-700' : 'text-amber-700'}
+                                >
+                                  {deliveryLabel}
+                                </span>
+                                <span className="text-gray-300" aria-hidden="true">·</span>
+                                <span className="text-gray-400 tabular-nums">
+                                  {new Date(notif.createdAt).toLocaleString()}
+                                </span>
+                              </div>
                             </div>
-                            <div className="flex items-center gap-2 mt-1 flex-wrap text-[10px] font-bold">
-                              <span
-                                className={notif.emailSent ? 'text-emerald-700' : 'text-amber-700'}
+                            {!notif.read && (
+                              <button
+                                type="button"
+                                onClick={() => void onMarkNotificationRead?.(notif.id)}
+                                className="self-start sm:self-auto shrink-0 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 hover:bg-gray-100 px-2.5 py-1 rounded-lg uppercase"
                               >
-                                {notif.emailSent ? 'Activation Email Sent' : 'Manual Link Ready'}
-                              </span>
-                              <span className="text-gray-300" aria-hidden="true">·</span>
-                              <span className="text-gray-400 tabular-nums">
-                                {new Date(notif.createdAt).toLocaleString()}
-                              </span>
-                            </div>
+                                Mark Read
+                              </button>
+                            )}
                           </div>
-                          {!notif.read && (
-                            <button
-                              type="button"
-                              onClick={() => void onMarkNotificationRead?.(notif.id)}
-                              className="self-start sm:self-auto shrink-0 text-[10px] font-bold text-gray-600 bg-white border border-gray-200 hover:bg-gray-100 px-2.5 py-1 rounded-lg uppercase"
-                            >
-                              Mark Read
-                            </button>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -3816,6 +3974,108 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 text-xs font-bold uppercase tracking-wider transition-all shadow-md shadow-indigo-100 disabled:opacity-50"
               >
                 {isSavingCoLecturers ? 'Saving...' : 'Save'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showUserNotificationsModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[260] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-lg rounded-3xl shadow-2xl p-6 relative border-t-8 border-emerald-600 animate-in zoom-in duration-200">
+            <button
+              type="button"
+              onClick={() => setShowUserNotificationsModal(false)}
+              className="absolute top-5 right-5 text-gray-300 hover:text-gray-900 transition-all"
+            >
+              <XCircleIcon className="w-6 h-6" />
+            </button>
+
+            <div className="flex items-center gap-2.5 pr-8">
+              <div className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center justify-center shrink-0">
+                <BellIcon className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-gray-900 tracking-tight">System Notifications</h3>
+                <p className="text-xs font-semibold text-gray-500">
+                  Account updates and system notices for {currentAdminName || 'your account'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 mt-4 mb-3">
+              <span className="text-[11px] font-bold text-gray-500">
+                {userNotifications.length} Notification{userNotifications.length === 1 ? '' : 's'}
+                {unreadUserNotifications.length > 0 ? ` • ${unreadUserNotifications.length} Unread` : ''}
+              </span>
+              <div className="flex items-center gap-2">
+                {unreadUserNotifications.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void onMarkAllUserNotificationsRead?.()}
+                    className="text-[10px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-lg uppercase"
+                  >
+                    Mark All Read
+                  </button>
+                )}
+                {userNotifications.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => void onClearUserNotifications?.()}
+                    className="text-[10px] font-bold text-red-600 bg-red-50 hover:bg-red-100 px-2.5 py-1 rounded-lg uppercase"
+                  >
+                    Clear All
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {userNotifications.length === 0 ? (
+              <div className="bg-gray-50 border border-gray-100 rounded-2xl p-6 text-center text-xs font-bold text-gray-400">
+                No system notifications yet.
+              </div>
+            ) : (
+              <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
+                {userNotifications.map((notif) => (
+                  <div
+                    key={notif.id}
+                    className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
+                      notif.read ? 'bg-gray-50 border-gray-100' : 'bg-emerald-50/70 border-emerald-200'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {!notif.read && <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>}
+                        <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
+                          {notif.title}
+                        </span>
+                      </div>
+                      <p className="text-xs font-semibold text-gray-800 mt-1.5">{notif.message}</p>
+                      <p className="text-[10px] font-bold text-gray-400 mt-1 tabular-nums">
+                        {new Date(notif.createdAt).toLocaleString()}
+                      </p>
+                    </div>
+                    {!notif.read && (
+                      <button
+                        type="button"
+                        onClick={() => void onMarkUserNotificationRead?.(notif.id)}
+                        className="self-start sm:self-auto shrink-0 text-[10px] font-bold text-emerald-700 bg-white border border-emerald-200 hover:bg-emerald-50 px-2.5 py-1.5 rounded-xl uppercase"
+                      >
+                        Mark Read
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-5 pt-3 border-t border-gray-100 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowUserNotificationsModal(false)}
+                className="py-2 px-5 rounded-xl bg-gray-900 text-white hover:bg-black text-xs font-bold uppercase tracking-wider transition-all"
+              >
+                Close
               </button>
             </div>
           </div>
