@@ -9,6 +9,7 @@ import { BrandLogoIcon } from './icons/BrandLogoIcon';
 import { HistoryIcon } from './icons/HistoryIcon';
 import { TrashIcon } from './icons/TrashIcon';
 import { MapPinIcon } from './icons/MapPinIcon';
+import { PWAInstallButton } from './PWAInstallButton';
 import type { PreRegisteredStudent } from '../studentList';
 
 const QR_REFRESH_INTERVAL = 15;
@@ -564,6 +565,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
                       <LockClosedIcon className="w-4 h-4 text-brand-light" />
                       Lecturer Access
                   </button>
+
+                  <div className="empty:hidden">
+                      <PWAInstallButton variant="card" />
+                  </div>
               </div>
 
               <div className="bg-gray-50 border border-gray-100 p-5 rounded-2xl">

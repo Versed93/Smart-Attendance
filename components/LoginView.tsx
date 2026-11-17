@@ -3,6 +3,7 @@ import { BrandLogoIcon } from './icons/BrandLogoIcon';
 import { UserPlusIcon } from './icons/UserPlusIcon';
 import { EyeIcon } from './icons/EyeIcon';
 import { EyeSlashIcon } from './icons/EyeSlashIcon';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface LoginViewProps {
   onLogin: (usernameOrEmail: string, password: string) => Promise<{
@@ -324,6 +325,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
           )}
         </form>
+        <div className="mt-4 empty:hidden">
+          <PWAInstallButton variant="card" />
+        </div>
       </div>
     </div>
   );

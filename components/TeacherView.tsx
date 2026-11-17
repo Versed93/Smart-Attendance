@@ -36,6 +36,7 @@ import { HistoryIcon } from './icons/HistoryIcon';
 import { ListBulletIcon } from './icons/ListBulletIcon';
 import { ChevronDownIcon } from './icons/ChevronDownIcon';
 import { ClassroomDisplay } from './ClassroomDisplay';
+import { PWAInstallButton } from './PWAInstallButton';
 import {
   buildAttendanceQrUrl,
   buildStandaloneClassroomUrl,
@@ -1937,6 +1938,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               </button>
             </div>
             <div className="flex items-center gap-2">
+              <PWAInstallButton variant="compact" />
               <button onClick={handleDirectLaunchClassroom} className="flex group items-center gap-2.5 sm:gap-4 px-3.5 sm:px-5 py-2 sm:py-2.5 rounded-xl font-bold transition-all shrink-0 bg-gray-900 text-white hover:bg-black active:scale-95 shadow-lg shadow-gray-200">
                   <div className="text-right"><span className="hidden sm:block text-[9px] uppercase opacity-60 tracking-widest">Launch</span><span className="block text-[10px] sm:text-xs uppercase tracking-widest">Classroom</span></div>
                   <EyeIcon className="w-4 h-4 sm:w-5 sm:h-5" />
