@@ -96,6 +96,31 @@ export async function getScreenDetailsSafe(): Promise<ScreenDetailsLike | null> 
   }
 }
 
+export async function prefetchGrantedScreenDetails(): Promise<ScreenDetailsLike | null> {
+  if (typeof window === 'undefined') return null;
+  const winWithScreens = window as unknown as {
+    getScreenDetails?: () => Promise<ScreenDetailsLike>;
+  };
+  if (typeof winWithScreens.getScreenDetails !== 'function') {
+    return null;
+  }
+  try {
+    if (navigator.permissions?.query) {
+      const status = await navigator.permissions.query({
+        name: 'window-management' as PermissionName,
+      });
+      if (status.state !== 'granted') {
+        return null;
+      }
+    } else {
+      return null;
+    }
+    return await winWithScreens.getScreenDetails();
+  } catch {
+    return null;
+  }
+}
+
 export function pickExtendedScreen(details: ScreenDetailsLike | null): ExtendedScreenInfo | null {
   if (!details || !Array.isArray(details.screens) || details.screens.length <= 1) {
     return null;
@@ -116,7 +141,7 @@ export function openExtendedClassroomWindow(
   const top = Math.round(extendedScreen.availTop ?? extendedScreen.top ?? 0);
   const width = Math.max(480, Math.round(extendedScreen.availWidth || extendedScreen.width || 1280));
   const height = Math.max(360, Math.round(extendedScreen.availHeight || extendedScreen.height || 720));
-  const features = `popup=yes,left=${left},top=${top},width=${width},height=${height}`;
+  const features = `popup=yes,fullscreen=yes,left=${left},top=${top},width=${width},height=${height}`;
 
   try {
     const popup = window.open(classroomUrl, 'SmartAttendanceClassroomView', features);

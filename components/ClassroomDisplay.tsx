@@ -182,8 +182,12 @@ export const ClassroomDisplay: React.FC<ClassroomDisplayProps> = ({
       <main
         className="flex-1 min-h-0 w-full flex flex-col items-center justify-center overflow-hidden"
         style={{
-          gap: isTinyHeight ? '6px' : isCompactHeight ? '10px' : '16px',
-          paddingTop: isTinyHeight ? '4px' : isCompactHeight ? '8px' : '14px',
+          gap: isTinyHeight ? '8px' : isCompactHeight ? '12px' : '18px',
+          paddingTop: isTinyHeight
+            ? '12px'
+            : isCompactHeight
+              ? 'clamp(18px, 4dvh, 36px)'
+              : 'clamp(28px, 5.5dvh, 64px)',
           paddingBottom: isTinyHeight ? '4px' : '8px',
         }}
       >
@@ -346,6 +350,10 @@ export const StandaloneClassroomView: React.FC = () => {
   useEffect(() => {
     const onFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
     document.addEventListener('fullscreenchange', onFsChange);
+    // Attempt automatic fullscreen when browser permissions/kiosk mode allow it on extended display open
+    if (!document.fullscreenElement) {
+      void requestAdaptiveFullscreen().catch(() => { /* ignore */ });
+    }
     return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 

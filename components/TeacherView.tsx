@@ -44,6 +44,7 @@ import {
   isExtendedScreenReported,
   openExtendedClassroomWindow,
   pickExtendedScreen,
+  prefetchGrantedScreenDetails,
   publishClassroomSyncState,
   requestAdaptiveFullscreen,
   type ClassroomSyncPayload,
@@ -201,9 +202,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [showUserNotificationsModal, setShowUserNotificationsModal] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<'teacher' | 'classroom'>('teacher');
-  const [showClassroomGeoPrompt, setShowClassroomGeoPrompt] = useState(false);
-  const [isLockingClassroomGeo, setIsLockingClassroomGeo] = useState(false);
-  const [classroomGeoError, setClassroomGeoError] = useState<string | null>(null);
   const [isExtendedClassroomOpen, setIsExtendedClassroomOpen] = useState(false);
   const [extendedScreenInfo, setExtendedScreenInfo] = useState<ExtendedScreenInfo | null>(null);
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() =>
@@ -320,6 +318,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     const onFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
     document.addEventListener('fullscreenchange', onFsChange);
     return () => document.removeEventListener('fullscreenchange', onFsChange);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void prefetchGrantedScreenDetails().then((details) => {
+      if (cancelled || !details) return;
+      screenDetailsRef.current = details;
+      setExtendedScreenInfo(pickExtendedScreen(details));
+    });
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -1369,7 +1377,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     publishClassroomSyncState(
       buildCurrentSyncPayload({
         active: true,
-        geoPending: isLockingClassroomGeo,
+        geoPending: false,
       })
     );
 
@@ -1395,7 +1403,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       clearInterval(checkInterval);
       channel?.close();
     };
-  }, [isExtendedClassroomOpen, isLockingClassroomGeo, buildCurrentSyncPayload]);
+  }, [isExtendedClassroomOpen, buildCurrentSyncPayload]);
 
   const toggleClassroomView = async (mode: 'teacher' | 'classroom', preferredScreen?: ExtendedScreenInfo | null) => {
     setViewMode(mode);
@@ -1413,16 +1421,19 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const launchClassroomDisplay = (options: {
     geoEnabled: boolean;
     location: { lat: number; lng: number } | null;
-    geoPending?: boolean;
+    targetScreen?: ExtendedScreenInfo | null;
   }): 'extended_window' | 'in_page' => {
     const payload = buildCurrentSyncPayload({
       active: true,
       isGeoEnabled: options.geoEnabled,
       teacherLocation: options.location,
-      geoPending: Boolean(options.geoPending),
+      geoPending: false,
     });
 
-    const targetExtendedScreen = extendedScreenInfo || pickExtendedScreen(screenDetailsRef.current);
+    const targetExtendedScreen =
+      options.targetScreen !== undefined
+        ? options.targetScreen
+        : (extendedScreenInfo || pickExtendedScreen(screenDetailsRef.current));
 
     if (targetExtendedScreen) {
       publishClassroomSyncState(payload);
@@ -1445,7 +1456,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         return 'extended_window';
       }
 
-      // Fallback to in-page Classroom View (trying extended screen fullscreen if available)
+      // Fallback to in-page Classroom View in fullscreen (targeting extended screen if permitted)
       void toggleClassroomView('classroom', targetExtendedScreen);
       return 'in_page';
     }
@@ -1457,78 +1468,63 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     return 'in_page';
   };
 
-  const handleOpenClassroomPrompt = () => {
-    setClassroomGeoError(null);
-    setShowClassroomGeoPrompt(true);
-    void getScreenDetailsSafe().then((details) => {
-      if (details) {
-        screenDetailsRef.current = details;
-        setExtendedScreenInfo(pickExtendedScreen(details));
-      } else {
-        setExtendedScreenInfo(null);
-      }
-    });
-  };
+  const handleDirectLaunchClassroom = () => {
+    // If geolocation is toggled on in Settings without cached coordinates yet, acquire silently in background
+    if (isGeoEnabled && !teacherLocation) {
+      setLocationStatus('fetching');
+      requestCurrentPosition(
+        (pos) => {
+          setTeacherLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+          setLocationStatus('success');
+        },
+        (code, msg) => {
+          setIsGeoEnabled(false);
+          setTeacherLocation(null);
+          setLocationStatus(code === 1 ? 'denied' : 'error');
+          showToast('error', msg);
+        }
+      );
+    }
 
-  const handleLaunchClassroomWithoutGeo = () => {
-    handleGeoToggle(false);
-    setClassroomGeoError(null);
-    setShowClassroomGeoPrompt(false);
-    launchClassroomDisplay({ geoEnabled: false, location: null });
-  };
-
-  const handleLaunchClassroomWithGeo = () => {
-    if (isGeoEnabled && teacherLocation) {
-      setClassroomGeoError(null);
-      setShowClassroomGeoPrompt(false);
-      launchClassroomDisplay({ geoEnabled: true, location: teacherLocation });
+    const cachedExt = extendedScreenInfo || pickExtendedScreen(screenDetailsRef.current);
+    if (cachedExt) {
+      launchClassroomDisplay({
+        geoEnabled: isGeoEnabled,
+        location: teacherLocation,
+        targetScreen: cachedExt,
+      });
       return;
     }
 
-    // If an extended screen is ready, open its window immediately inside the user click gesture
-    // so popup blockers do not block window.open after async GPS acquisition.
-    const hasExtendedTarget = Boolean(extendedScreenInfo || pickExtendedScreen(screenDetailsRef.current));
-    let openedExtendedSynchronously = false;
-    if (hasExtendedTarget) {
-      const target = launchClassroomDisplay({ geoEnabled: true, location: null, geoPending: true });
-      openedExtendedSynchronously = target === 'extended_window';
+    // If an extended display is reported and details weren't cached yet, resolve once before falling back
+    if (isExtendedScreenReported() && !screenDetailsRef.current) {
+      void getScreenDetailsSafe().then((details) => {
+        if (details) {
+          screenDetailsRef.current = details;
+          const picked = pickExtendedScreen(details);
+          setExtendedScreenInfo(picked);
+          launchClassroomDisplay({
+            geoEnabled: isGeoEnabled,
+            location: teacherLocation,
+            targetScreen: picked,
+          });
+        } else {
+          launchClassroomDisplay({
+            geoEnabled: isGeoEnabled,
+            location: teacherLocation,
+            targetScreen: null,
+          });
+        }
+      });
+      return;
     }
 
-    setIsLockingClassroomGeo(true);
-    setClassroomGeoError(null);
-    setIsGeoEnabled(true);
-    setLocationStatus('fetching');
-    requestCurrentPosition(
-      (pos) => {
-        const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setTeacherLocation(loc);
-        setLocationStatus('success');
-        setIsLockingClassroomGeo(false);
-        setShowClassroomGeoPrompt(false);
-        if (openedExtendedSynchronously) {
-          publishClassroomSyncState(
-            buildCurrentSyncPayload({
-              active: true,
-              isGeoEnabled: true,
-              teacherLocation: loc,
-              geoPending: false,
-            })
-          );
-        } else {
-          launchClassroomDisplay({ geoEnabled: true, location: loc });
-        }
-      },
-      (code, msg) => {
-        setIsLockingClassroomGeo(false);
-        setIsGeoEnabled(false);
-        setTeacherLocation(null);
-        setLocationStatus(code === 1 ? 'denied' : 'error');
-        if (openedExtendedSynchronously) {
-          closeExtendedClassroom();
-        }
-        setClassroomGeoError(`${msg} You can also choose "OFF".`);
-      }
-    );
+    // Single screen: enter fullscreen Classroom View synchronously on click without asking
+    launchClassroomDisplay({
+      geoEnabled: isGeoEnabled,
+      location: teacherLocation,
+      targetScreen: null,
+    });
   };
 
   const unreadUserNotifications = userNotifications.filter((n) => !n.read);
@@ -1586,7 +1582,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               </button>
             </div>
             <div className="flex items-center gap-2">
-              <button onClick={handleOpenClassroomPrompt} className="flex group items-center gap-2.5 sm:gap-4 px-3.5 sm:px-5 py-2 sm:py-2.5 rounded-xl font-bold transition-all shrink-0 bg-gray-900 text-white hover:bg-black active:scale-95 shadow-lg shadow-gray-200">
+              <button onClick={handleDirectLaunchClassroom} className="flex group items-center gap-2.5 sm:gap-4 px-3.5 sm:px-5 py-2 sm:py-2.5 rounded-xl font-bold transition-all shrink-0 bg-gray-900 text-white hover:bg-black active:scale-95 shadow-lg shadow-gray-200">
                   <div className="text-right"><span className="hidden sm:block text-[9px] uppercase opacity-60 tracking-widest">Launch</span><span className="block text-[10px] sm:text-xs uppercase tracking-widest">Classroom</span></div>
                   <EyeIcon className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
@@ -3410,73 +3406,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   CONFIRM
                 </button>
             </div>
-        </div>
-      )}
-
-      {showClassroomGeoPrompt && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[220] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
-          <div className="bg-white w-full max-w-md rounded-3xl sm:rounded-[2.5rem] shadow-2xl p-6 sm:p-8 text-center border-t-8 border-indigo-600 animate-in zoom-in duration-200">
-            <span className="inline-block text-[10px] font-bold text-indigo-700 uppercase tracking-widest bg-indigo-50 px-3 py-1 rounded-full border border-indigo-200 mb-3">
-              Classroom Launch Setup
-            </span>
-            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2 tracking-tight">
-              Turn On Geolocation?
-            </h2>
-            <p className="text-xs font-bold text-gray-500 mb-3 leading-relaxed break-words">
-              Course: <span className="text-gray-900">{courseName || 'General Session'}</span> • {selectedWeek.replace(/^W(\d+)$/i, 'WEEK $1')}
-            </p>
-            <p className="text-[11px] font-bold text-indigo-700 bg-indigo-50/70 border border-indigo-100 rounded-xl px-3 py-2 mb-4">
-              {extendedScreenInfo
-                ? `Extended display detected (${extendedScreenInfo.label || `${extendedScreenInfo.availWidth}×${extendedScreenInfo.availHeight}`}) — Classroom View will launch there automatically.`
-                : isExtendedScreenReported()
-                  ? 'Extended display detected — allow Window Management if prompted to launch directly on your second screen.'
-                  : 'Adapts automatically in full section to your available screen size.'}
-            </p>
-            <p className="text-xs font-bold text-gray-400 mb-5 leading-relaxed">
-              Turn on geolocation to verify students are within 150m of the classroom, or keep it off to allow check-ins without GPS check.
-            </p>
-
-            {isGeoEnabled && teacherLocation && (
-              <div className="mb-4 bg-emerald-50 border border-emerald-200 text-emerald-700 rounded-2xl p-3 text-xs font-bold">
-                Geolocation is currently ON and locked to this classroom.
-              </div>
-            )}
-
-            {classroomGeoError && (
-              <div className="mb-4 bg-red-50 border border-red-200 text-red-700 rounded-2xl p-3 text-xs font-bold leading-relaxed">
-                {classroomGeoError}
-              </div>
-            )}
-
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  disabled={isLockingClassroomGeo}
-                  onClick={handleLaunchClassroomWithGeo}
-                  className="w-full bg-indigo-600 text-white font-bold py-3.5 rounded-2xl hover:bg-indigo-700 transition-all active:scale-95 shadow-lg shadow-indigo-100 uppercase tracking-widest text-xs disabled:opacity-60"
-                >
-                  {isLockingClassroomGeo ? 'LOCKING...' : 'ON'}
-                </button>
-                <button
-                  type="button"
-                  disabled={isLockingClassroomGeo}
-                  onClick={handleLaunchClassroomWithoutGeo}
-                  className="w-full bg-gray-900 text-white font-bold py-3.5 rounded-2xl hover:bg-black transition-all active:scale-95 uppercase tracking-widest text-xs disabled:opacity-60"
-                >
-                  OFF
-                </button>
-              </div>
-              <button
-                type="button"
-                disabled={isLockingClassroomGeo}
-                onClick={() => setShowClassroomGeoPrompt(false)}
-                className="w-full bg-gray-100 text-gray-500 font-bold py-3 rounded-2xl hover:bg-gray-200 transition-all uppercase tracking-widest text-[10px]"
-              >
-                Cancel
-              </button>
-            </div>
-          </div>
         </div>
       )}
 
