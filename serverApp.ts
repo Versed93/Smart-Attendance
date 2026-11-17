@@ -58,6 +58,9 @@ interface AuthenticatedRequest extends Request {
 }
 
 const toFirebaseKey = (raw: string): string => raw.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+const normalizeStudentId = (val: string): string => val.trim().replace(/\s+/g, '').toUpperCase();
+const toStudentFirebaseKey = (studentId: string): string => toFirebaseKey(normalizeStudentId(studentId));
 const toCourseKey = (name: string): string => {
   const clean = name.trim();
   return clean ? clean.replace(/[^a-zA-Z0-9]/g, '_').toUpperCase() : 'GENERAL_SESSION';
@@ -1315,7 +1318,6 @@ export function createApiApp(): express.Express {
     try {
       const name = String(req.body?.name || '').trim();
       const studentId = String(req.body?.studentId || '').trim();
-      const email = String(req.body?.email || `${studentId}@student.edu.my`).trim();
       const status = String(req.body?.status || 'P').trim().toUpperCase();
       const courseName = String(req.body?.courseName || 'General Session').trim();
       const courseId = String(req.body?.courseId || '').trim();
@@ -1350,17 +1352,25 @@ export function createApiApp(): express.Express {
       }
 
       const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
-      const existingData = await fbGet<Student>(`live_sessions/${sessionPath}/${studentId}`);
+      const studentKey = toStudentFirebaseKey(cleanSubmittedId);
+      const liveSessionMap = await fbGet<Record<string, Student>>(`live_sessions/${sessionPath}`);
+      const existingData = liveSessionMap && typeof liveSessionMap === 'object'
+        ? (liveSessionMap[studentKey] ||
+            Object.values(liveSessionMap).find(
+              (s) => s && normalizeStudentId(s.studentId || '') === cleanSubmittedId
+            ))
+        : null;
       if (existingData && existingData.status === 'P' && status === 'P' && (existingData.week || 'W1').trim().toUpperCase() === week) {
         res.status(409).json({ success: false, message: 'You have already checked in for this session.' });
         return;
       }
 
       const timestamp = Date.now();
+      const normalizedEmail = req.body?.email ? String(req.body.email).trim() : `${cleanSubmittedId}@student.edu.my`;
       const studentData: Student = {
-        name,
-        studentId,
-        email,
+        name: cleanSubmittedName,
+        studentId: cleanSubmittedId,
+        email: normalizedEmail || `${cleanSubmittedId}@student.edu.my`,
         status,
         timestamp,
         courseName,
@@ -1368,8 +1378,8 @@ export function createApiApp(): express.Express {
       };
 
       await Promise.all([
-        fbPut(`pending/${studentId}`, studentData),
-        fbPut(`live_sessions/${sessionPath}/${studentId}`, studentData),
+        fbPut(`pending/${studentKey}`, studentData),
+        fbPut(`live_sessions/${sessionPath}/${studentKey}`, studentData),
         upsertAttendanceHistory([studentData]),
       ]);
 
@@ -2093,7 +2103,6 @@ export function createApiApp(): express.Express {
     try {
       const name = String(req.body?.name || '').trim();
       const studentId = String(req.body?.studentId || '').trim();
-      const email = String(req.body?.email || `${studentId}@student.edu.my`).trim();
       const status = String(req.body?.status || 'P').trim().toUpperCase();
       const courseName = String(req.body?.courseName || 'General Session').trim();
       const absenceReason = typeof req.body?.absenceReason === 'string' ? req.body.absenceReason : undefined;
@@ -2105,9 +2114,17 @@ export function createApiApp(): express.Express {
         return;
       }
 
+      const cleanStudentId = normalizeStudentId(studentId);
+      const studentKey = toStudentFirebaseKey(cleanStudentId);
       const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
       if (status === 'P') {
-        const existingData = await fbGet<Student>(`live_sessions/${sessionPath}/${studentId}`);
+        const liveSessionMap = await fbGet<Record<string, Student>>(`live_sessions/${sessionPath}`);
+        const existingData = liveSessionMap && typeof liveSessionMap === 'object'
+          ? (liveSessionMap[studentKey] ||
+              Object.values(liveSessionMap).find(
+                (s) => s && normalizeStudentId(s.studentId || '') === cleanStudentId
+              ))
+          : null;
         if (existingData && existingData.status === 'P' && (existingData.week || 'W1').trim().toUpperCase() === week) {
           res.status(409).json({ success: false, message: 'You have already checked in for this session.' });
           return;
@@ -2117,8 +2134,8 @@ export function createApiApp(): express.Express {
       const timestamp = overrideTimestamp || Date.now();
       const studentData: Student = {
         name,
-        studentId,
-        email,
+        studentId: cleanStudentId,
+        email: req.body?.email ? String(req.body.email).trim() : `${cleanStudentId}@student.edu.my`,
         status,
         timestamp,
         courseName,
@@ -2127,8 +2144,8 @@ export function createApiApp(): express.Express {
       };
 
       await Promise.all([
-        fbPut(`pending/${studentId}`, studentData),
-        fbPut(`live_sessions/${sessionPath}/${studentId}`, studentData),
+        fbPut(`pending/${studentKey}`, studentData),
+        fbPut(`live_sessions/${sessionPath}/${studentKey}`, studentData),
         upsertAttendanceHistory([studentData]),
       ]);
 
@@ -2155,10 +2172,13 @@ export function createApiApp(): express.Express {
 
       const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
       await Promise.all([
-        ...records.flatMap((r) => [
-          fbPut(`pending/${r.studentId}`, r),
-          fbPut(`live_sessions/${sessionPath}/${r.studentId}`, r),
-        ]),
+        ...records.flatMap((r) => {
+          const key = toStudentFirebaseKey(r.studentId || '');
+          return [
+            fbPut(`pending/${key}`, r),
+            fbPut(`live_sessions/${sessionPath}/${key}`, r),
+          ];
+        }),
         upsertAttendanceHistory(records),
       ]);
 
@@ -2183,10 +2203,18 @@ export function createApiApp(): express.Express {
       const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
 
       await Promise.all([
-        ...removals.flatMap((r) => [
-          fbPut(`pending/${r.studentId}`, r),
-          fbDelete(`live_sessions/${sessionPath}/${r.studentId}`),
-        ]),
+        ...removals.flatMap((r) => {
+          const rawId = String(r.studentId || '').trim();
+          const key = toStudentFirebaseKey(rawId);
+          const tasks: Promise<void>[] = [
+            fbPut(`pending/${key}`, r),
+            fbDelete(`live_sessions/${sessionPath}/${key}`),
+          ];
+          if (rawId && rawId !== key) {
+            tasks.push(fbDelete(`live_sessions/${sessionPath}/${rawId}`));
+          }
+          return tasks;
+        }),
         upsertAttendanceHistory(removals),
       ]);
 
@@ -2207,7 +2235,9 @@ export function createApiApp(): express.Express {
   app.put('/api/attendance/matrix-cell', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const auth = req.auth!;
-      const studentId = String(req.body?.studentId || '').trim();
+      const rawStudentId = String(req.body?.studentId || '').trim();
+      const studentId = normalizeStudentId(rawStudentId);
+      const studentKey = toStudentFirebaseKey(studentId);
       const name = String(req.body?.name || '').trim();
       const courseName = String(req.body?.courseName || 'General Session').trim();
       const week = String(req.body?.week || 'W1').trim().toUpperCase();
@@ -2244,13 +2274,13 @@ export function createApiApp(): express.Express {
       };
 
       const writes: Promise<void>[] = [
-        fbPut(`pending/${studentId}`, record),
+        fbPut(`pending/${studentKey}`, record),
         upsertAttendanceHistory([record]),
       ];
 
       if (updateLiveSession) {
         const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
-        writes.push(fbPut(`live_sessions/${sessionPath}/${studentId}`, record));
+        writes.push(fbPut(`live_sessions/${sessionPath}/${studentKey}`, record));
       }
 
       await Promise.all(writes);

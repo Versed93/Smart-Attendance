@@ -80,6 +80,7 @@ interface TeacherViewProps {
   currentUserRole?: 'admin' | 'lecturer';
   integrationType?: 'google_sheets' | 'airtable' | 'firebase';
   onIntegrationTypeChange?: (type: 'google_sheets' | 'airtable' | 'firebase') => void;
+  firebaseDatabaseUrl?: string;
   teacherHistory?: Student[];
   onUpdateMatrixCell?: (params: {
     studentId: string;
@@ -149,6 +150,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   currentUserRole,
   integrationType = 'google_sheets',
   onIntegrationTypeChange,
+  firebaseDatabaseUrl,
   teacherHistory = [],
   onUpdateMatrixCell,
   onDeleteHistoryItem,
@@ -656,7 +658,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   useEffect(() => {
     if (canvasRef.current && qrData) {
       QRCode.toCanvas(canvasRef.current, qrData, { 
-          width: viewMode === 'classroom' ? 500 : 320,
+          width: viewMode === 'classroom' ? 720 : 320,
           margin: qrMargin, 
           errorCorrectionLevel: qrErrorCorrection.toLowerCase() as 'low' | 'medium' | 'quartile' | 'high',
       }, (err) => {
@@ -1355,40 +1357,40 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   if (viewMode === 'classroom') {
     return (
         <div className="fixed inset-0 bg-gray-900/95 backdrop-blur-lg z-[100] flex flex-col justify-between p-4 sm:p-6 overflow-y-auto animate-in fade-in duration-300">
-            <header className="w-full max-w-6xl mx-auto grid grid-cols-[2.25rem_1fr_2.25rem] sm:grid-cols-[2.5rem_1fr_2.5rem] items-center gap-2 shrink-0">
-                <div aria-hidden="true" />
-                <div className="flex items-center justify-center gap-2.5 sm:gap-3 min-w-0">
-                    <div className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-xl sm:rounded-2xl shadow-lg shrink-0">
-                        <BrandLogoIcon className="w-5 h-5 sm:w-6 sm:h-6" />
+            <button
+                type="button"
+                onClick={() => toggleClassroomView('teacher')}
+                title="Close Classroom View"
+                aria-label="Close Classroom View"
+                className="fixed top-3.5 right-3.5 sm:top-6 sm:right-6 z-20 flex items-center justify-center w-9 h-9 sm:w-11 sm:h-11 bg-white/10 hover:bg-white/20 border border-white/15 text-white rounded-xl sm:rounded-2xl active:scale-95 transition-all"
+            >
+                <XMarkIcon className="w-5 h-5 sm:w-6 sm:h-6" />
+            </button>
+
+            <header className="w-full flex items-center justify-center px-12 sm:px-16 pt-1 shrink-0">
+                <div className="flex items-center justify-center gap-3 sm:gap-4 min-w-0">
+                    <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl shadow-lg shrink-0">
+                        <BrandLogoIcon className="w-7 h-7" />
                     </div>
                     <div className="min-w-0 text-left">
-                        <span className="block text-sm sm:text-base font-black text-white tracking-tight leading-none truncate">
+                        <span className="block text-lg sm:text-2xl font-black text-white tracking-tight leading-none truncate">
                             SMART ATTENDANCE
                         </span>
-                        <span className="block text-[9px] sm:text-[10px] font-bold text-white/50 uppercase tracking-[0.2em] mt-1 truncate">
+                        <span className="block text-[10px] font-bold text-white/55 uppercase tracking-[0.2em] mt-1.5 truncate">
                             Classroom View
                         </span>
                     </div>
                 </div>
-                <button
-                    type="button"
-                    onClick={() => toggleClassroomView('teacher')}
-                    title="Close Classroom View"
-                    aria-label="Close Classroom View"
-                    className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 bg-white/10 hover:bg-white/20 border border-white/15 text-white rounded-xl active:scale-95 transition-all justify-self-end shrink-0"
-                >
-                    <XMarkIcon className="w-5 h-5" />
-                </button>
             </header>
 
-            <div className="flex-1 flex flex-col items-center justify-center py-4 sm:py-6">
-                <div className="w-full max-w-4xl text-center text-white mb-6 sm:mb-8">
-                    <p className="text-xs sm:text-sm font-bold text-brand-light uppercase tracking-[0.3em] mb-2 opacity-70">Join Session</p>
-                    <h2 className="text-2xl sm:text-4xl lg:text-5xl font-bold mb-4 px-2 sm:px-4 break-words whitespace-normal leading-tight">
+            <div className="flex-1 flex flex-col items-center justify-center py-4 sm:py-6 gap-4 sm:gap-5">
+                <div className="w-full max-w-4xl text-center text-white shrink-0">
+                    <p className="text-xs sm:text-sm font-bold text-brand-light uppercase tracking-[0.3em] mb-1.5 opacity-70">Join Session</p>
+                    <h2 className="text-2xl sm:text-4xl lg:text-5xl font-bold mb-3 px-2 sm:px-4 break-words whitespace-normal leading-tight">
                       {courseName || 'General Session'}
                     </h2>
                     <div className="flex items-center justify-center gap-2.5 flex-wrap">
-                      <div className="flex items-center gap-3 bg-white/5 py-2 px-5 rounded-full border border-white/10">
+                      <div className="flex items-center gap-3 bg-white/5 py-1.5 sm:py-2 px-5 rounded-full border border-white/10">
                           <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
                           <p className="font-mono text-lg sm:text-2xl font-bold tracking-tight">{currentTime.toLocaleTimeString([], { hour12: false })}</p>
                       </div>
@@ -1397,8 +1399,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                       </span>
                     </div>
                 </div>
-                <div className="bg-white p-3.5 sm:p-4 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl w-full max-w-[290px] sm:max-w-md aspect-square flex items-center justify-center relative border-8 border-brand-primary/10 shrink-0">
-                     <canvas ref={canvasRef} className="max-w-full max-h-full rounded-3xl" />
+                <div className="bg-white p-3.5 sm:p-5 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl w-[min(88vw,56vh)] sm:w-[min(84vw,62vh)] max-w-[600px] min-w-[270px] aspect-square flex items-center justify-center relative border-8 border-brand-primary/10 shrink-0">
+                     <canvas ref={canvasRef} className="!w-full !h-full rounded-2xl sm:rounded-3xl" />
                 </div>
             </div>
 
@@ -2695,6 +2697,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             selectedWeek={selectedWeek}
                             integrationType={integrationType}
                             onIntegrationTypeChange={onIntegrationTypeChange}
+                            firebaseDatabaseUrl={firebaseDatabaseUrl}
                             isAdmin={isAdmin}
                         />
                     </div>

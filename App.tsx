@@ -15,6 +15,7 @@ import type {
   UserNotification,
 } from './types';
 import { PRE_REGISTERED_STUDENTS, PreRegisteredStudent } from './studentList';
+import { FIREBASE_CONFIG } from './firebaseConfig';
 
 type View = 'teacher' | 'student';
 type IntegrationType = 'google_sheets' | 'airtable' | 'firebase';
@@ -120,6 +121,12 @@ const App: React.FC = () => {
     return (localStorage.getItem('attendance-integration-type') as IntegrationType) || 'google_sheets';
   });
   const [adminEmail, setAdminEmail] = useState<string>(() => localStorage.getItem(ADMIN_EMAIL_KEY) || '');
+  const [firebaseDatabaseUrl, setFirebaseDatabaseUrl] = useState<string>(FIREBASE_CONFIG.DATABASE_URL);
+  const [scannedStudentSession, setScannedStudentSession] = useState<{
+    courseName?: string;
+    courseId?: string;
+    week?: string;
+  }>({});
 
   const [registeredUsers, setRegisteredUsers] = useState<AppUser[]>([]);
   const [adminSessions, setAdminSessions] = useState<AdminSessionActivity[]>([]);
@@ -319,6 +326,7 @@ const App: React.FC = () => {
     }
     setView('teacher');
     setIsKioskMode(false);
+    setScannedStudentSession({});
   }, []);
 
   const handleLogout = useCallback(() => {
@@ -374,6 +382,9 @@ const App: React.FC = () => {
           data.integrationType === 'firebase'
         ) {
           setIntegrationType(data.integrationType);
+        }
+        if (typeof data.databaseUrl === 'string' && data.databaseUrl.startsWith('https://')) {
+          setFirebaseDatabaseUrl(data.databaseUrl);
         }
       } catch { /* ignore */ }
     };
@@ -953,12 +964,19 @@ const App: React.FC = () => {
     void apiFetch('/api/history', { method: 'DELETE' }).catch(() => { /* ignore */ });
   }, [apiFetch]);
 
+  const effectiveStudentCourse = scannedStudentSession.courseName || courseNameParam || activeCourse || '';
+  const effectiveStudentCourseId = scannedStudentSession.courseId || courseIdParam || '';
+  const effectiveStudentWeek = scannedStudentSession.week || weekParam || selectedWeek;
+
   // Load course roster when viewing Student QR check-in or switching active course
   useEffect(() => {
     let cancelled = false;
     const loadRoster = async () => {
-      const courseFilter = courseNameParam || activeCourse || '';
-      const cidFilter = courseIdParam || coursesRef.current.find(c => c.courseName.trim().toUpperCase() === courseFilter.trim().toUpperCase())?.id || '';
+      const courseFilter = effectiveStudentCourse;
+      const cidFilter =
+        effectiveStudentCourseId ||
+        coursesRef.current.find(c => c.courseName.trim().toUpperCase() === courseFilter.trim().toUpperCase())?.id ||
+        '';
       if (!courseFilter && !cidFilter) return;
 
       // If authenticated and already have course students locally, use them immediately while verifying server
@@ -983,7 +1001,7 @@ const App: React.FC = () => {
     };
     void loadRoster();
     return () => { cancelled = true; };
-  }, [isAuthenticated, courseNameParam, courseIdParam, activeCourse]);
+  }, [isAuthenticated, effectiveStudentCourse, effectiveStudentCourseId]);
 
   const formatCloudPayload = useCallback((r: Student) => {
     const targetWeek = r.week || selectedWeek || 'W1';
@@ -1361,14 +1379,21 @@ const App: React.FC = () => {
     overrideTimestamp?: number,
     absenceReason?: string,
     week?: string,
-    requireRegistered = false
+    requireRegistered = false,
+    overrideCourseId?: string
   ) => {
     checkAndClearForNewDay();
 
     const targetWeek = week || selectedWeek || 'W1';
+    const normSubmittedId = studentId.trim().replace(/\s+/g, '').toUpperCase();
 
     if (requireRegistered) {
-      if (status === 'P' && attendanceList.some(s => s.studentId === studentId && s.status === 'P')) {
+      if (
+        status === 'P' &&
+        attendanceList.some(
+          s => s.studentId.trim().replace(/\s+/g, '').toUpperCase() === normSubmittedId && s.status === 'P'
+        )
+      ) {
         return { success: false, message: 'Attendance already recorded for this student ID.' };
       }
       try {
@@ -1377,11 +1402,11 @@ const App: React.FC = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             name,
-            studentId,
+            studentId: normSubmittedId,
             email,
             status,
             courseName,
-            courseId: courseIdParam || '',
+            courseId: overrideCourseId || effectiveStudentCourseId || '',
             week: targetWeek,
           }),
         });
@@ -1391,19 +1416,22 @@ const App: React.FC = () => {
         }
         const savedRecord: Student = data.record || {
           name,
-          studentId,
+          studentId: normSubmittedId,
           email,
           status,
           timestamp: overrideTimestamp || Date.now(),
           courseName,
           week: targetWeek,
         };
-        setAttendanceList(prev => [{ ...savedRecord }, ...prev.filter(s => s.studentId !== studentId)]);
+        setAttendanceList(prev => [
+          { ...savedRecord },
+          ...prev.filter(s => s.studentId.trim().replace(/\s+/g, '').toUpperCase() !== normSubmittedId),
+        ]);
         setTeacherHistory(prev =>
           [savedRecord, ...prev.filter(t => !(t.studentId === savedRecord.studentId && t.timestamp === savedRecord.timestamp))]
         );
         if (integrationType === 'airtable') {
-          await syncToAirtable({ [studentId]: savedRecord });
+          await syncToAirtable({ [normSubmittedId]: savedRecord });
         }
         localStorage.setItem(LAST_SCAN_DATE_KEY, new Date().toISOString().slice(0, 10));
         return { success: true, message: data.message || 'Record submitted successfully.' };
@@ -1706,6 +1734,7 @@ const App: React.FC = () => {
               currentUserRole={currentUserRole}
               integrationType={integrationType}
               onIntegrationTypeChange={handleIntegrationTypeChange}
+              firebaseDatabaseUrl={firebaseDatabaseUrl}
               teacherHistory={teacherHistory}
               onUpdateMatrixCell={handleUpdateMatrixCell}
               onDeleteHistoryItem={handleDeleteHistoryItem}
@@ -1743,18 +1772,34 @@ const App: React.FC = () => {
         <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 bg-gray-100">
           <div className="w-full max-w-md bg-white rounded-3xl shadow-xl p-5 sm:p-6 border border-gray-100">
             <StudentView
-              markAttendance={(name, id, email, scannedWeek) =>
-                addStudent(name, id, email, 'P', courseNameParam || activeCourse || 'General Session', undefined, undefined, scannedWeek || weekParam || selectedWeek, true)
+              markAttendance={(name, id, email, scannedWeek, scannedCourse, scannedCid) =>
+                addStudent(
+                  name,
+                  id,
+                  email,
+                  'P',
+                  scannedCourse || effectiveStudentCourse || 'General Session',
+                  undefined,
+                  undefined,
+                  scannedWeek || effectiveStudentWeek,
+                  true,
+                  scannedCid || effectiveStudentCourseId
+                )
               }
               token={token || (isKioskMode ? kioskToken : '')}
-              courseName={courseNameParam || activeCourse || undefined}
-              week={weekParam || selectedWeek}
+              courseName={effectiveStudentCourse || undefined}
+              courseId={effectiveStudentCourseId || undefined}
+              week={effectiveStudentWeek}
               geoConstraints={latParam && lngParam ? { lat: parseFloat(latParam), lng: parseFloat(lngParam), radius: radParam ? parseFloat(radParam) : 150 } : undefined}
               bypassRestrictions={isKioskMode}
               isOfflineScan={isOfflineScan}
               knownStudents={knownStudents}
+              onSessionScanned={(session) => {
+                setScannedStudentSession(session);
+              }}
               onSwitchToTeacher={() => {
                 setIsKioskMode(false);
+                setScannedStudentSession({});
                 setView('teacher');
               }}
             />

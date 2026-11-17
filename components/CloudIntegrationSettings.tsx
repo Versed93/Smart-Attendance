@@ -11,6 +11,7 @@ interface CloudIntegrationSettingsProps {
   selectedWeek?: string;
   integrationType?: 'google_sheets' | 'airtable' | 'firebase';
   onIntegrationTypeChange?: (type: 'google_sheets' | 'airtable' | 'firebase') => void;
+  firebaseDatabaseUrl?: string;
   isAdmin?: boolean;
 }
 
@@ -24,6 +25,7 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
   selectedWeek = 'W1',
   integrationType: propIntegrationType,
   onIntegrationTypeChange,
+  firebaseDatabaseUrl,
   isAdmin = true,
 }) => {
   const [localIntegrationType, setLocalIntegrationType] = useState<'google_sheets' | 'airtable' | 'firebase'>(() => {
@@ -498,7 +500,7 @@ function authorizeMail() {
                   <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Database URL</label>
                   <input 
                       type="text" 
-                      value={FIREBASE_CONFIG.DATABASE_URL} 
+                      value={firebaseDatabaseUrl || FIREBASE_CONFIG.DATABASE_URL} 
                       disabled
                       className="w-full border-2 border-gray-50 bg-gray-100 rounded-2xl p-4 text-xs font-bold text-gray-500 outline-none cursor-not-allowed" 
                   />

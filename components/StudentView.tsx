@@ -22,15 +22,24 @@ export interface ScanHistory {
 }
 
 interface StudentViewProps {
-  markAttendance: (name: string, studentId: string, email: string, week?: string) => Promise<{ success: boolean, message: string }>;
+  markAttendance: (
+    name: string,
+    studentId: string,
+    email: string,
+    week?: string,
+    courseName?: string,
+    courseId?: string
+  ) => Promise<{ success: boolean, message: string }>;
   token: string;
   courseName?: string;
+  courseId?: string;
   week?: string;
   geoConstraints?: { lat: number; lng: number; radius: number };
   bypassRestrictions?: boolean;
   isOfflineScan?: boolean;
   knownStudents: PreRegisteredStudent[];
   onSwitchToTeacher?: () => void;
+  onSessionScanned?: (session: { courseName?: string; courseId?: string; week?: string }) => void;
 }
 
 type Status = 'landing' | 'validating' | 'validating-gps' | 'gps-prompt' | 'form' | 'submitting' | 'success' | 'error' | 'show-student-qr' | 'device-locked' | 'checking-firebase' | 'history';
@@ -62,12 +71,14 @@ export const StudentView: React.FC<StudentViewProps> = ({
   markAttendance, 
   token: initialToken, 
   courseName: initialCourseName, 
+  courseId: initialCourseId,
   week: initialWeek,
   geoConstraints: initialGeoConstraints, 
   bypassRestrictions = false, 
   isOfflineScan: initialIsOfflineScan = false,
   knownStudents,
-  onSwitchToTeacher
+  onSwitchToTeacher,
+  onSessionScanned,
 }) => {
   const [name, setName] = useState('');
   const [studentId, setStudentId] = useState('');
@@ -81,6 +92,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [qrRefreshSeconds, setQrRefreshSeconds] = useState(QR_REFRESH_INTERVAL);
   const [token, setToken] = useState(initialToken);
   const [courseName, setCourseName] = useState(initialCourseName);
+  const [courseId, setCourseId] = useState(initialCourseId);
   const [scannedWeek, setScannedWeek] = useState(initialWeek);
   const [geoConstraints, setGeoConstraints] = useState(initialGeoConstraints);
   const [isOfflineScan, setIsOfflineScan] = useState(initialIsOfflineScan);
@@ -263,7 +275,14 @@ export const StudentView: React.FC<StudentViewProps> = ({
     }
 
     setStatus('submitting');
-    const result = await markAttendance(cleanName, cleanId, `${cleanId}@student.edu.my`, scannedWeek);
+    const result = await markAttendance(
+      cleanName,
+      cleanId,
+      `${cleanId}@student.edu.my`,
+      scannedWeek,
+      courseName,
+      courseId
+    );
     if (result.success) {
       setStatus('success');
       addHistory({ courseName: courseName || 'General Session', timestamp: Date.now(), type: 'online' });
@@ -405,6 +424,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
           const url = new URL(data);
           const t = url.searchParams.get('t');
           const c = url.searchParams.get('c');
+          const cid = url.searchParams.get('cid');
           const w = url.searchParams.get('w');
           const lat = url.searchParams.get('lat');
           const lng = url.searchParams.get('lng');
@@ -418,7 +438,13 @@ export const StudentView: React.FC<StudentViewProps> = ({
               setActiveSuggestionField(null);
               setToken(t);
               if (c) setCourseName(c);
+              if (cid) setCourseId(cid);
               if (w) setScannedWeek(w);
+              onSessionScanned?.({
+                courseName: c || undefined,
+                courseId: cid || undefined,
+                week: w || undefined,
+              });
               setIsOfflineScan(offline);
               if (lat && lng && !isNaN(parseFloat(lat)) && !isNaN(parseFloat(lng))) {
                 setGeoConstraints({
