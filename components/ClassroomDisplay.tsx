@@ -20,6 +20,10 @@ export interface ClassroomDisplayProps {
   qrErrorCorrection?: 'L' | 'M' | 'Q' | 'H';
   qrMargin?: number;
   geoPending?: boolean;
+  pinRequired?: boolean;
+  classroomPin?: string;
+  pinDisplayMode?: 'hidden' | 'flash' | 'visible';
+  pinVisibleUntil?: number;
   onClose: () => void;
   onToggleFullscreen?: () => void;
   isFullscreen?: boolean;
@@ -33,6 +37,10 @@ export const ClassroomDisplay: React.FC<ClassroomDisplayProps> = ({
   qrErrorCorrection = 'M',
   qrMargin = 2,
   geoPending = false,
+  pinRequired = false,
+  classroomPin = '',
+  pinDisplayMode = 'hidden',
+  pinVisibleUntil = 0,
   onClose,
   onToggleFullscreen,
   isFullscreen = false,
@@ -234,6 +242,37 @@ export const ClassroomDisplay: React.FC<ClassroomDisplayProps> = ({
             >
               {selectedWeek.replace(/^W(\d+)$/i, 'WEEK $1')}
             </span>
+            {pinRequired && (() => {
+              const nowMs = currentTime.getTime();
+              const flashRemaining = pinDisplayMode === 'flash' ? Math.ceil((pinVisibleUntil - nowMs) / 1000) : 0;
+              const isPinShown =
+                Boolean(classroomPin) &&
+                (pinDisplayMode === 'visible' || (pinDisplayMode === 'flash' && flashRemaining > 0));
+              if (isPinShown) {
+                return (
+                  <span
+                    className="font-mono font-black uppercase tracking-widest rounded-full bg-emerald-500/20 border border-emerald-400/50 text-emerald-200 leading-none tabular-nums"
+                    style={{
+                      fontSize: 'clamp(0.7rem, min(2.4vw, 1.7dvh), 1rem)',
+                      padding: isTinyHeight ? '4px 12px' : '7px 16px',
+                    }}
+                  >
+                    PIN: {classroomPin}{pinDisplayMode === 'flash' ? ` (${flashRemaining}s)` : ''}
+                  </span>
+                );
+              }
+              return (
+                <span
+                  className="font-bold uppercase tracking-widest rounded-full bg-amber-500/15 border border-amber-400/35 text-amber-200 leading-none"
+                  style={{
+                    fontSize: 'clamp(0.625rem, min(2vw, 1.4dvh), 0.75rem)',
+                    padding: isTinyHeight ? '5px 12px' : '8px 16px',
+                  }}
+                >
+                  PIN Required · Ask Lecturer
+                </span>
+              );
+            })()}
           </div>
         </div>
 
@@ -310,6 +349,19 @@ export const StandaloneClassroomView: React.FC = () => {
   });
 
   const [currentTime, setCurrentTime] = useState(() => new Date());
+  const [fallbackToken, setFallbackToken] = useState<{
+    qrToken?: string;
+    qrTokenIat?: number;
+    qrTokenExpiresAt?: number;
+    pinRequired?: boolean;
+    classroomPin?: string;
+  }>({});
+  const effectiveToken = syncState.qrToken || fallbackToken.qrToken;
+  const effectiveIat = syncState.qrTokenIat || fallbackToken.qrTokenIat;
+  const effectivePinRequired =
+    syncState.pinRequired !== undefined ? syncState.pinRequired : fallbackToken.pinRequired;
+  const effectivePin = syncState.classroomPin || fallbackToken.classroomPin;
+
   const [qrData, setQrData] = useState<string>(() =>
     buildAttendanceQrUrl({
       baseUrl: syncState.baseUrl,
@@ -319,6 +371,9 @@ export const StandaloneClassroomView: React.FC = () => {
       isOfflineMode: syncState.isOfflineMode,
       isGeoEnabled: syncState.isGeoEnabled,
       teacherLocation: syncState.teacherLocation,
+      qrToken: effectiveToken,
+      qrTokenIat: effectiveIat,
+      pinRequired: effectivePinRequired,
     })
   );
   const [isFullscreen, setIsFullscreen] = useState<boolean>(() => Boolean(document.fullscreenElement));
@@ -358,8 +413,54 @@ export const StandaloneClassroomView: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    const refreshFallbackTokenIfNeeded = async () => {
+      const tokenAge = Date.now() - (syncState.qrTokenIat || 0);
+      const fallbackAge = Date.now() - (fallbackToken.qrTokenIat || 0);
+      if (syncState.qrToken && tokenAge < 7000) return;
+      if (fallbackToken.qrToken && fallbackAge < 5000) return;
+      const authToken = localStorage.getItem('attendance-auth-token-v1') || '';
+      if (!authToken) return;
+      try {
+        const res = await fetch('/api/qr/token', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({
+            courseName: syncState.courseName || 'General Session',
+            courseId: syncState.courseId || '',
+            week: syncState.selectedWeek || 'W1',
+            requirePin: syncState.pinRequired,
+          }),
+        });
+        const data = await res.json();
+        if (res.ok && data?.success && data.qrToken) {
+          setFallbackToken({
+            qrToken: data.qrToken,
+            qrTokenIat: data.iat,
+            qrTokenExpiresAt: data.exp,
+            pinRequired: Boolean(data.pinRequired),
+            classroomPin: data.pin || '',
+          });
+        }
+      } catch {
+        // Ignore transient network errors
+      }
+    };
+
     const updateTick = () => {
       setCurrentTime(new Date());
+      void refreshFallbackTokenIfNeeded();
+      const activeTok =
+        syncState.qrToken && (!fallbackToken.qrTokenIat || (syncState.qrTokenIat || 0) >= fallbackToken.qrTokenIat)
+          ? syncState.qrToken
+          : fallbackToken.qrToken;
+      const activeIat =
+        syncState.qrToken && (!fallbackToken.qrTokenIat || (syncState.qrTokenIat || 0) >= fallbackToken.qrTokenIat)
+          ? syncState.qrTokenIat
+          : fallbackToken.qrTokenIat;
+
       setQrData(
         buildAttendanceQrUrl({
           baseUrl: syncState.baseUrl,
@@ -369,13 +470,16 @@ export const StandaloneClassroomView: React.FC = () => {
           isOfflineMode: syncState.isOfflineMode,
           isGeoEnabled: syncState.isGeoEnabled,
           teacherLocation: syncState.teacherLocation,
+          qrToken: activeTok,
+          qrTokenIat: activeIat,
+          pinRequired: effectivePinRequired,
         })
       );
     };
     updateTick();
     const timer = setInterval(updateTick, 1000);
     return () => clearInterval(timer);
-  }, [syncState]);
+  }, [syncState, fallbackToken.qrToken, fallbackToken.qrTokenIat, effectivePinRequired]);
 
   useEffect(() => {
     let channel: BroadcastChannel | null = null;
@@ -430,6 +534,10 @@ export const StandaloneClassroomView: React.FC = () => {
       qrErrorCorrection={syncState.qrErrorCorrection}
       qrMargin={syncState.qrMargin}
       geoPending={Boolean(syncState.geoPending)}
+      pinRequired={Boolean(effectivePinRequired)}
+      classroomPin={effectivePin || ''}
+      pinDisplayMode={syncState.pinDisplayMode || 'hidden'}
+      pinVisibleUntil={syncState.pinVisibleUntil || 0}
       onClose={handleCloseWindow}
       onToggleFullscreen={handleToggleFullscreen}
       isFullscreen={isFullscreen}

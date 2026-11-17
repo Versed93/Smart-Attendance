@@ -127,6 +127,20 @@ interface TeacherViewProps {
   onClearUserNotifications?: () => Promise<void> | void;
   onSendTestAdminEmail?: (targetEmail?: string) => Promise<{ success: boolean; message: string }>;
   onRequestAccountDeletion?: (params: { usernameOrEmail: string; reason: string }) => Promise<{ success: boolean; message: string }>;
+  onIssueQrToken?: (params: {
+    courseName: string;
+    courseId?: string;
+    week: string;
+    requirePin?: boolean;
+    rotatePin?: boolean;
+  }) => Promise<{
+    success: boolean;
+    qrToken?: string;
+    iat?: number;
+    exp?: number;
+    pinRequired?: boolean;
+    pin?: string;
+  }>;
 }
 
 const WEEKS = Array.from({ length: 14 }, (_, i) => `W${i + 1}`);
@@ -179,7 +193,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onAdminEmailChange,
   onDeleteUser,
   onActivateUser,
-  onResendActivationEmail,
   onRevokeSession,
   onClearInactiveSessions,
   onMarkNotificationRead,
@@ -190,6 +203,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onClearUserNotifications,
   onSendTestAdminEmail,
   onRequestAccountDeletion,
+  onIssueQrToken,
 }) => {
   const isAdmin = currentUserRole === 'admin' || currentAdminName?.toLowerCase() === 'admin';
   const [baseUrl] = useState<string>(() => window.location.origin + window.location.pathname);
@@ -228,7 +242,6 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [adminEmailInput, setAdminEmailInput] = useState(adminEmail);
   const [isTestingAdminEmail, setIsTestingAdminEmail] = useState(false);
   const [adminEmailTestStatus, setAdminEmailTestStatus] = useState<{ success: boolean; message: string } | null>(null);
-  const [resendingUserId, setResendingUserId] = useState<string | null>(null);
   const [deleteReason, setDeleteReason] = useState('Signed up by mistake');
   const [customDeleteReason, setCustomDeleteReason] = useState('');
   const [isSubmittingDeleteRequest, setIsSubmittingDeleteRequest] = useState(false);
@@ -243,11 +256,43 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [isQrLoading, setIsQrLoading] = useState(true);
   const qrErrorCorrection = (localStorage.getItem('qr-error-correction') as 'L' | 'M' | 'Q' | 'H') || 'M';
   const qrMargin = parseInt(localStorage.getItem('qr-margin') || '2', 10);
+  const [pinRequired, setPinRequired] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    return localStorage.getItem('smart-attendance-pin-required') !== 'false';
+  });
+  const [pinDisplayMode, setPinDisplayMode] = useState<'hidden' | 'flash' | 'visible'>('hidden');
+  const [pinVisibleUntil, setPinVisibleUntil] = useState<number>(0);
+  const [isUpdatingPin, setIsUpdatingPin] = useState(false);
+  const [signedQrState, setSignedQrState] = useState<{
+    qrToken: string;
+    iat: number;
+    exp: number;
+    pinRequired: boolean;
+    pin: string;
+    configKey: string;
+  } | null>(null);
+  const signedQrRef = useRef<typeof signedQrState>(null);
   const [listSearchTerm, setListSearchTerm] = useState('');
   const [studentSortBy, setStudentSortBy] = useState<'id' | 'name' | 'status'>('id');
+  const [attendanceFilterMode, setAttendanceFilterMode] = useState<'all' | 'present' | 'absent_unscanned' | 'not_scanned'>('all');
+  const [markingStudentId, setMarkingStudentId] = useState<string | null>(null);
+  const [editingLiveStudent, setEditingLiveStudent] = useState<{
+    studentId: string;
+    name: string;
+    status: string;
+    reason: string;
+    isUnscanned: boolean;
+  } | null>(null);
+  const [isSavingLiveStudent, setIsSavingLiveStudent] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [currentTime, setCurrentTime] = useState(() => new Date());
-  const [confirmation, setConfirmation] = useState<{ action: 'P' | 'A' | null, count: number, reason?: string }>({ action: null, count: 0 });
+  const [confirmation, setConfirmation] = useState<{
+    action: 'P' | 'A' | null;
+    targetIds: string[];
+    label: string;
+    count: number;
+    reason?: string;
+  }>({ action: null, targetIds: [], label: '', count: 0 });
   const [showNewSessionModal, setShowNewSessionModal] = useState(false);
   const [showStudentListModal, setShowStudentListModal] = useState(false);
   const [studentListFilter, setStudentListFilter] = useState('');
@@ -666,34 +711,114 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       setTimeout(() => setScanResult(null), 2500);
   };
   
+  const issueSignedQrToken = useCallback(
+    async (options?: { nextRequirePin?: boolean; rotatePin?: boolean }) => {
+      if (!onIssueQrToken) return null;
+      const effectiveRequirePin = options?.nextRequirePin !== undefined ? options.nextRequirePin : pinRequired;
+      const matchedCourse = courseName
+        ? courses.find((c) => c.courseName.trim().toUpperCase() === courseName.trim().toUpperCase())
+        : undefined;
+      const configKey = `${courseName || 'General Session'}|${matchedCourse?.id || ''}|${selectedWeek || 'W1'}`;
+      const res = await onIssueQrToken({
+        courseName: courseName || 'General Session',
+        courseId: matchedCourse?.id,
+        week: selectedWeek || 'W1',
+        requirePin: effectiveRequirePin,
+        rotatePin: Boolean(options?.rotatePin),
+      });
+      if (res?.success && res.qrToken && res.iat && res.exp) {
+        const nextState = {
+          qrToken: res.qrToken,
+          iat: res.iat,
+          exp: res.exp,
+          pinRequired: Boolean(res.pinRequired),
+          pin: res.pin || '',
+          configKey,
+        };
+        signedQrRef.current = nextState;
+        setSignedQrState(nextState);
+        return nextState;
+      }
+      return null;
+    },
+    [onIssueQrToken, courseName, courses, selectedWeek, pinRequired]
+  );
+
   useEffect(() => {
-    const updateQR = () => {
-        const matchedCourse = courseName
-          ? courses.find(c => c.courseName.trim().toUpperCase() === courseName.trim().toUpperCase())
-          : undefined;
+    if (pinDisplayMode !== 'flash' || !pinVisibleUntil) return;
+    const remainingMs = pinVisibleUntil - Date.now();
+    if (remainingMs <= 0) {
+      setPinDisplayMode('hidden');
+      setPinVisibleUntil(0);
+      return;
+    }
+    const timeout = setTimeout(() => {
+      setPinDisplayMode('hidden');
+      setPinVisibleUntil(0);
+    }, remainingMs);
+    return () => clearTimeout(timeout);
+  }, [pinDisplayMode, pinVisibleUntil]);
 
-        const configString = `${courseName}-${selectedWeek}-${isOfflineMode}-${isGeoEnabled}-${teacherLocation?.lat}-${teacherLocation?.lng}`;
-        if (configString !== lastConfigRef.current) {
-            setIsQrLoading(true);
-            lastConfigRef.current = configString;
-        }
-
-        setQrData(
-          buildAttendanceQrUrl({
-            baseUrl,
-            selectedWeek,
-            courseName,
-            courseId: matchedCourse?.id,
-            isOfflineMode,
-            isGeoEnabled,
-            teacherLocation,
-          })
-        );
+  useEffect(() => {
+    let cancelled = false;
+    const refreshToken = async () => {
+      const next = await issueSignedQrToken();
+      if (cancelled || !next) return;
     };
-    updateQR();
-    const interval = setInterval(updateQR, 1000);
-    return () => clearInterval(interval);
-  }, [baseUrl, courseName, courses, selectedWeek, isGeoEnabled, teacherLocation, isOfflineMode]);
+    void refreshToken();
+    const interval = setInterval(() => {
+      void refreshToken();
+    }, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [issueSignedQrToken]);
+
+  useEffect(() => {
+    const matchedCourse = courseName
+      ? courses.find((c) => c.courseName.trim().toUpperCase() === courseName.trim().toUpperCase())
+      : undefined;
+    const currentConfigKey = `${courseName || 'General Session'}|${matchedCourse?.id || ''}|${selectedWeek || 'W1'}`;
+    const configString = `${courseName}-${selectedWeek}-${isOfflineMode}-${isGeoEnabled}-${teacherLocation?.lat}-${teacherLocation?.lng}-${pinRequired}`;
+    if (configString !== lastConfigRef.current) {
+      setIsQrLoading(true);
+      lastConfigRef.current = configString;
+    }
+
+    const activeSigned =
+      signedQrState && signedQrState.configKey === currentConfigKey ? signedQrState : null;
+
+    if (!activeSigned && onIssueQrToken && !isOfflineMode) {
+      return;
+    }
+
+    setQrData(
+      buildAttendanceQrUrl({
+        baseUrl,
+        selectedWeek,
+        courseName,
+        courseId: matchedCourse?.id,
+        isOfflineMode,
+        isGeoEnabled,
+        teacherLocation,
+        qrToken: activeSigned?.qrToken,
+        qrTokenIat: activeSigned?.iat,
+        pinRequired,
+      })
+    );
+  }, [
+    baseUrl,
+    courseName,
+    courses,
+    selectedWeek,
+    isGeoEnabled,
+    teacherLocation,
+    isOfflineMode,
+    pinRequired,
+    signedQrState,
+    onIssueQrToken,
+  ]);
 
   useEffect(() => {
     if (canvasRef.current && qrData) {
@@ -708,26 +833,68 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     }
   }, [qrData, qrErrorCorrection, qrMargin]);
 
-  const stats = useMemo(() => {
-      const present = attendanceList.filter(s => s.status.toUpperCase() === 'P').length;
-      const absent = attendanceList.filter(s => s.status.toUpperCase() === 'A').length;
-      const total = attendanceList.length;
-      const pct = total > 0 ? Math.round((present / total) * 100) : 0;
-      return { present, absent, total, pct };
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [courseName]);
+
+  const liveStudentNormIds = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of attendanceList) {
+      const nid = (s.studentId || '').trim().replace(/\s+/g, '').toUpperCase();
+      if (nid) set.add(nid);
+    }
+    return set;
   }, [attendanceList]);
+
+  const unscannedStudents = useMemo(() => {
+    const seen = new Set<string>();
+    const list: Array<{
+      studentId: string;
+      name: string;
+      status: 'UNSCANNED';
+      timestamp?: number;
+      absenceReason?: string;
+      isUnscanned: true;
+    }> = [];
+    for (const k of knownStudents) {
+      const nid = (k.id || '').trim().replace(/\s+/g, '').toUpperCase();
+      if (!nid || seen.has(nid) || liveStudentNormIds.has(nid)) continue;
+      seen.add(nid);
+      list.push({
+        studentId: nid,
+        name: (k.name || nid).trim(),
+        status: 'UNSCANNED',
+        isUnscanned: true,
+      });
+    }
+    return list;
+  }, [knownStudents, liveStudentNormIds]);
+
+  const stats = useMemo(() => {
+    const present = attendanceList.filter(s => s.status.toUpperCase() === 'P').length;
+    const absent = attendanceList.filter(s => s.status.toUpperCase() === 'A').length;
+    const excused = attendanceList.filter(s => ['M', 'E'].includes(s.status.toUpperCase())).length;
+    const notScanned = unscannedStudents.length;
+    const recordedCount = attendanceList.length;
+    const total = knownStudents.length > 0 ? recordedCount + notScanned : recordedCount;
+    const pct = total > 0 ? Math.round((present / total) * 100) : 0;
+    return { present, absent, excused, notScanned, recordedCount, total, pct };
+  }, [attendanceList, knownStudents.length, unscannedStudents.length]);
 
   const cycleStudentSort = () => {
     setStudentSortBy((prev) => (prev === 'id' ? 'name' : prev === 'name' ? 'status' : 'id'));
   };
 
-  const sortStudentRecords = useCallback((records: Student[]) => {
-    const getStatusRank = (status: string) => {
-      const s = status.trim().toUpperCase();
-      if (s === 'P') return 0;
-      if (s === 'A') return 2;
-      return 1;
-    };
+  const getStatusSortRank = (status: string) => {
+    const s = status.trim().toUpperCase();
+    if (s === 'P') return 0;
+    if (s === 'M' || s === 'E') return 1;
+    if (s === 'A') return 2;
+    if (s === 'UNSCANNED') return 3;
+    return 1;
+  };
 
+  const sortStudentRecords = useCallback((records: Student[]) => {
     return [...records].sort((a, b) => {
       if (studentSortBy === 'id') {
         const idCmp = a.studentId.localeCompare(b.studentId, undefined, { numeric: true, sensitivity: 'base' });
@@ -739,7 +906,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           ? nameCmp
           : a.studentId.localeCompare(b.studentId, undefined, { numeric: true, sensitivity: 'base' });
       }
-      const statusCmp = getStatusRank(a.status) - getStatusRank(b.status);
+      const statusCmp = getStatusSortRank(a.status) - getStatusSortRank(b.status);
       if (statusCmp !== 0) return statusCmp;
       const rawStatusCmp = a.status.localeCompare(b.status, undefined, { sensitivity: 'base' });
       return rawStatusCmp !== 0
@@ -748,10 +915,44 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     });
   }, [studentSortBy]);
 
-  const filteredList = useMemo(() => {
-    const filtered = attendanceList.filter(s => s.name.toLowerCase().includes(listSearchTerm.toLowerCase()) || s.studentId.toLowerCase().includes(listSearchTerm.toLowerCase()));
-    return sortStudentRecords(filtered);
-  }, [attendanceList, listSearchTerm, sortStudentRecords]);
+  const allLiveRows = useMemo(() => {
+    const recorded = attendanceList.map((s) => ({
+      studentId: s.studentId,
+      name: s.name,
+      status: (s.status || 'P').trim().toUpperCase(),
+      timestamp: s.timestamp,
+      absenceReason: s.absenceReason,
+      isUnscanned: false as const,
+    }));
+    return [...recorded, ...unscannedStudents];
+  }, [attendanceList, unscannedStudents]);
+
+  const filteredLiveRows = useMemo(() => {
+    const q = listSearchTerm.trim().toLowerCase();
+    const filtered = allLiveRows.filter((row) => {
+      if (attendanceFilterMode === 'present' && row.status !== 'P') return false;
+      if (attendanceFilterMode === 'absent_unscanned' && row.status === 'P') return false;
+      if (attendanceFilterMode === 'not_scanned' && !row.isUnscanned) return false;
+      if (!q) return true;
+      return row.name.toLowerCase().includes(q) || row.studentId.toLowerCase().includes(q);
+    });
+
+    return [...filtered].sort((a, b) => {
+      if (studentSortBy === 'id') {
+        const idCmp = a.studentId.localeCompare(b.studentId, undefined, { numeric: true, sensitivity: 'base' });
+        return idCmp !== 0 ? idCmp : a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      }
+      if (studentSortBy === 'name') {
+        const nameCmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+        return nameCmp !== 0
+          ? nameCmp
+          : a.studentId.localeCompare(b.studentId, undefined, { numeric: true, sensitivity: 'base' });
+      }
+      const statusCmp = getStatusSortRank(a.status) - getStatusSortRank(b.status);
+      if (statusCmp !== 0) return statusCmp;
+      return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+    });
+  }, [allLiveRows, attendanceFilterMode, listSearchTerm, studentSortBy]);
 
   const filteredHistory = useMemo(() => {
     const filtered = teacherHistory.filter(s => {
@@ -904,32 +1105,97 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       return;
     }
 
-    const sourceList = activeTab === 'history' ? filteredHistory : filteredList;
-    if (sourceList.length === 0) {
+    if (activeTab === 'history') {
+      if (filteredHistory.length === 0) {
+        showToast('error', 'No data to export.');
+        return;
+      }
+      const headers = ['Student ID', 'Name', 'Course Name', 'Week', 'Date', 'Status', 'Reason', 'Time'];
+      const rows = [headers.join(',')];
+      filteredHistory.forEach((s) => {
+        const ts = new Date(s.timestamp);
+        const name = `"${s.name.replace(/"/g, '""')}"`;
+        const reason = `"${(s.absenceReason || '').replace(/"/g, '""')}"`;
+        const course = `"${(s.courseName || courseName || 'General Session').replace(/"/g, '""')}"`;
+        const weekVal = s.week || selectedWeek;
+        rows.push([s.studentId, name, course, weekVal, ts.toLocaleDateString(), s.status, reason, ts.toLocaleTimeString()].join(','));
+      });
+      const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `attendance_history_${safeCourseSlug}.csv`;
+      link.click();
+      return;
+    }
+
+    if (filteredLiveRows.length === 0) {
       showToast('error', 'No data to export.');
       return;
     }
     const headers = ['Student ID', 'Name', 'Course Name', 'Week', 'Date', 'Status', 'Reason', 'Time'];
     const rows = [headers.join(',')];
-    sourceList.forEach((s) => {
-      const ts = new Date(s.timestamp);
-      const name = `"${s.name.replace(/"/g, '""')}"`;
-      const reason = `"${(s.absenceReason || '').replace(/"/g, '""')}"`;
-      const course = `"${(s.courseName || courseName || 'General Session').replace(/"/g, '""')}"`;
-      const weekVal = s.week || selectedWeek;
-      rows.push([s.studentId, name, course, weekVal, ts.toLocaleDateString(), s.status, reason, ts.toLocaleTimeString()].join(','));
+    const todayStr = new Date().toLocaleDateString();
+    filteredLiveRows.forEach((r) => {
+      const name = `"${r.name.replace(/"/g, '""')}"`;
+      const reason = `"${(r.absenceReason || '').replace(/"/g, '""')}"`;
+      const course = `"${(courseName || 'General Session').replace(/"/g, '""')}"`;
+      const statusLabel = r.status === 'UNSCANNED' ? 'NOT SCANNED' : r.status;
+      const dateStr = r.timestamp ? new Date(r.timestamp).toLocaleDateString() : todayStr;
+      const timeStr = r.timestamp ? new Date(r.timestamp).toLocaleTimeString() : '-';
+      rows.push([r.studentId, name, course, selectedWeek, dateStr, statusLabel, reason, timeStr].join(','));
     });
     const blob = new Blob([rows.join('\n')], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = activeTab === 'history' ? `attendance_history_${safeCourseSlug}.csv` : `attendance_${safeCourseSlug}.csv`;
+    link.download = `attendance_${safeCourseSlug}.csv`;
     link.click();
   };
 
   const handleMarkAll = (status: 'P' | 'A') => {
-    if (filteredList.length === 0) return;
-    setConfirmation({ action: status, count: filteredList.length, reason: status === 'A' ? 'Bulk update' : '' });
+    if (filteredLiveRows.length === 0) return;
+    setConfirmation({
+      action: status,
+      targetIds: filteredLiveRows.map(s => s.studentId),
+      label: `Update ${filteredLiveRows.length} Visible Student${filteredLiveRows.length === 1 ? '' : 's'}`,
+      count: filteredLiveRows.length,
+      reason: status === 'A' ? 'Bulk update' : '',
+    });
+  };
+
+  const handleMarkUnscannedAbsent = () => {
+    if (unscannedStudents.length === 0) return;
+    setConfirmation({
+      action: 'A',
+      targetIds: unscannedStudents.map(s => s.studentId),
+      label: `Mark ${unscannedStudents.length} Unscanned Student${unscannedStudents.length === 1 ? '' : 's'} Absent`,
+      count: unscannedStudents.length,
+      reason: 'Did not scan',
+    });
+  };
+
+  const handleQuickMarkLiveStudent = async (
+    row: { studentId: string; name: string; status: string; isUnscanned: boolean },
+    targetStatus: 'P' | 'A' | 'M' | 'E',
+    reason?: string
+  ) => {
+    if (markingStudentId) return;
+    setMarkingStudentId(row.studentId);
+    try {
+      const effectiveCourse = courseName || 'General Session';
+      const email = `${row.studentId}@student.edu.my`;
+      const result = await onManualAdd(row.name, row.studentId, email, targetStatus, effectiveCourse, reason);
+      if (result.success) {
+        const label =
+          targetStatus === 'P' ? 'Present' : targetStatus === 'A' ? 'Absent' : targetStatus === 'M' ? 'Medical' : 'Exempt';
+        showToast('success', `Marked ${row.studentId} as ${label}.`);
+      } else {
+        showToast('error', result.message || 'Failed to update student status.');
+      }
+    } finally {
+      setMarkingStudentId(null);
+    }
   };
   
   const handleNewSession = () => {
@@ -1331,6 +1597,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     const s = status.toUpperCase();
     if (s === 'P') return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-green-100 text-green-800 border border-green-200">PRESENT</span>;
     if (s === 'A') return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-red-100 text-red-800 border border-red-200">ABSENT</span>;
+    if (s === 'M') return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-100 text-amber-800 border border-amber-200">MEDICAL</span>;
+    if (s === 'E') return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">EXEMPT</span>;
+    if (s === 'UNSCANNED') return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-50 text-amber-700 border border-amber-300">NOT SCANNED</span>;
     return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-yellow-100 text-yellow-800 border border-yellow-200">{s}</span>;
   };
 
@@ -1351,12 +1620,80 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         teacherLocation,
         qrErrorCorrection,
         qrMargin,
+        qrToken: signedQrState?.qrToken,
+        qrTokenIat: signedQrState?.iat,
+        qrTokenExpiresAt: signedQrState?.exp,
+        pinRequired,
+        classroomPin: signedQrState?.pin || '',
+        pinDisplayMode,
+        pinVisibleUntil,
         updatedAt: Date.now(),
         ...overrides,
       };
     },
-    [baseUrl, courseName, courses, selectedWeek, isOfflineMode, isGeoEnabled, teacherLocation, qrErrorCorrection, qrMargin]
+    [
+      baseUrl,
+      courseName,
+      courses,
+      selectedWeek,
+      isOfflineMode,
+      isGeoEnabled,
+      teacherLocation,
+      qrErrorCorrection,
+      qrMargin,
+      signedQrState,
+      pinRequired,
+      pinDisplayMode,
+      pinVisibleUntil,
+    ]
   );
+
+  const handleTogglePinRequired = async () => {
+    const next = !pinRequired;
+    setPinRequired(next);
+    try {
+      localStorage.setItem('smart-attendance-pin-required', String(next));
+    } catch {
+      // ignore storage errors
+    }
+    if (!next) {
+      setPinDisplayMode('hidden');
+      setPinVisibleUntil(0);
+    }
+    setIsUpdatingPin(true);
+    try {
+      await issueSignedQrToken({ nextRequirePin: next });
+      showToast('success', next ? 'Classroom PIN protection enabled.' : 'Classroom PIN protection turned off.');
+    } finally {
+      setIsUpdatingPin(false);
+    }
+  };
+
+  const handleRotateClassroomPin = async () => {
+    setIsUpdatingPin(true);
+    try {
+      const res = await issueSignedQrToken({ rotatePin: true });
+      if (res?.pin) {
+        showToast('success', `Generated new Classroom PIN: ${res.pin}`);
+      } else {
+        showToast('error', 'Could not generate a new Classroom PIN.');
+      }
+    } finally {
+      setIsUpdatingPin(false);
+    }
+  };
+
+  const handleFlashPinOnProjector = () => {
+    if (!pinRequired) return;
+    setPinDisplayMode('flash');
+    setPinVisibleUntil(Date.now() + 10_000);
+  };
+
+  const handleTogglePinProjectorVisibility = () => {
+    if (!pinRequired) return;
+    setPinDisplayMode((prev) => (prev === 'visible' ? 'hidden' : 'visible'));
+    setPinVisibleUntil(0);
+  };
 
   const closeExtendedClassroom = useCallback(() => {
     publishClassroomSyncState(buildCurrentSyncPayload({ active: false }));
@@ -1538,6 +1875,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         currentTime={currentTime}
         qrErrorCorrection={qrErrorCorrection}
         qrMargin={qrMargin}
+        pinRequired={pinRequired}
+        classroomPin={signedQrState?.pin || ''}
+        pinDisplayMode={pinDisplayMode}
+        pinVisibleUntil={pinVisibleUntil}
         onClose={() => void toggleClassroomView('teacher')}
         onToggleFullscreen={() => {
           if (document.fullscreenElement) {
@@ -1665,21 +2006,47 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
        )}
 
        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col">
+          <button
+            type="button"
+            onClick={() => { setActiveTab('attendance'); setAttendanceFilterMode('all'); }}
+            className="bg-white p-4 rounded-2xl border border-gray-100 hover:border-gray-300 shadow-sm flex flex-col text-left transition-colors"
+          >
              <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1">Total Enrolled</span>
              <span className="text-2xl font-bold text-gray-900 tabular-nums leading-none">{stats.total}</span>
-          </div>
-          <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col">
+             {knownStudents.length > 0 && (
+               <span className="text-[11px] font-semibold text-gray-400 mt-1.5 tabular-nums">
+                 {stats.recordedCount} recorded · {stats.notScanned} not scanned
+               </span>
+             )}
+          </button>
+          <button
+            type="button"
+            onClick={() => { setActiveTab('attendance'); setAttendanceFilterMode('present'); }}
+            className="bg-white p-4 rounded-2xl border border-gray-100 hover:border-green-200 shadow-sm flex flex-col text-left transition-colors"
+          >
              <span className="text-[10px] font-bold text-green-500 uppercase tracking-widest mb-1">Present</span>
              <span className="text-2xl font-bold text-green-600 tabular-nums leading-none">{stats.present}</span>
-          </div>
-          <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col">
-             <span className="text-[10px] font-bold text-red-500 uppercase tracking-widest mb-1">Absent</span>
-             <span className="text-2xl font-bold text-red-600 tabular-nums leading-none">{stats.absent}</span>
-          </div>
+             <span className="text-[11px] font-semibold text-gray-400 mt-1.5 tabular-nums">
+               {stats.excused > 0 ? `${stats.excused} medical / exempt` : 'Scanned or marked P'}
+             </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => { setActiveTab('attendance'); setAttendanceFilterMode('absent_unscanned'); }}
+            className="bg-white p-4 rounded-2xl border border-gray-100 hover:border-red-200 shadow-sm flex flex-col text-left transition-colors"
+          >
+             <span className="text-[10px] font-bold text-red-500 uppercase tracking-widest mb-1">Absent / Not Scanned</span>
+             <span className="text-2xl font-bold text-red-600 tabular-nums leading-none">{stats.absent + stats.notScanned}</span>
+             <span className="text-[11px] font-semibold text-amber-700 mt-1.5 tabular-nums">
+               {stats.absent} absent · {stats.notScanned} not scanned
+             </span>
+          </button>
           <div className="bg-white p-4 rounded-2xl border border-gray-100 shadow-sm flex flex-col">
              <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-1">Attendance Rate</span>
              <span className="text-2xl font-bold text-indigo-600 tabular-nums leading-none">{stats.pct}%</span>
+             <span className="text-[11px] font-semibold text-gray-400 mt-1.5 tabular-nums">
+               {stats.present}/{stats.total} present
+             </span>
           </div>
        </div>
 
@@ -1703,7 +2070,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     </span>
                     {pendingUsersCount > 0 && (
                       <span className="text-[10px] bg-amber-50 text-amber-700 font-bold px-2.5 py-0.5 rounded-full border border-amber-200">
-                        {pendingUsersCount} Pending Activation
+                        {pendingUsersCount} Pending Approval
                       </span>
                     )}
                     {unreadNotifications.length > 0 && (
@@ -1863,7 +2230,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               {adminPanelTab === 'users' && (
                 <div className="space-y-3">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] font-bold text-gray-500">
-                    <span>Admin-only User Directory • Activate pending accounts or remove users for safety</span>
+                    <span>Admin-only User Directory • Approve pending accounts before sign-in or remove users for safety</span>
                     <span className="text-[10px] text-gray-400 uppercase">{registeredUsers.length} Registered Account{registeredUsers.length === 1 ? '' : 's'}</span>
                   </div>
                   <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
@@ -1889,7 +2256,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                 {isBuiltInAdmin ? 'Admin' : 'Lecturer'}
                               </span>
                               <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${isPending ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                                {isPending ? 'Pending Activation' : 'Active'}
+                                {isPending ? 'Pending Approval' : 'Active'}
                               </span>
                               {isUserOnline && (
                                 <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -1913,40 +2280,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                           {!isBuiltInAdmin ? (
                             <div className="flex items-center gap-2 flex-wrap shrink-0">
                               {isPending && (
-                                <>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      void onActivateUser?.(user.id);
-                                      showToast('success', `Activated "${user.username}".`);
-                                    }}
-                                    className="text-[10px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1.5 rounded-xl uppercase transition-all"
-                                  >
-                                    Activate
-                                  </button>
-                                  <button
-                                    type="button"
-                                    disabled={resendingUserId === user.id}
-                                    onClick={async () => {
-                                      if (!onResendActivationEmail) return;
-                                      setResendingUserId(user.id);
-                                      try {
-                                        const res = await onResendActivationEmail(user);
-                                        if (res.sent) {
-                                          showToast('success', `Activation email resent to ${user.email}.`);
-                                        } else {
-                                          await navigator.clipboard.writeText(res.activationUrl).catch(() => {});
-                                          showToast('error', 'Email service not deployed yet. Activation link copied to clipboard!');
-                                        }
-                                      } finally {
-                                        setResendingUserId(null);
-                                      }
-                                    }}
-                                    className="text-[10px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1.5 rounded-xl uppercase transition-all disabled:opacity-50"
-                                  >
-                                    {resendingUserId === user.id ? 'Sending...' : 'Resend Email'}
-                                  </button>
-                                </>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    void onActivateUser?.(user.id);
+                                    showToast('success', `Approved and activated "${user.username}".`);
+                                  }}
+                                  className="text-[10px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1.5 rounded-xl uppercase transition-all"
+                                >
+                                  Approve &amp; Activate
+                                </button>
                               )}
                               <button
                                 type="button"
@@ -2090,7 +2433,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                             ? 'Confirmation Email Sent'
                             : 'Notification Email Sent'
                           : notif.type === 'user_signup'
-                            ? 'Manual Link Ready'
+                            ? 'Awaiting Admin Approval'
                             : 'In-System Alert';
                         return (
                           <div
@@ -2452,11 +2795,100 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     className="text-xl sm:text-2xl font-bold text-gray-800 text-center w-full border-none focus:ring-0 p-2.5 sm:p-3 bg-transparent placeholder-gray-300 mt-2"
                 />
             </div>
-            <div className="mb-5 sm:mb-6 max-w-[260px] sm:max-w-[320px] w-full aspect-square p-3 border-4 border-dashed border-gray-100 rounded-[2rem] sm:rounded-[2.5rem] relative flex items-center justify-center overflow-hidden">
+            <div className="mb-4 max-w-[260px] sm:max-w-[320px] w-full aspect-square p-3 border-4 border-dashed border-gray-100 rounded-[2rem] sm:rounded-[2.5rem] relative flex items-center justify-center overflow-hidden">
                 {isQrLoading && <div className="absolute inset-0 flex items-center justify-center bg-white/80 z-10"><div className="animate-spin h-8 w-8 border-4 border-brand-primary border-t-transparent rounded-full"></div></div>}
                 <canvas ref={canvasRef} className="max-w-full max-h-full rounded-2xl" />
-                <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-green-500 text-white px-3 py-1 rounded-full text-[9px] font-bold animate-pulse"><div className="w-1.5 h-1.5 bg-white rounded-full"></div>LIVE</div>
+                <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-green-500 text-white px-3 py-1 rounded-full text-[9px] font-bold animate-pulse tabular-nums">
+                  <div className="w-1.5 h-1.5 bg-white rounded-full"></div>
+                  LIVE · {signedQrState ? `${Math.max(0, Math.ceil((signedQrState.exp - currentTime.getTime()) / 1000))}s` : '15s'}
+                </div>
             </div>
+
+            <div className="w-full max-w-md mb-4 rounded-2xl border border-gray-200 bg-gray-50/80 p-3.5 space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-100 text-indigo-700 flex items-center justify-center shrink-0">
+                    <LockClosedIcon className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[11px] font-bold text-gray-900 leading-tight">Anti-Proxy Guard</p>
+                    <p className="text-[10px] font-semibold text-gray-500 truncate tabular-nums">
+                      15s signed QR {signedQrState ? `· refreshes automatically` : '· connecting...'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleTogglePinRequired()}
+                  disabled={isUpdatingPin}
+                  className={`px-2.5 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider border transition-colors shrink-0 disabled:opacity-50 ${
+                    pinRequired
+                      ? 'bg-emerald-600 text-white border-emerald-600 hover:bg-emerald-700'
+                      : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-100'
+                  }`}
+                >
+                  PIN: {pinRequired ? 'ON' : 'OFF'}
+                </button>
+              </div>
+
+              {pinRequired && (() => {
+                const flashSecs = pinDisplayMode === 'flash'
+                  ? Math.max(0, Math.ceil((pinVisibleUntil - currentTime.getTime()) / 1000))
+                  : 0;
+                return (
+                  <div className="pt-2 border-t border-gray-200/80 space-y-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-gray-500">Classroom PIN</span>
+                        <span className="font-mono text-xl font-black text-indigo-700 tracking-[0.2em] tabular-nums bg-white px-2.5 py-0.5 rounded-lg border border-indigo-200 shadow-xs">
+                          {signedQrState?.pin || '----'}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => void handleRotateClassroomPin()}
+                          disabled={isUpdatingPin}
+                          className="px-2.5 py-1.5 rounded-lg bg-white hover:bg-indigo-50 text-gray-700 hover:text-indigo-700 border border-gray-200 text-[10px] font-bold uppercase tracking-wider transition-colors disabled:opacity-50"
+                        >
+                          New PIN
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleFlashPinOnProjector}
+                          className={`px-2.5 py-1.5 rounded-lg border text-[10px] font-bold uppercase tracking-wider transition-colors tabular-nums ${
+                            pinDisplayMode === 'flash' && flashSecs > 0
+                              ? 'bg-amber-500 text-white border-amber-500'
+                              : 'bg-white hover:bg-amber-50 text-amber-700 border-amber-200'
+                          }`}
+                        >
+                          {pinDisplayMode === 'flash' && flashSecs > 0 ? `Flashing ${flashSecs}s` : 'Flash 10s'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleTogglePinProjectorVisibility}
+                          className={`px-2.5 py-1.5 rounded-lg border text-[10px] font-bold uppercase tracking-wider transition-colors ${
+                            pinDisplayMode === 'visible'
+                              ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700'
+                              : 'bg-white hover:bg-gray-100 text-gray-700 border-gray-200'
+                          }`}
+                        >
+                          {pinDisplayMode === 'visible' ? 'Hide Projector' : 'Show Projector'}
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-[10px] font-medium text-gray-500">
+                      {pinDisplayMode === 'visible'
+                        ? 'PIN is currently displayed on Classroom View.'
+                        : pinDisplayMode === 'flash' && flashSecs > 0
+                          ? `PIN is flashing on Classroom View for ${flashSecs}s.`
+                          : 'Projector shows "PIN Required · Ask Lecturer". Announce the PIN aloud or flash it briefly.'}
+                    </p>
+                  </div>
+                );
+              })()}
+            </div>
+
              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-center gap-2.5 sm:gap-3 w-full sm:w-auto">
                 <button onClick={() => onOpenKiosk()} className="flex items-center justify-center gap-2.5 bg-gray-100 text-gray-700 text-[11px] font-bold uppercase px-5 py-3 rounded-xl hover:bg-gray-200 transition-all active:scale-95"><QrCodeIcon className="w-4 h-4" /> Tablet Mode</button>
                 <button onClick={() => setShowScanner(true)} className="flex items-center justify-center gap-2.5 bg-indigo-600 text-white text-[11px] font-bold uppercase px-5 py-3 rounded-xl hover:bg-indigo-700 transition-all active:scale-95 shadow-lg shadow-indigo-100"><CameraIcon className="w-4 h-4" /> Scan Student</button>
@@ -2495,12 +2927,61 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             </div>
 
             {activeTab === 'attendance' ? (
-              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 sm:gap-3 mb-5 sm:mb-6 bg-brand-primary/5 p-3 rounded-2xl border border-brand-primary/10">
-                  <p className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] ml-1 sm:ml-2">Bulk Update</p>
-                  <div className="flex items-center gap-2">
-                      <button onClick={() => handleMarkAll('P')} className="flex-1 sm:flex-initial flex items-center justify-center gap-2 bg-white text-green-600 text-[10px] font-bold px-3 sm:px-4 py-2 rounded-xl hover:shadow-md transition-all disabled:opacity-30 active:scale-95 uppercase border border-green-100" disabled={filteredList.length === 0}><CheckIcon className="w-3.5 h-3.5" /> All Present</button>
-                      <button onClick={() => handleMarkAll('A')} className="flex-1 sm:flex-initial flex items-center justify-center gap-2 bg-white text-red-600 text-[10px] font-bold px-3 sm:px-4 py-2 rounded-xl hover:shadow-md transition-all disabled:opacity-30 active:scale-95 uppercase border border-red-100" disabled={filteredList.length === 0}><XMarkIcon className="w-3.5 h-3.5" /> All Absent</button>
-                  </div>
+              <div className="space-y-3 mb-4 sm:mb-5">
+                <div className="flex flex-wrap items-center gap-1.5 bg-gray-100 p-1 rounded-xl">
+                  <button
+                    type="button"
+                    onClick={() => setAttendanceFilterMode('all')}
+                    className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap tabular-nums ${
+                      attendanceFilterMode === 'all' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800'
+                    }`}
+                  >
+                    All ({allLiveRows.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAttendanceFilterMode('present')}
+                    className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap tabular-nums ${
+                      attendanceFilterMode === 'present' ? 'bg-emerald-600 text-white shadow-sm' : 'text-gray-500 hover:text-emerald-700'
+                    }`}
+                  >
+                    Present ({stats.present})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAttendanceFilterMode('absent_unscanned')}
+                    className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap tabular-nums ${
+                      attendanceFilterMode === 'absent_unscanned' ? 'bg-red-600 text-white shadow-sm' : 'text-gray-500 hover:text-red-700'
+                    }`}
+                  >
+                    Absent / Not Scanned ({allLiveRows.length - stats.present})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAttendanceFilterMode('not_scanned')}
+                    className={`px-3 py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all whitespace-nowrap tabular-nums ${
+                      attendanceFilterMode === 'not_scanned' ? 'bg-amber-600 text-white shadow-sm' : 'text-gray-500 hover:text-amber-700'
+                    }`}
+                  >
+                    Not Scanned ({stats.notScanned})
+                  </button>
+                </div>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-2.5 bg-brand-primary/5 p-3 rounded-2xl border border-brand-primary/10">
+                    <p className="text-[10px] font-bold text-brand-primary uppercase tracking-[0.2em] ml-1 sm:ml-2">Bulk Update</p>
+                    <div className="flex flex-wrap items-center gap-2">
+                        {stats.notScanned > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleMarkUnscannedAbsent}
+                            className="flex items-center justify-center gap-1.5 bg-amber-600 text-white text-[10px] font-bold px-3 py-2 rounded-xl hover:bg-amber-700 transition-all active:scale-95 uppercase shadow-sm tabular-nums whitespace-nowrap"
+                          >
+                            <XMarkIcon className="w-3.5 h-3.5" /> Mark Unscanned Absent ({stats.notScanned})
+                          </button>
+                        )}
+                        <button onClick={() => handleMarkAll('P')} className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 bg-white text-green-600 text-[10px] font-bold px-3 py-2 rounded-xl hover:shadow-md transition-all disabled:opacity-30 active:scale-95 uppercase border border-green-100 whitespace-nowrap" disabled={filteredLiveRows.length === 0}><CheckIcon className="w-3.5 h-3.5" /> All Present</button>
+                        <button onClick={() => handleMarkAll('A')} className="flex-1 sm:flex-initial flex items-center justify-center gap-1.5 bg-white text-red-600 text-[10px] font-bold px-3 py-2 rounded-xl hover:shadow-md transition-all disabled:opacity-30 active:scale-95 uppercase border border-red-100 whitespace-nowrap" disabled={filteredLiveRows.length === 0}><XMarkIcon className="w-3.5 h-3.5" /> All Absent</button>
+                    </div>
+                </div>
               </div>
             ) : activeTab === 'matrix' ? (
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 mb-4 bg-gray-50 px-3.5 py-2.5 rounded-2xl border border-gray-200">
@@ -2571,10 +3052,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         <input
                             type="checkbox"
                             aria-label="Select all visible students"
-                            checked={filteredList.length > 0 && filteredList.every(s => selectedIds.has(s.studentId))}
+                            checked={filteredLiveRows.length > 0 && filteredLiveRows.every(s => selectedIds.has(s.studentId))}
                             onChange={(e) => {
                                 if (e.target.checked) {
-                                    setSelectedIds(new Set(filteredList.map(s => s.studentId)));
+                                    setSelectedIds(new Set(filteredLiveRows.map(s => s.studentId)));
                                 } else {
                                     setSelectedIds(new Set());
                                 }
@@ -2710,42 +3191,120 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             ) : (
             <div className="overflow-y-auto h-[340px] sm:h-[440px] pr-1 sm:pr-2 custom-scrollbar">
                 {activeTab === 'attendance' ? (
-                    filteredList.length > 0 ? (
-                        <ul className="space-y-3">
-                            {filteredList.map(s => (
-                                <li key={s.studentId} className="flex flex-col gap-2 p-4 bg-gray-50/50 rounded-2xl border-2 border-transparent hover:border-gray-100 transition-all group">
-                                    <div className="flex items-center gap-4">
-                                        <input type="checkbox" checked={selectedIds.has(s.studentId)} onChange={(e) => {
+                    filteredLiveRows.length > 0 ? (
+                        <ul className="space-y-2.5">
+                            {filteredLiveRows.map(s => {
+                                const isBusy = markingStudentId === s.studentId;
+                                const rowTone = s.isUnscanned
+                                  ? 'bg-amber-50/50 border-amber-200/80 hover:border-amber-300'
+                                  : s.status === 'A'
+                                    ? 'bg-red-50/35 border-red-100 hover:border-red-200'
+                                    : 'bg-gray-50/60 border-transparent hover:border-gray-200';
+                                return (
+                                <li key={s.studentId} className={`flex flex-col gap-2 p-3.5 rounded-2xl border transition-all group ${rowTone}`}>
+                                    <div className="flex items-center gap-3">
+                                        <input
+                                          type="checkbox"
+                                          checked={selectedIds.has(s.studentId)}
+                                          onChange={(e) => {
                                             const next = new Set(selectedIds);
-                                            if(e.target.checked) next.add(s.studentId); else next.delete(s.studentId);
+                                            if (e.target.checked) next.add(s.studentId);
+                                            else next.delete(s.studentId);
                                             setSelectedIds(next);
-                                        }} className="w-5 h-5 rounded-md border-2 border-gray-200 text-brand-primary focus:ring-0 transition-all cursor-pointer" />
+                                          }}
+                                          className="w-4.5 h-4.5 rounded-md border-2 border-gray-300 text-brand-primary focus:ring-0 transition-all cursor-pointer shrink-0"
+                                        />
                                         <div className="flex-1 min-w-0">
                                             <p className="font-bold text-sm text-gray-900 truncate leading-tight mb-0.5">{s.name}</p>
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-[10px] font-mono font-bold text-gray-400 bg-white px-2 rounded-md border border-gray-100">{s.studentId}</span>
-                                                <span className="text-[10px] font-bold text-gray-300 tabular-nums">{new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}</span>
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <span className="text-[10px] font-mono font-bold text-gray-500 bg-white px-2 py-0.5 rounded-md border border-gray-200">{s.studentId}</span>
+                                                {s.timestamp ? (
+                                                  <span className="text-[10px] font-bold text-gray-400 tabular-nums">
+                                                    {new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })}
+                                                  </span>
+                                                ) : (
+                                                  <span className="text-[10px] font-semibold text-amber-700">
+                                                    Enrolled · Not scanned yet
+                                                  </span>
+                                                )}
                                             </div>
                                         </div>
-                                        <div className="flex flex-col items-end gap-1 shrink-0">
+                                        <div className="flex items-center gap-1.5 shrink-0">
                                             {getStatusBadge(s.status)}
+                                            <div className="flex items-center gap-1 ml-1 pl-1.5 border-l border-gray-200">
+                                              <button
+                                                type="button"
+                                                disabled={isBusy || s.status === 'P'}
+                                                onClick={() => void handleQuickMarkLiveStudent(s, 'P')}
+                                                title={`Mark ${s.name} Present`}
+                                                className={`w-7 h-7 rounded-lg text-[10px] font-black transition-all active:scale-95 ${
+                                                  s.status === 'P'
+                                                    ? 'bg-emerald-600 text-white opacity-90 cursor-default'
+                                                    : 'bg-white text-emerald-700 border border-emerald-200 hover:bg-emerald-600 hover:text-white'
+                                                } disabled:opacity-60`}
+                                              >
+                                                P
+                                              </button>
+                                              <button
+                                                type="button"
+                                                disabled={isBusy}
+                                                onClick={() => void handleQuickMarkLiveStudent(s, 'A', s.absenceReason || 'Absent')}
+                                                title={`Mark ${s.name} Absent`}
+                                                className={`w-7 h-7 rounded-lg text-[10px] font-black transition-all active:scale-95 ${
+                                                  s.status === 'A'
+                                                    ? 'bg-red-600 text-white'
+                                                    : 'bg-white text-red-600 border border-red-200 hover:bg-red-600 hover:text-white'
+                                                } disabled:opacity-60`}
+                                              >
+                                                A
+                                              </button>
+                                              <button
+                                                type="button"
+                                                disabled={isBusy}
+                                                onClick={() =>
+                                                  setEditingLiveStudent({
+                                                    studentId: s.studentId,
+                                                    name: s.name,
+                                                    status: s.isUnscanned ? 'A' : s.status,
+                                                    reason: s.absenceReason || '',
+                                                    isUnscanned: s.isUnscanned,
+                                                  })
+                                                }
+                                                title={`Edit status & note for ${s.name}`}
+                                                aria-label={`Edit status for ${s.name}`}
+                                                className="w-7 h-7 rounded-lg bg-white text-gray-500 border border-gray-200 hover:border-indigo-300 hover:text-indigo-600 flex items-center justify-center transition-all active:scale-95"
+                                              >
+                                                <PencilSquareIcon className="w-3.5 h-3.5" />
+                                              </button>
+                                            </div>
                                         </div>
                                     </div>
                                     {s.absenceReason && (
-                                        <div className="ml-9 flex flex-wrap items-center gap-3 mt-1 pt-3 border-t border-gray-100/50">
-                                            <div className="flex items-center gap-2 px-2.5 py-1 bg-white rounded-lg border border-gray-100 shadow-sm flex-1 min-w-0">
-                                                <span className="text-[9px] font-bold text-gray-300 uppercase tracking-tighter shrink-0">Note</span>
+                                        <div className="ml-8 flex flex-wrap items-center gap-3 mt-0.5 pt-2 border-t border-gray-200/60">
+                                            <div className="flex items-center gap-2 px-2.5 py-1 bg-white rounded-lg border border-gray-100 shadow-xs flex-1 min-w-0">
+                                                <span className="text-[9px] font-bold text-gray-400 uppercase tracking-tighter shrink-0">Note</span>
                                                 <span className="text-[10px] font-bold text-gray-600 truncate italic" title={s.absenceReason}>"{s.absenceReason}"</span>
                                             </div>
                                         </div>
                                     )}
                                 </li>
-                            ))}
+                                );
+                            })}
                         </ul>
                     ) : (
                         <div className="flex flex-col items-center justify-center h-full text-center p-8">
                             <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mb-4 text-gray-200"><ListBulletIcon className="w-8 h-8" /></div>
-                            <p className="text-sm font-bold text-gray-300 uppercase tracking-widest">Waiting for check-ins...</p>
+                            <p className="text-sm font-bold text-gray-400 uppercase tracking-widest">
+                              {attendanceFilterMode === 'not_scanned'
+                                ? knownStudents.length === 0
+                                  ? 'No enrolled student roster uploaded yet'
+                                  : 'All enrolled students have been recorded'
+                                : attendanceFilterMode === 'absent_unscanned'
+                                  ? 'No absent or unscanned students'
+                                  : attendanceFilterMode === 'present'
+                                    ? 'No present check-ins yet'
+                                    : 'Waiting for check-ins...'}
+                            </p>
                         </div>
                     )
                 ) : (
@@ -2784,12 +3343,57 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 )}
             </div>
             )}
-            {activeTab === 'attendance' && selectedIds.size > 0 && (
-                <div className="mt-4 flex items-center justify-between p-3 bg-red-50 rounded-2xl border-2 border-red-100 animate-in slide-in-from-bottom-4">
-                    <span className="text-xs font-bold text-red-600 ml-2">{selectedIds.size} STU SELECTED</span>
-                    <button onClick={() => { onRemoveStudents(Array.from(selectedIds), courseName); setSelectedIds(new Set()); }} className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-xl text-[10px] font-bold uppercase hover:bg-red-700 transition-all shadow-md active:scale-95"><TrashIcon className="w-3.5 h-3.5" /> Remove</button>
+            {activeTab === 'attendance' && selectedIds.size > 0 && (() => {
+              const selectedArr = Array.from(selectedIds);
+              const recordedSelected = selectedArr.filter(id =>
+                liveStudentNormIds.has(id.trim().replace(/\s+/g, '').toUpperCase())
+              );
+              return (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-2 p-3 bg-indigo-50/70 rounded-2xl border border-indigo-200 animate-in slide-in-from-bottom-4">
+                    <span className="text-xs font-bold text-indigo-800 ml-1 tabular-nums">{selectedIds.size} SELECTED</span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setConfirmation({
+                            action: 'P',
+                            targetIds: selectedArr,
+                            label: `Mark ${selectedArr.length} Selected Student${selectedArr.length === 1 ? '' : 's'} Present`,
+                            count: selectedArr.length,
+                          })
+                        }
+                        className="flex items-center gap-1.5 px-3 py-2 bg-emerald-600 text-white rounded-xl text-[10px] font-bold uppercase hover:bg-emerald-700 transition-all shadow-sm active:scale-95"
+                      >
+                        <CheckIcon className="w-3.5 h-3.5" /> Mark Present
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setConfirmation({
+                            action: 'A',
+                            targetIds: selectedArr,
+                            label: `Mark ${selectedArr.length} Selected Student${selectedArr.length === 1 ? '' : 's'} Absent`,
+                            count: selectedArr.length,
+                            reason: 'Absent',
+                          })
+                        }
+                        className="flex items-center gap-1.5 px-3 py-2 bg-amber-600 text-white rounded-xl text-[10px] font-bold uppercase hover:bg-amber-700 transition-all shadow-sm active:scale-95"
+                      >
+                        <XMarkIcon className="w-3.5 h-3.5" /> Mark Absent
+                      </button>
+                      {recordedSelected.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => { onRemoveStudents(recordedSelected, courseName); setSelectedIds(new Set()); }}
+                          className="flex items-center gap-1.5 px-3 py-2 bg-red-600 text-white rounded-xl text-[10px] font-bold uppercase hover:bg-red-700 transition-all shadow-sm active:scale-95"
+                        >
+                          <TrashIcon className="w-3.5 h-3.5" /> Remove ({recordedSelected.length})
+                        </button>
+                      )}
+                    </div>
                 </div>
-            )}
+              );
+            })()}
         </div>
       </div>
        
@@ -3288,23 +3892,160 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         </div>
       )}
 
+      {editingLiveStudent && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[215] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+          <div className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-6 sm:p-7 relative border-t-8 border-indigo-600 animate-in zoom-in duration-200">
+            <button
+              type="button"
+              disabled={isSavingLiveStudent}
+              onClick={() => setEditingLiveStudent(null)}
+              className="absolute top-5 right-5 text-gray-300 hover:text-gray-900 transition-all"
+            >
+              <XCircleIcon className="w-6 h-6" />
+            </button>
+            <h3 className="text-lg font-bold text-gray-900 tracking-tight mb-1">
+              Mark Student Status ({selectedWeek})
+            </h3>
+            <p className="text-xs font-bold text-gray-500 mb-4 tabular-nums">
+              {editingLiveStudent.name} · <span className="font-mono">{editingLiveStudent.studentId}</span>
+              {courseName ? ` · ${courseName}` : ''}
+            </p>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1.5">
+                  Status
+                </label>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {[
+                    { code: 'P', label: 'Present', active: 'bg-emerald-600 text-white border-emerald-600' },
+                    { code: 'A', label: 'Absent', active: 'bg-red-600 text-white border-red-600' },
+                    { code: 'M', label: 'Medical', active: 'bg-amber-600 text-white border-amber-600' },
+                    { code: 'E', label: 'Exempt', active: 'bg-indigo-600 text-white border-indigo-600' },
+                  ].map((opt) => {
+                    const isSelected = editingLiveStudent.status === opt.code;
+                    return (
+                      <button
+                        key={opt.code}
+                        type="button"
+                        onClick={() =>
+                          setEditingLiveStudent((prev) =>
+                            prev ? { ...prev, status: opt.code, reason: opt.code === 'P' ? '' : prev.reason } : null
+                          )
+                        }
+                        className={`px-3 py-2 rounded-xl text-xs font-bold border transition-all ${
+                          isSelected ? opt.active : 'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100'
+                        }`}
+                      >
+                        {opt.label} ({opt.code})
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {editingLiveStudent.status !== 'P' && (
+                <div className="space-y-2">
+                  <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                    Reason / Note (Optional)
+                  </label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {['Unexcused', 'Did not scan', 'Late', 'Medical Certificate', 'Approved Leave'].map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        onClick={() =>
+                          setEditingLiveStudent((prev) => (prev ? { ...prev, reason: preset } : null))
+                        }
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold border transition-colors ${
+                          editingLiveStudent.reason === preset
+                            ? 'bg-indigo-50 text-indigo-700 border-indigo-300'
+                            : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                        }`}
+                      >
+                        {preset}
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="text"
+                    value={editingLiveStudent.reason}
+                    onChange={(e) =>
+                      setEditingLiveStudent((prev) => (prev ? { ...prev, reason: e.target.value } : null))
+                    }
+                    placeholder="Enter custom reason..."
+                    className="w-full border border-gray-200 bg-gray-50 rounded-xl px-3.5 py-2.5 text-xs font-bold text-gray-800 focus:bg-white focus:border-indigo-600 outline-none"
+                  />
+                </div>
+              )}
+
+              <div className="flex gap-2.5 pt-1">
+                <button
+                  type="button"
+                  disabled={isSavingLiveStudent}
+                  onClick={() => setEditingLiveStudent(null)}
+                  className="flex-1 py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-widest text-gray-500 bg-gray-100 hover:bg-gray-200 transition-all"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={isSavingLiveStudent}
+                  onClick={async () => {
+                    if (!editingLiveStudent) return;
+                    setIsSavingLiveStudent(true);
+                    try {
+                      await handleQuickMarkLiveStudent(
+                        {
+                          studentId: editingLiveStudent.studentId,
+                          name: editingLiveStudent.name,
+                          status: editingLiveStudent.status,
+                          isUnscanned: editingLiveStudent.isUnscanned,
+                        },
+                        editingLiveStudent.status as 'P' | 'A' | 'M' | 'E',
+                        editingLiveStudent.status === 'P' ? '' : editingLiveStudent.reason.trim()
+                      );
+                      setEditingLiveStudent(null);
+                    } finally {
+                      setIsSavingLiveStudent(false);
+                    }
+                  }}
+                  className="flex-1 py-2.5 rounded-xl font-bold text-[10px] uppercase tracking-widest text-white bg-indigo-600 hover:bg-indigo-700 transition-all shadow-md shadow-indigo-100 disabled:opacity-50"
+                >
+                  {isSavingLiveStudent ? 'Saving...' : 'Save Status'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {confirmation.action && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[200] flex items-center justify-center p-4">
             <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl p-8">
                 <div className="text-center mb-6">
                     <div className="w-16 h-16 bg-amber-50 text-amber-500 rounded-3xl flex items-center justify-center mx-auto mb-4"><ExclamationTriangleIcon className="w-10 h-10" /></div>
-                    <h2 className="text-2xl font-bold text-gray-900 mb-2">Update {confirmation.count} Students</h2>
+                    <h2 className="text-2xl font-bold text-gray-900 mb-2">{confirmation.label || `Update ${confirmation.count} Students`}</h2>
                     <p className="text-xs font-bold text-gray-400 uppercase tracking-widest">Action: Set to {confirmation.action === 'P' ? 'Present' : 'Absent'}</p>
                 </div>
                 {confirmation.action === 'A' && (
                     <div className="mb-6">
                         <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Reason for Absence</label>
-                        <input type="text" value={confirmation.reason} onChange={(e) => setConfirmation({...confirmation, reason: e.target.value})} className="w-full border-2 border-gray-50 bg-gray-50/50 rounded-2xl p-4 text-xs font-bold outline-none focus:bg-white focus:border-brand-primary" placeholder="Reason (Optional)" />
+                        <input type="text" value={confirmation.reason || ''} onChange={(e) => setConfirmation({...confirmation, reason: e.target.value})} className="w-full border-2 border-gray-50 bg-gray-50/50 rounded-2xl p-4 text-xs font-bold outline-none focus:bg-white focus:border-brand-primary" placeholder="Reason (Optional)" />
                     </div>
                 )}
                 <div className="flex gap-4">
-                    <button onClick={() => setConfirmation({action:null, count:0})} className="flex-1 px-4 py-4 font-bold text-gray-400 bg-gray-100 rounded-2xl hover:bg-gray-200 transition-all uppercase text-[10px]">Cancel</button>
-                    <button onClick={() => { onBulkStatusUpdate(filteredList.map(s=>s.studentId), confirmation.action!, courseName, confirmation.reason); setConfirmation({action:null, count:0}); }} className="flex-1 px-4 py-4 font-bold text-white bg-indigo-600 rounded-2xl hover:bg-indigo-700 transition-all uppercase text-[10px] shadow-lg shadow-indigo-100">Confirm</button>
+                    <button onClick={() => setConfirmation({ action: null, targetIds: [], label: '', count: 0 })} className="flex-1 px-4 py-4 font-bold text-gray-400 bg-gray-100 rounded-2xl hover:bg-gray-200 transition-all uppercase text-[10px]">Cancel</button>
+                    <button
+                      onClick={() => {
+                        onBulkStatusUpdate(confirmation.targetIds, confirmation.action!, courseName, confirmation.reason);
+                        setSelectedIds(new Set());
+                        showToast('success', `Updated ${confirmation.targetIds.length} student${confirmation.targetIds.length === 1 ? '' : 's'} as ${confirmation.action === 'P' ? 'Present' : 'Absent'}.`);
+                        setConfirmation({ action: null, targetIds: [], label: '', count: 0 });
+                      }}
+                      className="flex-1 px-4 py-4 font-bold text-white bg-indigo-600 rounded-2xl hover:bg-indigo-700 transition-all uppercase text-[10px] shadow-lg shadow-indigo-100"
+                    >
+                      Confirm
+                    </button>
                 </div>
             </div>
         </div>

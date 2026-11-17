@@ -18,7 +18,6 @@ import type {
 import { PRE_REGISTERED_STUDENTS, type PreRegisteredStudent } from './studentList.ts';
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const ACTIVATION_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 const FIREBASE_DB_URL = (
   process.env.FIREBASE_DATABASE_URL ||
@@ -182,6 +181,148 @@ function verifySessionToken(token: string): AuthTokenPayload | null {
   }
 }
 
+const QR_TOKEN_VALIDITY_MS = 15 * 1000;
+const CHECKIN_GRANT_VALIDITY_MS = 2 * 60 * 1000;
+
+interface QrTokenPayload {
+  v: 1;
+  iat: number;
+  exp: number;
+  courseName: string;
+  courseId: string;
+  week: string;
+  sessionKey: string;
+  pinRequired: boolean;
+}
+
+interface CheckinGrantPayload {
+  v: 1;
+  nonce: string;
+  iat: number;
+  exp: number;
+  courseName: string;
+  courseId: string;
+  week: string;
+  sessionKey: string;
+  pinRequired: boolean;
+}
+
+interface ClassroomPinConfig {
+  enabled: boolean;
+  pin: string;
+  courseName: string;
+  week: string;
+  updatedAt: number;
+  updatedBy?: string;
+}
+
+const activePinCache = new Map<string, ClassroomPinConfig>();
+const usedScanNonces = new Map<string, number>();
+
+function pruneUsedScanNonces(now: number): void {
+  if (usedScanNonces.size < 200) return;
+  for (const [nonce, exp] of usedScanNonces.entries()) {
+    if (now > exp) {
+      usedScanNonces.delete(nonce);
+    }
+  }
+}
+
+function generateClassroomPin(): string {
+  return String(crypto.randomInt(1000, 10000));
+}
+
+function buildPinSessionKey(courseName: string): string {
+  const clean = (courseName || 'General Session').trim() || 'General Session';
+  return toFirebaseKey(`${getSessionDateId()}_${sanitizeCoursePath(clean)}`);
+}
+
+async function readPinConfig(sessionKey: string): Promise<ClassroomPinConfig | null> {
+  try {
+    const remote = await fbGet<ClassroomPinConfig>(`classroom_pins/${sessionKey}`);
+    if (remote && typeof remote === 'object' && typeof remote.pin === 'string') {
+      activePinCache.set(sessionKey, remote);
+      return remote;
+    }
+  } catch {
+    // Fall back to in-memory cache if DB read temporarily fails
+  }
+  return activePinCache.get(sessionKey) || null;
+}
+
+async function getOrUpdatePinConfig(params: {
+  sessionKey: string;
+  courseName: string;
+  week: string;
+  requirePin?: boolean;
+  rotatePin?: boolean;
+  updatedBy?: string;
+}): Promise<ClassroomPinConfig> {
+  const existing = await readPinConfig(params.sessionKey);
+  const now = Date.now();
+  const nextEnabled = params.requirePin !== undefined ? Boolean(params.requirePin) : (existing ? existing.enabled : true);
+  const needNewPin = Boolean(params.rotatePin) || !existing || !/^\d{4}$/.test(existing.pin);
+
+  if (!existing || nextEnabled !== existing.enabled || needNewPin) {
+    const nextConfig: ClassroomPinConfig = {
+      enabled: nextEnabled,
+      pin: needNewPin ? generateClassroomPin() : existing.pin,
+      courseName: params.courseName,
+      week: params.week,
+      updatedAt: now,
+      updatedBy: params.updatedBy || existing?.updatedBy,
+    };
+    activePinCache.set(params.sessionKey, nextConfig);
+    await fbPut(`classroom_pins/${params.sessionKey}`, nextConfig).catch(() => { /* ignore */ });
+    return nextConfig;
+  }
+
+  return existing;
+}
+
+function signQrToken(payload: QrTokenPayload): string {
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(`qr:${encoded}`).digest('base64url');
+  return `${encoded}.${sig}`;
+}
+
+function verifyQrToken(token: string): QrTokenPayload | null {
+  const parts = String(token || '').trim().split('.');
+  if (parts.length !== 2) return null;
+  const [encoded, sig] = parts;
+  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(`qr:${encoded}`).digest('base64url');
+  if (!timingSafeStringEqual(sig, expectedSig)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as QrTokenPayload;
+    if (!parsed || parsed.v !== 1 || !parsed.iat || !parsed.exp || !parsed.sessionKey) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function signCheckinGrant(payload: CheckinGrantPayload): string {
+  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(`grant:${encoded}`).digest('base64url');
+  return `${encoded}.${sig}`;
+}
+
+function verifyCheckinGrant(token: string): CheckinGrantPayload | null {
+  const parts = String(token || '').trim().split('.');
+  if (parts.length !== 2) return null;
+  const [encoded, sig] = parts;
+  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(`grant:${encoded}`).digest('base64url');
+  if (!timingSafeStringEqual(sig, expectedSig)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as CheckinGrantPayload;
+    if (!parsed || parsed.v !== 1 || !parsed.nonce || !parsed.exp || !parsed.sessionKey) return null;
+    if (Date.now() > parsed.exp) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
 function sanitizeUser(user: StoredAppUser): AppUser {
   const rest = { ...user };
   delete rest.password;
@@ -330,10 +471,6 @@ function getDeviceLabel(ua: string): string {
   else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = 'Safari';
 
   return `${browser} • ${os}`;
-}
-
-function generateRandomToken(): string {
-  return crypto.randomBytes(24).toString('hex');
 }
 
 function sanitizePublicAppUrl(rawUrl: unknown, req: Request): string {
@@ -601,67 +738,66 @@ async function sendDirectEmail(params: {
   return { ok: false, provider: 'none', error: 'No built-in email provider configured.' };
 }
 
-async function dispatchActivationEmails(params: {
+async function dispatchSignupApprovalEmails(params: {
   toEmail: string;
   username: string;
-  activationUrl: string;
-  expiresAtText: string;
   cfg: { scriptUrl: string; adminEmail: string };
 }): Promise<{ emailSent: boolean; provider: EmailProviderType; error?: string }> {
   const status = getEmailDeliveryStatus(params.cfg.scriptUrl);
-  const expiryLine = params.expiresAtText
-    ? `This activation link expires in 1 day (${params.expiresAtText}).`
-    : 'This activation link expires within 1 day (24 hours).';
 
   if (status.provider === 'resend' || status.provider === 'smtp') {
     const safeUser = escapeHtml(params.username);
-    const safeUrl = escapeHtml(params.activationUrl);
-    const safeExpiry = escapeHtml(expiryLine);
-    const userRes = await sendDirectEmail({
-      to: params.toEmail,
-      subject: 'Activate Your Smart Attendance Account',
-      text:
-        `Hello ${params.username},\n\n` +
-        `Please activate your Smart QR Attendance account by opening the link below:\n${params.activationUrl}\n\n` +
-        `${expiryLine}\n\n` +
-        `If you signed up by mistake or want to delete your account, open the app login page and submit an Account Deletion Request to Admin.\n`,
-      html:
-        `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;">` +
-        `<h2 style="color:#111827;margin:0 0 10px;">Activate Your Account</h2>` +
-        `<p style="color:#4b5563;font-size:14px;">Hello <strong>${safeUser}</strong>,</p>` +
-        `<p style="color:#4b5563;font-size:14px;">Thank you for signing up for the Smart QR Attendance System. Click the button below to activate your account:</p>` +
-        `<p style="margin:24px 0;"><a href="${safeUrl}" style="background:#4f46e5;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block;">Activate Account</a></p>` +
-        `<p style="color:#92400e;background:#fffbeb;border:1px solid #fde68a;padding:10px 12px;border-radius:8px;font-size:12px;font-weight:bold;">${safeExpiry}</p>` +
-        `<p style="color:#6b7280;font-size:12px;">Or copy this link: ${safeUrl}</p>` +
-        `</div>`,
-    });
+    const safeEmail = escapeHtml(params.toEmail);
 
+    let adminEmailSent = false;
     if (params.cfg.adminEmail) {
-      const safeEmail = escapeHtml(params.toEmail);
-      await sendDirectEmail({
+      const adminRes = await sendDirectEmail({
         to: params.cfg.adminEmail,
-        subject: `[Smart Attendance] New User Signup: ${params.username}`,
+        subject: `[Smart Attendance] Approval Needed: New User Signup (${params.username})`,
         text:
-          `A new user signed up on the Smart QR Attendance System.\n\n` +
-          `Username: ${params.username}\nEmail: ${params.toEmail}\nStatus: Pending Activation\n${expiryLine}\n`,
+          `A new user signed up on the Smart QR Attendance System and is waiting for Admin approval.\n\n` +
+          `Username: ${params.username}\nEmail: ${params.toEmail}\nStatus: Pending Admin Approval\n\n` +
+          `Open the Admin Control Center -> Users tab to approve and activate this account.\n`,
         html:
           `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;">` +
-          `<h3 style="color:#111827;margin:0 0 8px;">New User Signup</h3>` +
-          `<p style="color:#374151;font-size:14px;"><strong>Username:</strong> ${safeUser}<br/><strong>Email:</strong> ${safeEmail}<br/><strong>Status:</strong> Pending Activation</p>` +
-          `<p style="color:#6b7280;font-size:12px;">${safeExpiry}</p>` +
+          `<h3 style="color:#111827;margin:0 0 8px;">New User Signup — Approval Needed</h3>` +
+          `<p style="color:#374151;font-size:14px;"><strong>Username:</strong> ${safeUser}<br/><strong>Email:</strong> ${safeEmail}<br/><strong>Status:</strong> Pending Admin Approval</p>` +
+          `<p style="color:#6b7280;font-size:12px;">Open the Admin Control Center &rarr; Users tab in Smart Attendance to approve and activate this account.</p>` +
           `</div>`,
-      }).catch(() => { /* ignore secondary admin notification failure */ });
+      }).catch(() => ({ ok: false, provider: status.provider, error: 'Failed to notify admin' }));
+      adminEmailSent = Boolean(adminRes.ok);
     }
 
-    return { emailSent: userRes.ok, provider: userRes.provider, error: userRes.error };
+    const userRes = await sendDirectEmail({
+      to: params.toEmail,
+      subject: 'Smart Attendance Registration Received (Pending Admin Approval)',
+      text:
+        `Hello ${params.username},\n\n` +
+        `Thank you for signing up for the Smart QR Attendance System.\n\n` +
+        `Your account has been created and is waiting for Administrator approval before it can be used.\n` +
+        `You will receive another confirmation email once the Administrator approves and activates your account.\n`,
+      html:
+        `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;">` +
+        `<h2 style="color:#111827;margin:0 0 10px;">Registration Pending Approval</h2>` +
+        `<p style="color:#4b5563;font-size:14px;">Hello <strong>${safeUser}</strong>,</p>` +
+        `<p style="color:#4b5563;font-size:14px;">Thank you for signing up for the Smart QR Attendance System. Your account is currently <strong>pending Administrator approval</strong> and cannot be used until it is approved.</p>` +
+        `<p style="color:#6b7280;font-size:12px;">You will receive a confirmation email once the Administrator activates your account.</p>` +
+        `</div>`,
+    }).catch(() => ({ ok: false, provider: status.provider, error: 'Failed to notify user' }));
+
+    return {
+      emailSent: Boolean(userRes.ok || adminEmailSent),
+      provider: status.provider,
+      error: userRes.error,
+    };
   }
 
   const emailRes = await postToGoogleScript(params.cfg.scriptUrl, {
     action: 'SEND_ACTIVATION_EMAIL',
     toEmail: params.toEmail,
     username: params.username,
-    activationUrl: params.activationUrl,
-    expiresAtText: params.expiresAtText,
+    activationUrl: '',
+    expiresAtText: '',
     adminEmail: params.cfg.adminEmail,
   });
   return {
@@ -1018,7 +1154,7 @@ export function createApiApp(): express.Express {
         res.status(403).json({
           success: false,
           message:
-            'Account pending activation. Please click the activation link sent to your email or ask Admin to activate your account.',
+            'Account pending Admin approval. Please wait for the Administrator to approve and activate your account before signing in.',
         });
         return;
       }
@@ -1093,8 +1229,6 @@ export function createApiApp(): express.Express {
 
       const now = Date.now();
       const userId = `${toFirebaseKey(cleanUser.toLowerCase())}_${now.toString(36)}`;
-      const activationToken = generateRandomToken();
-      const activationExpiresAt = now + ACTIVATION_EXPIRY_MS;
 
       const newUser: StoredAppUser = {
         id: userId,
@@ -1103,23 +1237,15 @@ export function createApiApp(): express.Express {
         passwordHash: hashPassword(password),
         role: 'lecturer',
         status: 'pending',
-        activationToken,
-        activationSentAt: now,
-        activationExpiresAt,
         createdAt: now,
       };
 
       await fbPut(`app_users/${userId}`, newUser);
 
-      const baseAppUrl = sanitizePublicAppUrl(req.body?.publicAppUrl, req);
-      const activationUrl = `${baseAppUrl}?activate=${encodeURIComponent(activationToken)}&user=${encodeURIComponent(userId)}`;
-
       const cfg = await getAppConfig();
-      const { emailSent } = await dispatchActivationEmails({
+      const { emailSent } = await dispatchSignupApprovalEmails({
         toEmail: cleanEmail,
         username: cleanUser,
-        activationUrl,
-        expiresAtText: new Date(activationExpiresAt).toLocaleString(),
         cfg,
       });
 
@@ -1133,76 +1259,27 @@ export function createApiApp(): express.Express {
         createdAt: now,
         read: false,
         emailSent,
-        message: `${cleanUser} (${cleanEmail}) signed up and is waiting for account activation.`,
+        message: `${cleanUser} (${cleanEmail}) signed up and is waiting for Admin approval.`,
       };
       await fbPut(`admin_notifications/${notifId}`, notif).catch(() => { /* ignore */ });
 
       res.json({
         success: true,
-        message: emailSent
-          ? `Account created! An activation email has been sent to ${cleanEmail}. Admin has also been notified.`
-          : 'Account created and Admin has been notified! Please check your email or ask Admin to send/activate your account link.',
+        message:
+          'Account created and submitted for Admin approval! You can sign in once the Administrator approves and activates your account.',
       });
     } catch {
       res.status(500).json({ success: false, message: 'Failed to save user registration to cloud.' });
     }
   });
 
-  // 4. Auth: Activate via Email Link
-  app.post('/api/auth/activate', async (req: Request, res: Response) => {
-    try {
-      const token = String(req.body?.token || '').trim();
-      const userId = String(req.body?.userId || '').trim();
-      if (!token || !userId) {
-        res.status(400).json({ success: false, message: 'Invalid activation parameters.' });
-        return;
-      }
-
-      const userRecord = await fbGet<StoredAppUser>(`app_users/${toFirebaseKey(userId)}`);
-      if (!userRecord || !userRecord.id) {
-        res.status(404).json({
-          success: false,
-          message: 'Activation failed: Account no longer exists or was removed by Admin.',
-        });
-        return;
-      }
-      if (userRecord.status === 'active') {
-        res.json({
-          success: true,
-          message: `Account "${userRecord.username}" is already active. You can sign in now.`,
-        });
-        return;
-      }
-      if (!userRecord.activationToken || !timingSafeStringEqual(userRecord.activationToken, token)) {
-        res.status(400).json({
-          success: false,
-          message: 'Invalid or expired activation link. Contact Admin to resend.',
-        });
-        return;
-      }
-      const expiresAt = userRecord.activationExpiresAt || (userRecord.createdAt + ACTIVATION_EXPIRY_MS);
-      if (Date.now() > expiresAt) {
-        res.status(400).json({
-          success: false,
-          message: 'This activation link has expired (valid for 24 hours). Please contact Admin to resend.',
-        });
-        return;
-      }
-
-      await fbPatch(`app_users/${userRecord.id}`, {
-        status: 'active',
-        activatedAt: Date.now(),
-      });
-
-      await createActivationNotifications(userRecord, 'email_link').catch(() => { /* ignore */ });
-
-      res.json({
-        success: true,
-        message: `Account "${userRecord.username}" has been activated! Please sign in below.`,
-      });
-    } catch {
-      res.status(500).json({ success: false, message: 'Network error while activating account.' });
-    }
+  // 4. Auth: Self-activation via email link disabled (strict Admin-only approval required)
+  app.post('/api/auth/activate', async (_req: Request, res: Response) => {
+    res.status(403).json({
+      success: false,
+      message:
+        'Self-activation via link is disabled. Every new account must be approved and activated directly by the Administrator before it can be used.',
+    });
   });
 
   // 5. Auth: Account Deletion Request (from Login screen)
@@ -1314,18 +1391,189 @@ export function createApiApp(): express.Express {
     }
   });
 
+  // 7.5. Server-Signed Short-Lived QR Issuance (15s) & Student Verification
+  app.post('/api/qr/token', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const courseName = String(req.body?.courseName || 'General Session').trim() || 'General Session';
+      const courseId = String(req.body?.courseId || '').trim();
+      const week = String(req.body?.week || 'W1').trim().toUpperCase() || 'W1';
+      const requirePin = typeof req.body?.requirePin === 'boolean' ? req.body.requirePin : undefined;
+      const rotatePin = Boolean(req.body?.rotatePin);
+      const sessionKey = buildPinSessionKey(courseName);
+
+      const pinConfig = await getOrUpdatePinConfig({
+        sessionKey,
+        courseName,
+        week,
+        requirePin,
+        rotatePin,
+        updatedBy: auth.username,
+      });
+
+      const iat = Date.now();
+      const exp = iat + QR_TOKEN_VALIDITY_MS;
+      const qrToken = signQrToken({
+        v: 1,
+        iat,
+        exp,
+        courseName,
+        courseId,
+        week,
+        sessionKey,
+        pinRequired: pinConfig.enabled,
+      });
+
+      res.json({
+        success: true,
+        qrToken,
+        iat,
+        exp,
+        ttlMs: QR_TOKEN_VALIDITY_MS,
+        pinRequired: pinConfig.enabled,
+        pin: pinConfig.pin,
+      });
+    } catch {
+      res.status(500).json({ success: false, message: 'Failed to issue signed QR token.' });
+    }
+  });
+
+  app.post('/api/qr/verify', async (req: Request, res: Response) => {
+    try {
+      const sig = String(req.body?.sig || '').trim();
+      if (!sig) {
+        res.status(403).json({
+          success: false,
+          code: 'QR_UNVERIFIED',
+          message: 'Unverified or outdated QR code. Please scan the live attendance QR code in class.',
+        });
+        return;
+      }
+
+      const payload = verifyQrToken(sig);
+      if (!payload) {
+        res.status(403).json({
+          success: false,
+          code: 'QR_INVALID',
+          message: 'Invalid or tampered QR code. Please scan the live QR code in class.',
+        });
+        return;
+      }
+
+      const now = Date.now();
+      if (now > payload.exp) {
+        res.status(410).json({
+          success: false,
+          code: 'QR_EXPIRED',
+          message: 'QR Code expired (15s limit). Scan the newest live code in class.',
+        });
+        return;
+      }
+
+      const latestPinConfig = await readPinConfig(payload.sessionKey);
+      const pinRequired = latestPinConfig ? latestPinConfig.enabled : payload.pinRequired;
+
+      const grantExp = now + CHECKIN_GRANT_VALIDITY_MS;
+      const checkinToken = signCheckinGrant({
+        v: 1,
+        nonce: crypto.randomBytes(12).toString('hex'),
+        iat: now,
+        exp: grantExp,
+        courseName: payload.courseName,
+        courseId: payload.courseId,
+        week: payload.week,
+        sessionKey: payload.sessionKey,
+        pinRequired,
+      });
+
+      res.json({
+        success: true,
+        checkinToken,
+        expiresAt: grantExp,
+        pinRequired,
+        courseName: payload.courseName,
+        courseId: payload.courseId,
+        week: payload.week,
+      });
+    } catch {
+      res.status(500).json({ success: false, message: 'Could not verify QR code. Please try again.' });
+    }
+  });
+
   app.post('/api/student/checkin', async (req: Request, res: Response) => {
     try {
       const name = String(req.body?.name || '').trim();
       const studentId = String(req.body?.studentId || '').trim();
       const status = String(req.body?.status || 'P').trim().toUpperCase();
-      const courseName = String(req.body?.courseName || 'General Session').trim();
-      const courseId = String(req.body?.courseId || '').trim();
-      const week = String(req.body?.week || 'W1').trim().toUpperCase();
+      let courseName = String(req.body?.courseName || 'General Session').trim();
+      let courseId = String(req.body?.courseId || '').trim();
+      let week = String(req.body?.week || 'W1').trim().toUpperCase();
 
       if (!name || !studentId) {
         res.status(400).json({ success: false, message: 'Name and Student ID are required.' });
         return;
+      }
+
+      // Check if an authenticated lecturer/admin is submitting via Tablet / Kiosk Mode
+      let isLecturerKiosk = false;
+      const authHeader = String(req.headers.authorization || '');
+      if (authHeader.startsWith('Bearer ')) {
+        const bearerToken = authHeader.slice(7).trim();
+        const authPayload = bearerToken ? verifySessionToken(bearerToken) : null;
+        if (authPayload) {
+          const userRecord = await fbGet<StoredAppUser>(`app_users/${authPayload.uid}`).catch(() => null);
+          if (userRecord && userRecord.id && (userRecord.role === 'admin' || userRecord.status === 'active')) {
+            isLecturerKiosk = true;
+          }
+        }
+      }
+
+      let verifiedGrant: CheckinGrantPayload | null = null;
+      if (!isLecturerKiosk) {
+        const checkinToken = String(req.body?.checkinToken || '').trim();
+        verifiedGrant = verifyCheckinGrant(checkinToken);
+        if (!verifiedGrant) {
+          res.status(401).json({
+            success: false,
+            code: 'GRANT_EXPIRED',
+            message: 'QR verification expired. Please scan the live QR code again.',
+          });
+          return;
+        }
+
+        const now = Date.now();
+        pruneUsedScanNonces(now);
+        const alreadyUsedMem = usedScanNonces.has(verifiedGrant.nonce);
+        const alreadyUsedDb = !alreadyUsedMem
+          ? await fbGet<number>(`used_qr_nonces/${verifiedGrant.nonce}`).catch(() => null)
+          : 1;
+        if (alreadyUsedMem || alreadyUsedDb) {
+          res.status(409).json({
+            success: false,
+            code: 'QR_ALREADY_USED',
+            message: 'This QR scan has already been used. Please scan the live QR code again.',
+          });
+          return;
+        }
+
+        // Bind submission to the signed QR's course and week
+        courseName = verifiedGrant.courseName || courseName;
+        courseId = verifiedGrant.courseId || courseId;
+        week = verifiedGrant.week || week;
+
+        const pinConfig = await readPinConfig(verifiedGrant.sessionKey);
+        const pinMustMatch = pinConfig ? pinConfig.enabled : verifiedGrant.pinRequired;
+        if (pinMustMatch) {
+          const submittedPin = String(req.body?.pin || '').trim();
+          if (!submittedPin || !pinConfig || !timingSafeStringEqual(submittedPin, pinConfig.pin)) {
+            res.status(403).json({
+              success: false,
+              code: 'INVALID_PIN',
+              message: 'Invalid Classroom PIN. Ask your lecturer for the current 4-digit PIN.',
+            });
+            return;
+          }
+        }
       }
 
       const roster = await resolveRosterForCourse({ courseName, courseId });
@@ -1382,6 +1630,11 @@ export function createApiApp(): express.Express {
         fbPut(`live_sessions/${sessionPath}/${studentKey}`, studentData),
         upsertAttendanceHistory([studentData]),
       ]);
+
+      if (verifiedGrant) {
+        usedScanNonces.set(verifiedGrant.nonce, verifiedGrant.exp);
+        void fbPut(`used_qr_nonces/${verifiedGrant.nonce}`, verifiedGrant.exp).catch(() => { /* ignore */ });
+      }
 
       const cfg = await getAppConfig();
       if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl) {
@@ -2635,36 +2888,12 @@ export function createApiApp(): express.Express {
     res.json({ success: true });
   });
 
-  app.post('/api/admin/users/:id/resend-activation', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
-    const userId = String(req.params.id || '').trim();
-    const user = await fbGet<StoredAppUser>(`app_users/${userId}`);
-    if (!user) {
-      res.status(404).json({ success: false, error: 'User not found.' });
-      return;
-    }
-    const now = Date.now();
-    const tokenToUse = generateRandomToken();
-    const activationExpiresAt = now + ACTIVATION_EXPIRY_MS;
-    await fbPatch(`app_users/${userId}`, {
-      activationToken: tokenToUse,
-      activationSentAt: now,
-      activationExpiresAt,
+  app.post('/api/admin/users/:id/resend-activation', requireAuth, requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
+    res.status(403).json({
+      sent: false,
+      activationUrl: '',
+      error: 'Self-activation links are disabled. Every account must be approved and activated directly by the Administrator.',
     });
-    const baseAppUrl = sanitizePublicAppUrl(req.body?.publicAppUrl, req);
-    const activationUrl = `${baseAppUrl}?activate=${encodeURIComponent(tokenToUse)}&user=${encodeURIComponent(user.id)}`;
-    if (!user.email) {
-      res.json({ sent: false, activationUrl });
-      return;
-    }
-    const cfg = await getAppConfig();
-    const { emailSent, provider } = await dispatchActivationEmails({
-      toEmail: user.email,
-      username: user.username,
-      activationUrl,
-      expiresAtText: new Date(activationExpiresAt).toLocaleString(),
-      cfg,
-    });
-    res.json({ sent: emailSent, provider, activationUrl });
   });
 
   app.post('/api/admin/sessions/:id/revoke', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {

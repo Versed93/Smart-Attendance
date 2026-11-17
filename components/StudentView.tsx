@@ -28,9 +28,13 @@ interface StudentViewProps {
     email: string,
     week?: string,
     courseName?: string,
-    courseId?: string
-  ) => Promise<{ success: boolean, message: string }>;
+    courseId?: string,
+    checkinToken?: string,
+    pin?: string
+  ) => Promise<{ success: boolean; message: string; code?: string }>;
   token: string;
+  qrSig?: string;
+  pinRequired?: boolean;
   courseName?: string;
   courseId?: string;
   week?: string;
@@ -70,6 +74,8 @@ const isIosDevice = () => {
 export const StudentView: React.FC<StudentViewProps> = ({ 
   markAttendance, 
   token: initialToken, 
+  qrSig: initialQrSig = '',
+  pinRequired: initialPinRequired = false,
   courseName: initialCourseName, 
   courseId: initialCourseId,
   week: initialWeek,
@@ -91,6 +97,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [isQrLoading, setIsQrLoading] = useState(false);
   const [qrRefreshSeconds, setQrRefreshSeconds] = useState(QR_REFRESH_INTERVAL);
   const [token, setToken] = useState(initialToken);
+  const [qrSig, setQrSig] = useState(initialQrSig);
+  const [checkinToken, setCheckinToken] = useState('');
+  const [pinRequired, setPinRequired] = useState(initialPinRequired);
+  const [classroomPinInput, setClassroomPinInput] = useState('');
   const [courseName, setCourseName] = useState(initialCourseName);
   const [courseId, setCourseId] = useState(initialCourseId);
   const [scannedWeek, setScannedWeek] = useState(initialWeek);
@@ -172,14 +182,38 @@ export const StudentView: React.FC<StudentViewProps> = ({
           return;
         }
 
-        const qrTime = parseInt(token, 10);
-        const now = Date.now();
-        const isTokenValid = !isNaN(qrTime) && (now - qrTime < 60000); 
-        
-        if (!isTokenValid && !bypassRestrictions) {
+        if (!bypassRestrictions && !isOfflineScan) {
+          try {
+            const res = await fetch('/api/qr/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                sig: qrSig,
+                t: token,
+                courseName: courseName || '',
+                courseId: courseId || '',
+                week: scannedWeek || '',
+              }),
+            });
+            const data = await res.json().catch(() => null);
+            if (cancelled) return;
+            if (!res.ok || !data?.success || !data?.checkinToken) {
+              setCheckinToken('');
+              setStatus('error');
+              setMessage(data?.message || 'QR Code expired (15s limit). Scan the newest live code in class.');
+              return;
+            }
+            setCheckinToken(data.checkinToken);
+            setPinRequired(Boolean(data.pinRequired));
+            if (data.courseName) setCourseName(data.courseName);
+            if (data.courseId) setCourseId(data.courseId);
+            if (data.week) setScannedWeek(data.week);
+          } catch {
+            if (cancelled) return;
             setStatus('error');
-            setMessage('QR Code expired. Scan the newest code.');
+            setMessage('Could not verify QR code with server. Please scan again.');
             return;
+          }
         }
 
         if (geoConstraints && !bypassRestrictions) {
@@ -191,7 +225,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
     void checkStatus();
     return () => { cancelled = true; };
-  }, [bypassRestrictions, courseName, geoConstraints, requestGpsVerification, token]);
+  }, [bypassRestrictions, courseId, courseName, geoConstraints, isOfflineScan, qrSig, requestGpsVerification, scannedWeek, token]);
 
   useEffect(() => {
     if (status === 'show-student-qr' && canvasRef.current && studentQrData) {
@@ -274,6 +308,14 @@ export const StudentView: React.FC<StudentViewProps> = ({
         return;
     }
 
+    if (pinRequired && !bypassRestrictions && !isOfflineScan) {
+      const cleanPin = classroomPinInput.replace(/\D/g, '').slice(0, 4);
+      if (cleanPin.length !== 4) {
+        setFormError('Enter the 4-digit Classroom PIN from your lecturer.');
+        return;
+      }
+    }
+
     setStatus('submitting');
     const result = await markAttendance(
       cleanName,
@@ -281,10 +323,14 @@ export const StudentView: React.FC<StudentViewProps> = ({
       `${cleanId}@student.edu.my`,
       scannedWeek,
       courseName,
-      courseId
+      courseId,
+      checkinToken || undefined,
+      pinRequired && !bypassRestrictions ? classroomPinInput.trim() : undefined
     );
     if (result.success) {
       setStatus('success');
+      setClassroomPinInput('');
+      setCheckinToken('');
       addHistory({ courseName: courseName || 'General Session', timestamp: Date.now(), type: 'online' });
       const lockKey = `attendance-device-lock-v1-${SESSION_ID}-${courseName || 'general'}`;
       if (!bypassRestrictions) localStorage.setItem(lockKey, 'true');
@@ -292,7 +338,12 @@ export const StudentView: React.FC<StudentViewProps> = ({
       setStatus('device-locked');
       const lockKey = `attendance-device-lock-v1-${SESSION_ID}-${courseName || 'general'}`;
       if (!bypassRestrictions) localStorage.setItem(lockKey, 'true');
-    } else if (result.message.toLowerCase().includes('not registered') || result.message.toLowerCase().includes('does not match')) {
+    } else if (
+      result.code === 'INVALID_PIN' ||
+      result.message.toLowerCase().includes('pin') ||
+      result.message.toLowerCase().includes('not registered') ||
+      result.message.toLowerCase().includes('does not match')
+    ) {
       setFormError(result.message);
       setStatus('form');
     } else {
@@ -423,6 +474,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
       try {
           const url = new URL(data);
           const t = url.searchParams.get('t');
+          const sig = url.searchParams.get('sig') || '';
+          const pinFlag = url.searchParams.get('pin') === '1';
           const c = url.searchParams.get('c');
           const cid = url.searchParams.get('cid');
           const w = url.searchParams.get('w');
@@ -430,12 +483,16 @@ export const StudentView: React.FC<StudentViewProps> = ({
           const lng = url.searchParams.get('lng');
           const rad = url.searchParams.get('rad');
           const offline = url.searchParams.get('offline') === 'true';
-          if (t) {
+          if (t && sig) {
               setName('');
               setStudentId('');
               setFormError('');
+              setClassroomPinInput('');
+              setCheckinToken('');
               autoFillRef.current = {};
               setActiveSuggestionField(null);
+              setQrSig(sig);
+              setPinRequired(pinFlag);
               setToken(t);
               if (c) setCourseName(c);
               if (cid) setCourseId(cid);
@@ -458,7 +515,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
               setStatus('validating');
           } else {
               setStatus('error');
-              setMessage('Invalid session QR.');
+              setMessage('Unverified or invalid session QR. Scan the live QR code in class.');
           }
       } catch {
           setStatus('error');
@@ -869,6 +926,31 @@ export const StudentView: React.FC<StudentViewProps> = ({
             </ul>
           )}
         </div>
+
+        {pinRequired && !bypassRestrictions && !isOfflineScan && (
+          <div>
+            <div className="flex items-center justify-between mb-1 ml-1">
+              <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest">Classroom PIN</label>
+              <span className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
+                4-Digit Session Code
+              </span>
+            </div>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={4}
+              value={classroomPinInput}
+              onChange={(e) => {
+                setClassroomPinInput(e.target.value.replace(/\D/g, '').slice(0, 4));
+                setFormError('');
+              }}
+              placeholder="••••"
+              required
+              autoComplete="off"
+              className="w-full border-2 border-indigo-100 bg-indigo-50/40 rounded-2xl p-4 text-center font-mono text-2xl font-black tracking-[0.45em] text-indigo-900 focus:bg-white focus:border-indigo-600 transition-all outline-none placeholder:text-gray-300 placeholder:tracking-[0.45em] tabular-nums"
+            />
+          </div>
+        )}
 
         <div className="p-4 bg-gray-50 rounded-2xl border border-gray-100 flex items-start gap-3">
             <div className="p-2 bg-white rounded-xl text-gray-400 shrink-0"><LockClosedIcon className="w-4 h-4" /></div>

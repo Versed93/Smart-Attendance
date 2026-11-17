@@ -29,6 +29,13 @@ export interface ClassroomSyncPayload {
   teacherLocation: { lat: number; lng: number } | null;
   qrErrorCorrection: 'L' | 'M' | 'Q' | 'H';
   qrMargin: number;
+  qrToken?: string;
+  qrTokenIat?: number;
+  qrTokenExpiresAt?: number;
+  pinRequired?: boolean;
+  classroomPin?: string;
+  pinDisplayMode?: 'hidden' | 'flash' | 'visible';
+  pinVisibleUntil?: number;
   updatedAt: number;
 }
 
@@ -43,8 +50,18 @@ export function buildAttendanceQrUrl(params: {
   isOfflineMode?: boolean;
   isGeoEnabled?: boolean;
   teacherLocation?: { lat: number; lng: number } | null;
+  qrToken?: string;
+  qrTokenIat?: number;
+  pinRequired?: boolean;
 }): string {
-  let query = `t=${Date.now()}&w=${encodeURIComponent(params.selectedWeek || 'W1')}`;
+  const issuedAt = params.qrTokenIat || Date.now();
+  let query = `t=${issuedAt}&w=${encodeURIComponent(params.selectedWeek || 'W1')}`;
+  if (params.qrToken) {
+    query += `&sig=${encodeURIComponent(params.qrToken)}`;
+  }
+  if (params.pinRequired) {
+    query += '&pin=1';
+  }
   if (params.courseName) {
     query += `&c=${encodeURIComponent(params.courseName)}`;
     if (params.courseId) {

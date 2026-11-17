@@ -77,6 +77,8 @@ const normalizeCourses = (list: unknown): CourseProfile[] => {
 const MainApp: React.FC = () => {
   const [initialUrlParams] = useState(() => new URLSearchParams(window.location.search));
   const token = initialUrlParams.get('t');
+  const qrSigParam = initialUrlParams.get('sig') || '';
+  const pinParam = initialUrlParams.get('pin') === '1';
   const courseNameParam = initialUrlParams.get('c');
   const courseIdParam = initialUrlParams.get('cid');
   const weekParam = initialUrlParams.get('w');
@@ -1371,6 +1373,42 @@ const MainApp: React.FC = () => {
     setView('student');
   }, []);
 
+  const handleIssueQrToken = useCallback(async (params: {
+    courseName: string;
+    courseId?: string;
+    week: string;
+    requirePin?: boolean;
+    rotatePin?: boolean;
+  }): Promise<{
+    success: boolean;
+    qrToken?: string;
+    iat?: number;
+    exp?: number;
+    pinRequired?: boolean;
+    pin?: string;
+  }> => {
+    try {
+      const res = await apiFetch('/api/qr/token', {
+        method: 'POST',
+        body: JSON.stringify(params),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success) {
+        return { success: false };
+      }
+      return {
+        success: true,
+        qrToken: data.qrToken,
+        iat: data.iat,
+        exp: data.exp,
+        pinRequired: Boolean(data.pinRequired),
+        pin: data.pin || '',
+      };
+    } catch {
+      return { success: false };
+    }
+  }, [apiFetch]);
+
   const addStudent = async (
     name: string,
     studentId: string,
@@ -1381,8 +1419,10 @@ const MainApp: React.FC = () => {
     absenceReason?: string,
     week?: string,
     requireRegistered = false,
-    overrideCourseId?: string
-  ) => {
+    overrideCourseId?: string,
+    checkinToken?: string,
+    pin?: string
+  ): Promise<{ success: boolean; message: string; code?: string }> => {
     checkAndClearForNewDay();
 
     const targetWeek = week || selectedWeek || 'W1';
@@ -1398,9 +1438,13 @@ const MainApp: React.FC = () => {
         return { success: false, message: 'Attendance already recorded for this student ID.' };
       }
       try {
+        const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+        if (isKioskMode && authToken) {
+          headers.Authorization = `Bearer ${authToken}`;
+        }
         const res = await fetch('/api/student/checkin', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers,
           body: JSON.stringify({
             name,
             studentId: normSubmittedId,
@@ -1409,11 +1453,17 @@ const MainApp: React.FC = () => {
             courseName,
             courseId: overrideCourseId || effectiveStudentCourseId || '',
             week: targetWeek,
+            checkinToken,
+            pin,
           }),
         });
         const data = await res.json();
         if (!res.ok || !data?.success) {
-          return { success: false, message: data?.message || 'Submission failed.' };
+          return {
+            success: false,
+            message: data?.message || 'Submission failed.',
+            code: typeof data?.code === 'string' ? data.code : undefined,
+          };
         }
         const savedRecord: Student = data.record || {
           name,
@@ -1441,7 +1491,13 @@ const MainApp: React.FC = () => {
       }
     }
 
-    if (status === 'P' && attendanceList.some(s => s.studentId === studentId && s.status === 'P')) {
+    const normStudentId = studentId.trim().replace(/\s+/g, '').toUpperCase();
+    if (
+      status.trim().toUpperCase() === 'P' &&
+      attendanceList.some(
+        s => s.studentId.trim().replace(/\s+/g, '').toUpperCase() === normStudentId && s.status.trim().toUpperCase() === 'P'
+      )
+    ) {
       return { success: false, message: 'Attendance already recorded for this student ID.' };
     }
 
@@ -1450,9 +1506,9 @@ const MainApp: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({
           name,
-          studentId,
+          studentId: normStudentId,
           email,
-          status,
+          status: status.trim().toUpperCase(),
           courseName,
           overrideTimestamp,
           absenceReason,
@@ -1465,26 +1521,30 @@ const MainApp: React.FC = () => {
       }
       const studentData: Student = data.record || {
         name,
-        studentId,
+        studentId: normStudentId,
         email,
-        status,
+        status: status.trim().toUpperCase(),
         timestamp: overrideTimestamp || Date.now(),
         courseName,
         absenceReason,
         week: targetWeek,
       };
-      setAttendanceList(prev => [{ ...studentData }, ...prev.filter(s => s.studentId !== studentId)]);
+      const savedNormId = (studentData.studentId || normStudentId).trim().replace(/\s+/g, '').toUpperCase();
+      setAttendanceList(prev => [
+        { ...studentData },
+        ...prev.filter(s => s.studentId.trim().replace(/\s+/g, '').toUpperCase() !== savedNormId),
+      ]);
       setTeacherHistory(prev =>
-        [studentData, ...prev.filter(t => !(t.studentId === studentData.studentId && t.timestamp === studentData.timestamp))]
+        [studentData, ...prev.filter(t => !(t.studentId.trim().replace(/\s+/g, '').toUpperCase() === savedNormId && t.timestamp === studentData.timestamp))]
       );
 
       if (integrationType === 'airtable') {
-        await syncToAirtable({ [studentId]: studentData });
+        await syncToAirtable({ [savedNormId]: studentData });
       }
 
-      const cleanId = studentId.trim().toUpperCase();
+      const cleanId = savedNormId;
       const cleanName = name.trim().toUpperCase();
-      const existingIdx = knownStudents.findIndex(s => s.id.trim().toUpperCase() === cleanId);
+      const existingIdx = knownStudents.findIndex(s => s.id.trim().replace(/\s+/g, '').toUpperCase() === cleanId);
       let nextKnown: PreRegisteredStudent[] | null = null;
       if (existingIdx === -1) {
         nextKnown = [...knownStudents, { id: cleanId, name: cleanName }];
@@ -1504,10 +1564,15 @@ const MainApp: React.FC = () => {
   };
 
   const onRemoveStudents = async (ids: string[], courseName: string) => {
-    setAttendanceList(prev => prev.filter(s => !ids.includes(s.studentId)));
+    const norm = (val: string) => val.trim().replace(/\s+/g, '').toUpperCase();
+    const removeSet = new Set(ids.map(norm));
+    setAttendanceList(prev => prev.filter(s => !removeSet.has(norm(s.studentId))));
     const now = Date.now();
     const removals: Student[] = ids.map(id => {
-      const student = attendanceList.find(s => s.studentId === id) || knownStudents.find(k => k.id === id);
+      const nid = norm(id);
+      const student =
+        attendanceList.find(s => norm(s.studentId) === nid) ||
+        knownStudents.find(k => norm(k.id) === nid);
       return {
         studentId: id,
         name: student?.name || 'Unknown',
@@ -1537,32 +1602,66 @@ const MainApp: React.FC = () => {
   };
 
   const onBulkStatusUpdate = async (ids: string[], status: string, courseName: string, absenceReason?: string) => {
-    setAttendanceList(prev => prev.map(s => (ids.includes(s.studentId) ? { ...s, status, absenceReason, week: selectedWeek } : s)));
+    const norm = (val: string) => val.trim().replace(/\s+/g, '').toUpperCase();
+    const targetNormIds = Array.from(new Set(ids.map(norm).filter(Boolean)));
+    if (targetNormIds.length === 0) return;
+
     const now = Date.now();
+    const week = selectedWeek || 'W1';
+    const nextStatus = status.trim().toUpperCase();
     const records: Student[] = [];
     const updatePayload: Record<string, Student> = {};
 
-    for (const id of ids) {
-      const student = attendanceList.find(s => s.studentId === id);
-      if (student) {
+    const existingByNorm = new Map<string, Student>();
+    for (const s of attendanceList) {
+      existingByNorm.set(norm(s.studentId), s);
+    }
+
+    const knownByNorm = new Map<string, PreRegisteredStudent>();
+    for (const k of knownStudents) {
+      knownByNorm.set(norm(k.id), k);
+    }
+
+    for (const nid of targetNormIds) {
+      const existing = existingByNorm.get(nid);
+      const known = knownByNorm.get(nid);
+      if (existing) {
         const updateData: Student = {
-          ...student,
-          status,
+          ...existing,
+          status: nextStatus,
           timestamp: now,
           courseName,
-          absenceReason,
-          week: selectedWeek || 'W1',
+          absenceReason: nextStatus === 'P' ? '' : absenceReason,
+          week,
         };
         records.push(updateData);
-        updatePayload[id] = updateData;
+        updatePayload[existing.studentId] = updateData;
+      } else if (known) {
+        const updateData: Student = {
+          name: known.name.trim(),
+          studentId: nid,
+          email: `${nid}@student.edu.my`,
+          status: nextStatus,
+          timestamp: now,
+          courseName,
+          absenceReason: nextStatus === 'P' ? '' : absenceReason,
+          week,
+        };
+        records.push(updateData);
+        updatePayload[nid] = updateData;
       }
     }
 
     if (records.length > 0) {
+      const updatedNormSet = new Set(records.map(r => norm(r.studentId)));
+      setAttendanceList(prev => [
+        ...records,
+        ...prev.filter(s => !updatedNormSet.has(norm(s.studentId))),
+      ]);
       setTeacherHistory(prev => [...records, ...prev]);
       await apiFetch('/api/attendance/bulk', {
         method: 'POST',
-        body: JSON.stringify({ records, courseName, week: selectedWeek || 'W1' }),
+        body: JSON.stringify({ records, courseName, week }),
       }).catch(() => { /* ignore */ });
       if (integrationType === 'airtable') {
         await syncToAirtable(updatePayload);
@@ -1759,6 +1858,7 @@ const MainApp: React.FC = () => {
               onClearUserNotifications={handleClearUserNotifications}
               onSendTestAdminEmail={sendTestAdminEmail}
               onRequestAccountDeletion={handleRequestAccountDeletion}
+              onIssueQrToken={handleIssueQrToken}
             />
           </div>
         ) : (
@@ -1773,7 +1873,7 @@ const MainApp: React.FC = () => {
         <div className="flex-1 flex flex-col items-center justify-center p-3 sm:p-4 bg-gray-100">
           <div className="w-full max-w-md bg-white rounded-3xl shadow-xl p-5 sm:p-6 border border-gray-100">
             <StudentView
-              markAttendance={(name, id, email, scannedWeek, scannedCourse, scannedCid) =>
+              markAttendance={(name, id, email, scannedWeek, scannedCourse, scannedCid, checkinTok, pin) =>
                 addStudent(
                   name,
                   id,
@@ -1784,10 +1884,14 @@ const MainApp: React.FC = () => {
                   undefined,
                   scannedWeek || effectiveStudentWeek,
                   true,
-                  scannedCid || effectiveStudentCourseId
+                  scannedCid || effectiveStudentCourseId,
+                  checkinTok,
+                  pin
                 )
               }
               token={token || (isKioskMode ? kioskToken : '')}
+              qrSig={qrSigParam}
+              pinRequired={pinParam}
               courseName={effectiveStudentCourse || undefined}
               courseId={effectiveStudentCourseId || undefined}
               week={effectiveStudentWeek}

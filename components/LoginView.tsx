@@ -174,7 +174,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
                 required
               />
               <p className="text-[11px] font-bold text-gray-400 mt-1.5 ml-1">
-                An activation email (valid for 1 day / 24 hours) will be sent to verify your account, and Admin will be notified.
+                Every new account must be approved and activated by the Administrator before it can be used.
               </p>
             </div>
           )}

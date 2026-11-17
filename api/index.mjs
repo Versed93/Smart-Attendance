@@ -16,6 +16,8 @@ var AUTH_SECRET = process.env.AUTH_SECRET || crypto.createHash("sha256").update(
 var DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || "adminscm";
 var DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwbjXTrbFPRqVA0I-RGc1rV7K7eZ_CkgQujSBVtOtvjDCW1GJYAkxiVlXJzAB_-R_CaLA/exec";
 var toFirebaseKey = (raw) => raw.replace(/[^a-zA-Z0-9_-]/g, "_");
+var normalizeStudentId = (val) => val.trim().replace(/\s+/g, "").toUpperCase();
+var toStudentFirebaseKey = (studentId) => toFirebaseKey(normalizeStudentId(studentId));
 var toCourseKey = (name) => {
   const clean = name.trim();
   return clean ? clean.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase() : "GENERAL_SESSION";
@@ -538,6 +540,83 @@ Open the Admin Control Center to review and remove this account.`,
     provider: status.provider
   };
 }
+async function createActivationNotifications(userRecord, activatedBy) {
+  const now = Date.now();
+  const suffix = crypto.randomBytes(2).toString("hex");
+  const adminNotifId = `activated_${now}_${suffix}`;
+  const userNotifId = `user_activated_${now}_${suffix}`;
+  const [cfg, existingAdminNotifs] = await Promise.all([
+    getAppConfig(),
+    fbGet("admin_notifications").catch(() => null)
+  ]);
+  if (existingAdminNotifs && typeof existingAdminNotifs === "object") {
+    await Promise.all(
+      Object.values(existingAdminNotifs).filter((n) => n && !n.read && n.type === "user_signup" && n.userId === userRecord.id).map((n) => fbPatch(`admin_notifications/${n.id}`, { read: true }).catch(() => {
+      }))
+    );
+  }
+  let emailSent = false;
+  try {
+    const status = getEmailDeliveryStatus(cfg.scriptUrl);
+    if (status.provider === "resend" || status.provider === "smtp") {
+      const safeUser = escapeHtml(userRecord.username);
+      const safeEmail = escapeHtml(userRecord.email || "no email");
+      const actorText = activatedBy === "admin" ? "by the Administrator" : "via email verification link";
+      if (userRecord.email) {
+        const userEmailRes = await sendDirectEmail({
+          to: userRecord.email,
+          subject: "Your Smart Attendance Account Is Now Active",
+          text: `Hello ${userRecord.username},
+
+Good news! Your lecturer account on the Smart Attendance system has been activated ${actorText}.
+You can now sign in and manage your attendance sessions.
+`,
+          html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;"><h2 style="color:#065f46;margin:0 0 10px;">Account Activated</h2><p style="color:#374151;font-size:14px;">Hello <strong>${safeUser}</strong>,</p><p style="color:#374151;font-size:14px;">Your Smart Attendance lecturer account has been activated ${escapeHtml(actorText)} and is now ready to use.</p></div>`
+        });
+        if (userEmailRes.ok) emailSent = true;
+      }
+      if (activatedBy === "email_link" && cfg.adminEmail) {
+        const adminEmailRes = await sendDirectEmail({
+          to: cfg.adminEmail,
+          subject: `[Smart Attendance] Account Activated: ${userRecord.username}`,
+          text: `Lecturer account activated ${actorText}.
+
+Username: ${userRecord.username}
+Email: ${userRecord.email || "N/A"}
+`,
+          html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;"><h3 style="color:#065f46;margin:0 0 8px;">Lecturer Account Activated</h3><p style="color:#374151;font-size:14px;"><strong>Username:</strong> ${safeUser}<br/><strong>Email:</strong> ${safeEmail}<br/><strong>Method:</strong> Email verification link</p></div>`
+        });
+        if (adminEmailRes.ok) emailSent = true;
+      }
+    }
+  } catch {
+  }
+  const adminNotification = {
+    id: adminNotifId,
+    type: "account_activated",
+    userId: userRecord.id,
+    username: userRecord.username,
+    email: userRecord.email || "",
+    createdAt: now,
+    read: false,
+    emailSent,
+    message: activatedBy === "admin" ? `${userRecord.username} (${userRecord.email || "no email"}) account has been activated by Admin.` : `${userRecord.username} (${userRecord.email || "no email"}) account has been activated via verification link.`
+  };
+  const userNotification = {
+    id: userNotifId,
+    userId: userRecord.id,
+    type: "account_activated",
+    title: "Account Activated",
+    message: activatedBy === "admin" ? `Your lecturer account (${userRecord.username}) has been activated by the Administrator and is ready to use.` : `Your lecturer account (${userRecord.username}) has been activated via your verification link and is ready to use.`,
+    createdAt: now,
+    read: false
+  };
+  await Promise.all([
+    fbPut(`admin_notifications/${adminNotifId}`, adminNotification),
+    fbPut(`user_notifications/${userRecord.id}/${userNotifId}`, userNotification)
+  ]);
+  return { adminNotification, userNotification };
+}
 async function requireAuth(req, res, next) {
   const authHeader = req.headers.authorization || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
@@ -842,6 +921,8 @@ function createApiApp() {
         status: "active",
         activatedAt: Date.now()
       });
+      await createActivationNotifications(userRecord, "email_link").catch(() => {
+      });
       res.json({
         success: true,
         message: `Account "${userRecord.username}" has been activated! Please sign in below.`
@@ -949,7 +1030,6 @@ function createApiApp() {
     try {
       const name = String(req.body?.name || "").trim();
       const studentId = String(req.body?.studentId || "").trim();
-      const email = String(req.body?.email || `${studentId}@student.edu.my`).trim();
       const status = String(req.body?.status || "P").trim().toUpperCase();
       const courseName = String(req.body?.courseName || "General Session").trim();
       const courseId = String(req.body?.courseId || "").trim();
@@ -979,24 +1059,29 @@ function createApiApp() {
         return;
       }
       const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
-      const existingData = await fbGet(`live_sessions/${sessionPath}/${studentId}`);
+      const studentKey = toStudentFirebaseKey(cleanSubmittedId);
+      const liveSessionMap = await fbGet(`live_sessions/${sessionPath}`);
+      const existingData = liveSessionMap && typeof liveSessionMap === "object" ? liveSessionMap[studentKey] || Object.values(liveSessionMap).find(
+        (s) => s && normalizeStudentId(s.studentId || "") === cleanSubmittedId
+      ) : null;
       if (existingData && existingData.status === "P" && status === "P" && (existingData.week || "W1").trim().toUpperCase() === week) {
         res.status(409).json({ success: false, message: "You have already checked in for this session." });
         return;
       }
       const timestamp = Date.now();
+      const normalizedEmail = req.body?.email ? String(req.body.email).trim() : `${cleanSubmittedId}@student.edu.my`;
       const studentData = {
-        name,
-        studentId,
-        email,
+        name: cleanSubmittedName,
+        studentId: cleanSubmittedId,
+        email: normalizedEmail || `${cleanSubmittedId}@student.edu.my`,
         status,
         timestamp,
         courseName,
         week
       };
       await Promise.all([
-        fbPut(`pending/${studentId}`, studentData),
-        fbPut(`live_sessions/${sessionPath}/${studentId}`, studentData),
+        fbPut(`pending/${studentKey}`, studentData),
+        fbPut(`live_sessions/${sessionPath}/${studentKey}`, studentData),
         upsertAttendanceHistory([studentData])
       ]);
       const cfg = await getAppConfig();
@@ -1011,14 +1096,15 @@ function createApiApp() {
   app2.get("/api/dashboard/sync", requireAuth, async (req, res) => {
     try {
       const auth = req.auth;
-      const [cfg, coursesObj, userPref, historyRaw, usersObj, sessionsObj, notifsObj] = await Promise.all([
+      const [cfg, coursesObj, userPref, historyRaw, usersObj, sessionsObj, notifsObj, userNotifsObj] = await Promise.all([
         getAppConfig(),
         fbGet("courses"),
         fbGet(`user_preferences/${auth.uid}`),
         fbGet("attendance_history"),
         fbGet("app_users"),
         auth.role === "admin" ? fbGet("admin_logins") : Promise.resolve(null),
-        auth.role === "admin" ? fbGet("admin_notifications") : Promise.resolve(null)
+        auth.role === "admin" ? fbGet("admin_notifications") : Promise.resolve(null),
+        fbGet(`user_notifications/${auth.uid}`)
       ]);
       const allCourses = coursesObj && typeof coursesObj === "object" ? Object.values(coursesObj).filter((c) => c && c.id && c.courseName).map(normalizeCourse) : [];
       const scopedCourses = allCourses.filter((c) => canAccessCourse(c, auth)).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
@@ -1042,6 +1128,7 @@ function createApiApp() {
       }) : [];
       const sessions = auth.role === "admin" && sessionsObj && typeof sessionsObj === "object" ? Object.values(sessionsObj).filter((s) => s && s.id && s.adminName).sort((a, b) => (b.lastActiveTime || b.loginTime || 0) - (a.lastActiveTime || a.loginTime || 0)) : [];
       const notifications = auth.role === "admin" && notifsObj && typeof notifsObj === "object" ? Object.values(notifsObj).filter((n) => n && n.id).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)) : [];
+      const userNotifications = userNotifsObj && typeof userNotifsObj === "object" ? Object.values(userNotifsObj).filter((n) => n && n.id).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)) : [];
       res.json({
         success: true,
         user: { id: auth.uid, username: auth.username, role: auth.role },
@@ -1057,11 +1144,35 @@ function createApiApp() {
         users: sanitizedUsers,
         coLecturerOptions,
         sessions,
-        notifications
+        notifications,
+        userNotifications
       });
     } catch {
       res.status(500).json({ success: false, error: "Failed to sync dashboard state." });
     }
+  });
+  app2.patch("/api/user/notifications/:id/read", requireAuth, async (req, res) => {
+    const auth = req.auth;
+    const notifId = String(req.params.id || "").trim();
+    if (!notifId) {
+      res.status(400).json({ success: false, error: "Notification ID is required." });
+      return;
+    }
+    await fbPatch(`user_notifications/${auth.uid}/${notifId}`, { read: true });
+    res.json({ success: true });
+  });
+  app2.post("/api/user/notifications/read-all", requireAuth, async (req, res) => {
+    const auth = req.auth;
+    const notifsObj = await fbGet(`user_notifications/${auth.uid}`) || {};
+    await Promise.all(
+      Object.values(notifsObj).filter((n) => n && !n.read).map((n) => fbPatch(`user_notifications/${auth.uid}/${n.id}`, { read: true }))
+    );
+    res.json({ success: true });
+  });
+  app2.delete("/api/user/notifications", requireAuth, async (req, res) => {
+    const auth = req.auth;
+    await fbDelete(`user_notifications/${auth.uid}`);
+    res.json({ success: true });
   });
   app2.put("/api/user/preferences", requireAuth, async (req, res) => {
     const auth = req.auth;
@@ -1528,7 +1639,6 @@ function createApiApp() {
     try {
       const name = String(req.body?.name || "").trim();
       const studentId = String(req.body?.studentId || "").trim();
-      const email = String(req.body?.email || `${studentId}@student.edu.my`).trim();
       const status = String(req.body?.status || "P").trim().toUpperCase();
       const courseName = String(req.body?.courseName || "General Session").trim();
       const absenceReason = typeof req.body?.absenceReason === "string" ? req.body.absenceReason : void 0;
@@ -1538,9 +1648,14 @@ function createApiApp() {
         res.status(400).json({ success: false, message: "Name and Student ID are required." });
         return;
       }
+      const cleanStudentId = normalizeStudentId(studentId);
+      const studentKey = toStudentFirebaseKey(cleanStudentId);
       const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
       if (status === "P") {
-        const existingData = await fbGet(`live_sessions/${sessionPath}/${studentId}`);
+        const liveSessionMap = await fbGet(`live_sessions/${sessionPath}`);
+        const existingData = liveSessionMap && typeof liveSessionMap === "object" ? liveSessionMap[studentKey] || Object.values(liveSessionMap).find(
+          (s) => s && normalizeStudentId(s.studentId || "") === cleanStudentId
+        ) : null;
         if (existingData && existingData.status === "P" && (existingData.week || "W1").trim().toUpperCase() === week) {
           res.status(409).json({ success: false, message: "You have already checked in for this session." });
           return;
@@ -1549,8 +1664,8 @@ function createApiApp() {
       const timestamp = overrideTimestamp || Date.now();
       const studentData = {
         name,
-        studentId,
-        email,
+        studentId: cleanStudentId,
+        email: req.body?.email ? String(req.body.email).trim() : `${cleanStudentId}@student.edu.my`,
         status,
         timestamp,
         courseName,
@@ -1558,8 +1673,8 @@ function createApiApp() {
         week
       };
       await Promise.all([
-        fbPut(`pending/${studentId}`, studentData),
-        fbPut(`live_sessions/${sessionPath}/${studentId}`, studentData),
+        fbPut(`pending/${studentKey}`, studentData),
+        fbPut(`live_sessions/${sessionPath}/${studentKey}`, studentData),
         upsertAttendanceHistory([studentData])
       ]);
       const cfg = await getAppConfig();
@@ -1582,10 +1697,13 @@ function createApiApp() {
       }
       const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
       await Promise.all([
-        ...records.flatMap((r) => [
-          fbPut(`pending/${r.studentId}`, r),
-          fbPut(`live_sessions/${sessionPath}/${r.studentId}`, r)
-        ]),
+        ...records.flatMap((r) => {
+          const key = toStudentFirebaseKey(r.studentId || "");
+          return [
+            fbPut(`pending/${key}`, r),
+            fbPut(`live_sessions/${sessionPath}/${key}`, r)
+          ];
+        }),
         upsertAttendanceHistory(records)
       ]);
       const cfg = await getAppConfig();
@@ -1606,10 +1724,18 @@ function createApiApp() {
       const courseName = String(req.body?.courseName || "").trim();
       const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
       await Promise.all([
-        ...removals.flatMap((r) => [
-          fbPut(`pending/${r.studentId}`, r),
-          fbDelete(`live_sessions/${sessionPath}/${r.studentId}`)
-        ]),
+        ...removals.flatMap((r) => {
+          const rawId = String(r.studentId || "").trim();
+          const key = toStudentFirebaseKey(rawId);
+          const tasks = [
+            fbPut(`pending/${key}`, r),
+            fbDelete(`live_sessions/${sessionPath}/${key}`)
+          ];
+          if (rawId && rawId !== key) {
+            tasks.push(fbDelete(`live_sessions/${sessionPath}/${rawId}`));
+          }
+          return tasks;
+        }),
         upsertAttendanceHistory(removals)
       ]);
       const cfg = await getAppConfig();
@@ -1627,7 +1753,9 @@ function createApiApp() {
   app2.put("/api/attendance/matrix-cell", requireAuth, async (req, res) => {
     try {
       const auth = req.auth;
-      const studentId = String(req.body?.studentId || "").trim();
+      const rawStudentId = String(req.body?.studentId || "").trim();
+      const studentId = normalizeStudentId(rawStudentId);
+      const studentKey = toStudentFirebaseKey(studentId);
       const name = String(req.body?.name || "").trim();
       const courseName = String(req.body?.courseName || "General Session").trim();
       const week = String(req.body?.week || "W1").trim().toUpperCase();
@@ -1658,12 +1786,12 @@ function createApiApp() {
         week
       };
       const writes = [
-        fbPut(`pending/${studentId}`, record),
+        fbPut(`pending/${studentKey}`, record),
         upsertAttendanceHistory([record])
       ];
       if (updateLiveSession) {
         const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
-        writes.push(fbPut(`live_sessions/${sessionPath}/${studentId}`, record));
+        writes.push(fbPut(`live_sessions/${sessionPath}/${studentKey}`, record));
       }
       await Promise.all(writes);
       const cfg = await getAppConfig();
@@ -1926,9 +2054,28 @@ Verification link: ${testLink}
   });
   app2.post("/api/admin/users/:id/activate", requireAuth, requireAdmin, async (req, res) => {
     const userId = String(req.params.id || "").trim();
+    const userRecord = await fbGet(`app_users/${userId}`);
+    if (!userRecord || !userRecord.id) {
+      res.status(404).json({ success: false, error: "User not found." });
+      return;
+    }
+    if (userRecord.status === "active") {
+      res.json({
+        success: true,
+        activatedAt: userRecord.activatedAt || Date.now(),
+        alreadyActive: true
+      });
+      return;
+    }
     const now = Date.now();
     await fbPatch(`app_users/${userId}`, { status: "active", activatedAt: now });
-    res.json({ success: true, activatedAt: now });
+    const { adminNotification, userNotification } = await createActivationNotifications(userRecord, "admin");
+    res.json({
+      success: true,
+      activatedAt: now,
+      adminNotification,
+      userNotification
+    });
   });
   app2.delete("/api/admin/users/:id", requireAuth, requireAdmin, async (req, res) => {
     const userId = String(req.params.id || "").trim();
