@@ -18,6 +18,7 @@ import type {
 import { PRE_REGISTERED_STUDENTS, type PreRegisteredStudent } from './studentList.ts';
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const ACTIVATION_PIN_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 const FIREBASE_DB_URL = (
   process.env.FIREBASE_DATABASE_URL ||
@@ -41,7 +42,10 @@ type IntegrationType = 'google_sheets' | 'airtable' | 'firebase';
 interface StoredAppUser extends Omit<AppUser, 'password'> {
   password?: string;
   passwordHash?: string;
+  activationPin?: string;
 }
+
+const generateActivationPin = (): string => crypto.randomInt(100000, 1000000).toString();
 
 interface AuthTokenPayload {
   uid: string;
@@ -174,6 +178,44 @@ function verifySessionToken(token: string): AuthTokenPayload | null {
   try {
     const parsed = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8')) as AuthTokenPayload;
     if (!parsed || !parsed.uid || !parsed.username || !parsed.role || !parsed.exp) return null;
+    if (Date.now() > parsed.exp) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+const PIN_CHALLENGE_TTL_MS = 15 * 60 * 1000;
+
+interface PinChallengePayload {
+  purpose: 'pin_activation';
+  uid: string;
+  iat: number;
+  exp: number;
+}
+
+function signPinChallengeToken(uid: string): string {
+  const now = Date.now();
+  const payload: PinChallengePayload = {
+    purpose: 'pin_activation',
+    uid,
+    iat: now,
+    exp: now + PIN_CHALLENGE_TTL_MS,
+  };
+  const encodedPayload = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+  const signature = crypto.createHmac('sha256', AUTH_SECRET).update(encodedPayload).digest('base64url');
+  return `${encodedPayload}.${signature}`;
+}
+
+function verifyPinChallengeToken(token: string): PinChallengePayload | null {
+  const parts = token.split('.');
+  if (parts.length !== 2) return null;
+  const [encodedPayload, signature] = parts;
+  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(encodedPayload).digest('base64url');
+  if (!timingSafeStringEqual(signature, expectedSig)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8')) as PinChallengePayload;
+    if (!parsed || parsed.purpose !== 'pin_activation' || !parsed.uid || !parsed.exp) return null;
     if (Date.now() > parsed.exp) return null;
     return parsed;
   } catch {
@@ -327,6 +369,8 @@ function sanitizeUser(user: StoredAppUser): AppUser {
   const rest = { ...user };
   delete rest.password;
   delete rest.passwordHash;
+  delete rest.activationPin;
+  delete rest.activationToken;
   return {
     ...rest,
     role: rest.username?.toLowerCase() === 'admin' ? 'admin' : (rest.role || 'lecturer'),
@@ -852,9 +896,69 @@ async function dispatchDeleteRequestEmail(params: {
   };
 }
 
+async function dispatchApprovalPinEmail(params: {
+  toEmail: string;
+  username: string;
+  pin: string;
+  expiresAtText: string;
+  cfg: { scriptUrl: string; adminEmail: string };
+}): Promise<{ emailSent: boolean; provider: EmailProviderType; error?: string }> {
+  const status = getEmailDeliveryStatus(params.cfg.scriptUrl);
+  const expiryLine = params.expiresAtText
+    ? `This Activation PIN expires in 24 hours (${params.expiresAtText}).`
+    : 'This Activation PIN expires within 24 hours.';
+
+  if (status.provider === 'resend' || status.provider === 'smtp') {
+    const safeUser = escapeHtml(params.username);
+    const safePin = escapeHtml(params.pin);
+    const safeExpiry = escapeHtml(expiryLine);
+    const res = await sendDirectEmail({
+      to: params.toEmail,
+      subject: 'Your Smart Attendance Account Is Approved — Activation PIN',
+      text:
+        `Hello ${params.username},\n\n` +
+        `Good news! Your Smart QR Attendance account has been approved by the Administrator.\n\n` +
+        `Your 6-digit Activation PIN is: ${params.pin}\n\n` +
+        `How to complete activation:\n` +
+        `1. Open the Smart Attendance Sign In page and log in with your User Name and Password first.\n` +
+        `2. Key in this 6-digit Activation PIN when prompted to complete activation and start using your account.\n\n` +
+        `${expiryLine}\n`,
+      html:
+        `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;">` +
+        `<h2 style="color:#111827;margin:0 0 10px;">Account Approved — Activation PIN</h2>` +
+        `<p style="color:#4b5563;font-size:14px;">Hello <strong>${safeUser}</strong>,</p>` +
+        `<p style="color:#4b5563;font-size:14px;">Your Smart QR Attendance account has been approved by the Administrator. Sign in with your User Name and Password first, then key in this 6-digit Activation PIN when prompted to complete activation and access your account:</p>` +
+        `<div style="margin:20px 0;padding:14px 20px;background:#eef2ff;border:2px solid #c7d2fe;border-radius:12px;text-align:center;font-family:monospace;font-size:28px;font-weight:900;letter-spacing:0.25em;color:#3730a3;">${safePin}</div>` +
+        `<p style="color:#92400e;background:#fffbeb;border:1px solid #fde68a;padding:10px 12px;border-radius:8px;font-size:12px;font-weight:bold;">${safeExpiry}</p>` +
+        `</div>`,
+    }).catch(() => ({ ok: false, provider: status.provider, error: 'Failed to send PIN email' }));
+
+    return {
+      emailSent: Boolean(res.ok),
+      provider: status.provider,
+      error: res.error,
+    };
+  }
+
+  const emailRes = await postToGoogleScript(params.cfg.scriptUrl, {
+    action: 'SEND_ACTIVATION_EMAIL',
+    toEmail: params.toEmail,
+    username: params.username,
+    activationPin: params.pin,
+    activationUrl: '',
+    expiresAtText: params.expiresAtText,
+    adminEmail: params.cfg.adminEmail,
+  });
+  return {
+    emailSent: Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false),
+    provider: status.provider,
+    error: typeof emailRes.json?.error === 'string' ? emailRes.json.error : undefined,
+  };
+}
+
 async function createActivationNotifications(
   userRecord: StoredAppUser,
-  activatedBy: 'admin' | 'email_link'
+  activatedBy: 'admin' | 'email_pin'
 ): Promise<{ adminNotification: AdminNotification; userNotification: UserNotification }> {
   const now = Date.now();
   const suffix = crypto.randomBytes(2).toString('hex');
@@ -879,9 +983,10 @@ async function createActivationNotifications(
     const status = getEmailDeliveryStatus(cfg.scriptUrl);
     if (status.provider === 'resend' || status.provider === 'smtp') {
       const safeUser = escapeHtml(userRecord.username);
-      const safeEmail = escapeHtml(userRecord.email || 'no email');
       const actorText =
-        activatedBy === 'admin' ? 'by the Administrator' : 'via email verification link';
+        activatedBy === 'email_pin'
+          ? 'with your Activation PIN after Admin approval'
+          : 'by the Administrator';
 
       if (userRecord.email) {
         const userEmailRes = await sendDirectEmail({
@@ -889,32 +994,16 @@ async function createActivationNotifications(
           subject: 'Your Smart Attendance Account Is Now Active',
           text:
             `Hello ${userRecord.username},\n\n` +
-            `Good news! Your lecturer account on the Smart Attendance system has been activated ${actorText}.\n` +
-            `You can now sign in and manage your attendance sessions.\n`,
+            `Your lecturer account on the Smart Attendance system is now active (${actorText}).\n` +
+            `You can sign in and manage your attendance sessions anytime.\n`,
           html:
             `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;">` +
             `<h2 style="color:#065f46;margin:0 0 10px;">Account Activated</h2>` +
             `<p style="color:#374151;font-size:14px;">Hello <strong>${safeUser}</strong>,</p>` +
-            `<p style="color:#374151;font-size:14px;">Your Smart Attendance lecturer account has been activated ${escapeHtml(actorText)} and is now ready to use.</p>` +
+            `<p style="color:#374151;font-size:14px;">Your Smart Attendance lecturer account is now active and ready to use.</p>` +
             `</div>`,
         });
         if (userEmailRes.ok) emailSent = true;
-      }
-
-      if (activatedBy === 'email_link' && cfg.adminEmail) {
-        const adminEmailRes = await sendDirectEmail({
-          to: cfg.adminEmail,
-          subject: `[Smart Attendance] Account Activated: ${userRecord.username}`,
-          text:
-            `Lecturer account activated ${actorText}.\n\n` +
-            `Username: ${userRecord.username}\nEmail: ${userRecord.email || 'N/A'}\n`,
-          html:
-            `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;">` +
-            `<h3 style="color:#065f46;margin:0 0 8px;">Lecturer Account Activated</h3>` +
-            `<p style="color:#374151;font-size:14px;"><strong>Username:</strong> ${safeUser}<br/><strong>Email:</strong> ${safeEmail}<br/><strong>Method:</strong> Email verification link</p>` +
-            `</div>`,
-        });
-        if (adminEmailRes.ok) emailSent = true;
       }
     }
   } catch {
@@ -931,9 +1020,9 @@ async function createActivationNotifications(
     read: false,
     emailSent,
     message:
-      activatedBy === 'admin'
-        ? `${userRecord.username} (${userRecord.email || 'no email'}) account has been activated by Admin.`
-        : `${userRecord.username} (${userRecord.email || 'no email'}) account has been activated via verification link.`,
+      activatedBy === 'email_pin'
+        ? `${userRecord.username} (${userRecord.email || 'no email'}) entered their Activation PIN and is now active.`
+        : `${userRecord.username} (${userRecord.email || 'no email'}) account has been activated by Admin.`,
   };
 
   const userNotification: UserNotification = {
@@ -941,10 +1030,7 @@ async function createActivationNotifications(
     userId: userRecord.id,
     type: 'account_activated',
     title: 'Account Activated',
-    message:
-      activatedBy === 'admin'
-        ? `Your lecturer account (${userRecord.username}) has been activated by the Administrator and is ready to use.`
-        : `Your lecturer account (${userRecord.username}) has been activated via your verification link and is ready to use.`,
+    message: `Your lecturer account (${userRecord.username}) is now active and ready to use.`,
     createdAt: now,
     read: false,
   };
@@ -1154,7 +1240,18 @@ export function createApiApp(): express.Express {
         res.status(403).json({
           success: false,
           message:
-            'Account pending Admin approval. Please wait for the Administrator to approve and activate your account before signing in.',
+            'Your account is waiting for Admin approval. An activation PIN will be emailed to you once approved.',
+        });
+        return;
+      }
+      if (matched.status === 'approved_pending_pin' && role !== 'admin') {
+        res.status(403).json({
+          success: false,
+          requiresActivationPin: true,
+          username: matched.username,
+          challengeToken: signPinChallengeToken(matched.id),
+          message:
+            'Your account has been approved! Enter the 6-digit Activation PIN sent to your email to complete activation.',
         });
         return;
       }
@@ -1266,20 +1363,130 @@ export function createApiApp(): express.Express {
       res.json({
         success: true,
         message:
-          'Account created and submitted for Admin approval! You can sign in once the Administrator approves and activates your account.',
+          'Account created! Once Admin approves your request, a 6-digit Activation PIN will be emailed to you to complete activation.',
       });
     } catch {
       res.status(500).json({ success: false, message: 'Failed to save user registration to cloud.' });
     }
   });
 
-  // 4. Auth: Self-activation via email link disabled (strict Admin-only approval required)
-  app.post('/api/auth/activate', async (_req: Request, res: Response) => {
-    res.status(403).json({
-      success: false,
-      message:
-        'Self-activation via link is disabled. Every new account must be approved and activated directly by the Administrator before it can be used.',
-    });
+  // 4. Auth: Complete Signup Activation with Emailed PIN (issued after Admin Approval)
+  app.post('/api/auth/activate', async (req: Request, res: Response) => {
+    try {
+      const lookup = String(req.body?.usernameOrEmail || '').trim().toLowerCase();
+      const rawPin = String(req.body?.pin || '').trim().replace(/\D/g, '');
+      const challengeToken = String(req.body?.challengeToken || '').trim();
+      if (!lookup || rawPin.length !== 6) {
+        res.status(400).json({
+          success: false,
+          message: 'Please enter your User Name or Email and the 6-digit Activation PIN.',
+        });
+        return;
+      }
+
+      const usersObj = (await fbGet<Record<string, StoredAppUser>>('app_users')) || {};
+      const userRecord = Object.values(usersObj).find(
+        (u) =>
+          u &&
+          u.id &&
+          (u.username?.toLowerCase() === lookup || (u.email && u.email.toLowerCase() === lookup))
+      );
+
+      if (!userRecord || !userRecord.id) {
+        res.status(404).json({
+          success: false,
+          message: 'Account not found. Please sign up first or check your username/email.',
+        });
+        return;
+      }
+      if (userRecord.status === 'active') {
+        res.json({
+          success: true,
+          message: `Account "${userRecord.username}" is already active. You can sign in below.`,
+        });
+        return;
+      }
+      if (userRecord.status === 'pending') {
+        res.status(403).json({
+          success: false,
+          message:
+            'Your account is still waiting for Admin approval. You will receive an email with your Activation PIN once approved.',
+        });
+        return;
+      }
+      if (!userRecord.activationPin || !timingSafeStringEqual(rawPin, userRecord.activationPin)) {
+        res.status(403).json({
+          success: false,
+          message: 'Invalid Activation PIN. Please check the 6-digit PIN sent to your email.',
+        });
+        return;
+      }
+      if (userRecord.activationExpiresAt && Date.now() > userRecord.activationExpiresAt) {
+        res.status(410).json({
+          success: false,
+          message: 'This Activation PIN has expired. Please ask Admin to resend a new PIN.',
+        });
+        return;
+      }
+
+      const now = Date.now();
+      const challenge = challengeToken ? verifyPinChallengeToken(challengeToken) : null;
+      const canAutoSignIn = Boolean(challenge && challenge.uid === userRecord.id);
+
+      await fbPatch(`app_users/${userRecord.id}`, {
+        status: 'active',
+        activatedAt: now,
+        activationPin: null,
+        activationExpiresAt: null,
+        ...(canAutoSignIn ? { lastLoginAt: now } : {}),
+      });
+
+      await createActivationNotifications(userRecord, 'email_pin').catch(() => { /* ignore */ });
+
+      if (canAutoSignIn) {
+        const role: 'admin' | 'lecturer' =
+          userRecord.username.toLowerCase() === 'admin' ? 'admin' : userRecord.role || 'lecturer';
+        const sessionId = `${toFirebaseKey(userRecord.username.toLowerCase())}_${now}`;
+        const device = getDeviceLabel(String(req.headers['user-agent'] || ''));
+        const newSession: AdminSessionActivity = {
+          id: sessionId,
+          adminName: userRecord.username,
+          email: userRecord.email || '',
+          device,
+          date: new Date(now).toISOString().slice(0, 10),
+          loginTime: now,
+          lastActiveTime: now,
+          status: 'active',
+          currentAction: 'Dashboard',
+        };
+        await fbPut(`admin_logins/${sessionId}`, newSession);
+
+        const token = signSessionToken({
+          uid: userRecord.id,
+          username: userRecord.username,
+          role,
+          sid: sessionId,
+          iat: now,
+          exp: now + SESSION_TTL_MS,
+        });
+
+        res.json({
+          success: true,
+          token,
+          user: sanitizeUser({ ...userRecord, status: 'active', activatedAt: now, role }),
+          session: newSession,
+          message: `Account "${userRecord.username}" activated and ready to use!`,
+        });
+        return;
+      }
+
+      res.json({
+        success: true,
+        message: `Account "${userRecord.username}" activated! You can now sign in.`,
+      });
+    } catch {
+      res.status(500).json({ success: false, message: 'Server error while verifying activation PIN.' });
+    }
   });
 
   // 5. Auth: Account Deletion Request (from Login screen)
@@ -2848,19 +3055,57 @@ export function createApiApp(): express.Express {
     if (userRecord.status === 'active') {
       res.json({
         success: true,
+        status: 'active',
         activatedAt: userRecord.activatedAt || Date.now(),
         alreadyActive: true,
       });
       return;
     }
+
     const now = Date.now();
-    await fbPatch(`app_users/${userId}`, { status: 'active', activatedAt: now });
-    const { adminNotification, userNotification } = await createActivationNotifications(userRecord, 'admin');
+    const pin = generateActivationPin();
+    const activationExpiresAt = now + ACTIVATION_PIN_EXPIRY_MS;
+
+    await fbPatch(`app_users/${userId}`, {
+      status: 'approved_pending_pin',
+      activationPin: pin,
+      approvedAt: userRecord.approvedAt || now,
+      activationSentAt: now,
+      activationExpiresAt,
+    });
+
+    const existingAdminNotifs = await fbGet<Record<string, AdminNotification>>('admin_notifications').catch(() => null);
+    if (existingAdminNotifs && typeof existingAdminNotifs === 'object') {
+      await Promise.all(
+        Object.values(existingAdminNotifs)
+          .filter((n) => n && !n.read && n.type === 'user_signup' && n.userId === userRecord.id)
+          .map((n) => fbPatch(`admin_notifications/${n.id}`, { read: true }).catch(() => { /* ignore */ }))
+      );
+    }
+
+    let emailSent = false;
+    let provider: EmailProviderType = 'none';
+    if (userRecord.email) {
+      const cfg = await getAppConfig();
+      const emailRes = await dispatchApprovalPinEmail({
+        toEmail: userRecord.email,
+        username: userRecord.username,
+        pin,
+        expiresAtText: new Date(activationExpiresAt).toLocaleString(),
+        cfg,
+      });
+      emailSent = emailRes.emailSent;
+      provider = emailRes.provider;
+    }
+
     res.json({
       success: true,
-      activatedAt: now,
-      adminNotification,
-      userNotification,
+      status: 'approved_pending_pin',
+      approvedAt: userRecord.approvedAt || now,
+      emailSent,
+      provider,
+      email: userRecord.email || '',
+      pin: emailSent ? undefined : pin,
     });
   });
 
@@ -2888,12 +3133,40 @@ export function createApiApp(): express.Express {
     res.json({ success: true });
   });
 
-  app.post('/api/admin/users/:id/resend-activation', requireAuth, requireAdmin, async (_req: AuthenticatedRequest, res: Response) => {
-    res.status(403).json({
-      sent: false,
-      activationUrl: '',
-      error: 'Self-activation links are disabled. Every account must be approved and activated directly by the Administrator.',
+  app.post('/api/admin/users/:id/resend-activation', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    const userId = String(req.params.id || '').trim();
+    const userRecord = await fbGet<StoredAppUser>(`app_users/${userId}`);
+    if (!userRecord || !userRecord.id) {
+      res.status(404).json({ sent: false, error: 'User not found.' });
+      return;
+    }
+    if (userRecord.status === 'active') {
+      res.json({ sent: false, error: 'Account is already active.' });
+      return;
+    }
+    const now = Date.now();
+    const pin = generateActivationPin();
+    const activationExpiresAt = now + ACTIVATION_PIN_EXPIRY_MS;
+    await fbPatch(`app_users/${userId}`, {
+      status: 'approved_pending_pin',
+      activationPin: pin,
+      approvedAt: userRecord.approvedAt || now,
+      activationSentAt: now,
+      activationExpiresAt,
     });
+    if (!userRecord.email) {
+      res.json({ sent: false, pin });
+      return;
+    }
+    const cfg = await getAppConfig();
+    const { emailSent, provider } = await dispatchApprovalPinEmail({
+      toEmail: userRecord.email,
+      username: userRecord.username,
+      pin,
+      expiresAtText: new Date(activationExpiresAt).toLocaleString(),
+      cfg,
+    });
+    res.json({ sent: emailSent, provider, email: userRecord.email, pin: emailSent ? undefined : pin });
   });
 
   app.post('/api/admin/sessions/:id/revoke', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {

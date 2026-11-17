@@ -115,8 +115,20 @@ interface TeacherViewProps {
   adminEmail?: string;
   onAdminEmailChange?: (email: string) => void;
   onDeleteUser?: (userId: string) => Promise<void> | void;
-  onActivateUser?: (userId: string) => Promise<void> | void;
-  onResendActivationEmail?: (user: AppUser) => Promise<{ sent: boolean; activationUrl: string }>;
+  onActivateUser?: (userId: string) => Promise<{
+    success: boolean;
+    emailSent?: boolean;
+    email?: string;
+    pin?: string;
+    error?: string;
+  } | void> | void;
+  onResendActivationEmail?: (user: AppUser) => Promise<{
+    sent: boolean;
+    activationUrl: string;
+    pin?: string;
+    email?: string;
+    error?: string;
+  }>;
   onRevokeSession?: (sessionId: string) => Promise<void> | void;
   onClearInactiveSessions?: () => Promise<void> | void;
   onMarkNotificationRead?: (notifId: string) => Promise<void> | void;
@@ -193,6 +205,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onAdminEmailChange,
   onDeleteUser,
   onActivateUser,
+  onResendActivationEmail,
   onRevokeSession,
   onClearInactiveSessions,
   onMarkNotificationRead,
@@ -242,6 +255,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [adminEmailInput, setAdminEmailInput] = useState(adminEmail);
   const [isTestingAdminEmail, setIsTestingAdminEmail] = useState(false);
   const [adminEmailTestStatus, setAdminEmailTestStatus] = useState<{ success: boolean; message: string } | null>(null);
+  const [approvingUserId, setApprovingUserId] = useState<string | null>(null);
   const [deleteReason, setDeleteReason] = useState('Signed up by mistake');
   const [customDeleteReason, setCustomDeleteReason] = useState('');
   const [isSubmittingDeleteRequest, setIsSubmittingDeleteRequest] = useState(false);
@@ -2057,7 +2071,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
            s => s.status === 'active' && nowMs - (s.lastActiveTime || s.loginTime || 0) <= ONLINE_THRESHOLD_MS
          );
          const unreadNotifications = adminNotifications.filter(n => !n.read);
-         const pendingUsersCount = registeredUsers.filter(u => u.status === 'pending').length;
+         const pendingUsersCount = registeredUsers.filter(
+           u => u.status === 'pending' || u.status === 'approved_pending_pin'
+         ).length;
 
          return (
            <div className="bg-white p-4 sm:p-6 rounded-3xl shadow-sm border border-gray-100 space-y-4">
@@ -2236,7 +2252,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
                     {registeredUsers.map((user) => {
                       const isBuiltInAdmin = user.role === 'admin' || user.username.toLowerCase() === 'admin';
-                      const isPending = user.status === 'pending' && !isBuiltInAdmin;
+                      const isPendingApproval = user.status === 'pending' && !isBuiltInAdmin;
+                      const isAwaitingPin = user.status === 'approved_pending_pin' && !isBuiltInAdmin;
                       const isUserOnline = adminSessions.some(
                         s =>
                           s.adminName.toLowerCase() === user.username.toLowerCase() &&
@@ -2255,8 +2272,14 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                               <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${isBuiltInAdmin ? 'bg-indigo-100 text-indigo-700' : 'bg-gray-200 text-gray-700'}`}>
                                 {isBuiltInAdmin ? 'Admin' : 'Lecturer'}
                               </span>
-                              <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${isPending ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'}`}>
-                                {isPending ? 'Pending Approval' : 'Active'}
+                              <span className={`text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${
+                                isPendingApproval
+                                  ? 'bg-amber-100 text-amber-700'
+                                  : isAwaitingPin
+                                    ? 'bg-indigo-100 text-indigo-700'
+                                    : 'bg-emerald-100 text-emerald-700'
+                              }`}>
+                                {isPendingApproval ? 'Pending Approval' : isAwaitingPin ? 'Approved · PIN Sent' : 'Active'}
                               </span>
                               {isUserOnline && (
                                 <span className="inline-flex items-center gap-1 text-[9px] font-bold uppercase px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -2279,16 +2302,58 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
                           {!isBuiltInAdmin ? (
                             <div className="flex items-center gap-2 flex-wrap shrink-0">
-                              {isPending && (
+                              {isPendingApproval && (
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    void onActivateUser?.(user.id);
-                                    showToast('success', `Approved and activated "${user.username}".`);
+                                  disabled={approvingUserId === user.id}
+                                  onClick={async () => {
+                                    if (!onActivateUser) return;
+                                    setApprovingUserId(user.id);
+                                    try {
+                                      const res = await onActivateUser(user.id);
+                                      if (res && res.success === false) {
+                                        showToast('error', res.error || 'Could not approve user.');
+                                      } else if (res && res.emailSent) {
+                                        showToast('success', `Approved "${user.username}". Activation PIN sent to ${res.email || user.email}.`);
+                                      } else if (res && res.pin) {
+                                        await navigator.clipboard?.writeText(res.pin).catch(() => {});
+                                        showToast('success', `Approved "${user.username}". Email service unavailable — Activation PIN: ${res.pin} (copied).`);
+                                      } else {
+                                        showToast('success', `Approved "${user.username}".`);
+                                      }
+                                    } finally {
+                                      setApprovingUserId(null);
+                                    }
                                   }}
-                                  className="text-[10px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1.5 rounded-xl uppercase transition-all"
+                                  className="text-[10px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1.5 rounded-xl uppercase transition-all disabled:opacity-50"
                                 >
-                                  Approve &amp; Activate
+                                  {approvingUserId === user.id ? 'Approving...' : 'Approve'}
+                                </button>
+                              )}
+                              {isAwaitingPin && (
+                                <button
+                                  type="button"
+                                  disabled={approvingUserId === user.id}
+                                  onClick={async () => {
+                                    if (!onResendActivationEmail) return;
+                                    setApprovingUserId(user.id);
+                                    try {
+                                      const res = await onResendActivationEmail(user);
+                                      if (res.sent) {
+                                        showToast('success', `New Activation PIN emailed to ${res.email || user.email}.`);
+                                      } else if (res.pin) {
+                                        await navigator.clipboard?.writeText(res.pin).catch(() => {});
+                                        showToast('success', `Email service unavailable — New Activation PIN: ${res.pin} (copied).`);
+                                      } else {
+                                        showToast('error', res.error || 'Could not resend Activation PIN.');
+                                      }
+                                    } finally {
+                                      setApprovingUserId(null);
+                                    }
+                                  }}
+                                  className="text-[10px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-2.5 py-1.5 rounded-xl uppercase transition-all disabled:opacity-50"
+                                >
+                                  {approvingUserId === user.id ? 'Sending...' : 'Resend PIN'}
                                 </button>
                               )}
                               <button

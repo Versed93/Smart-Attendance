@@ -148,30 +148,29 @@ function doPost(e) {
     if (data && !Array.isArray(data) && data.action === "SEND_ACTIVATION_EMAIL") {
       var toEmail = String(data.toEmail || "").trim();
       var username = String(data.username || "User").trim();
+      var activationPin = String(data.activationPin || "").trim();
       var activationUrl = String(data.activationUrl || "").trim();
       var expiresAtText = String(data.expiresAtText || "").trim();
       var expiryLine = expiresAtText
-        ? "This activation link expires in 1 day (" + expiresAtText + ")."
-        : "This activation link expires within 1 day (24 hours).";
+        ? "This activation PIN expires in 1 day (" + expiresAtText + ")."
+        : "This activation PIN expires within 1 day (24 hours).";
       var adminEmail = String(data.adminEmail || "").trim();
       var ownerEmail = "";
       try { ownerEmail = Session.getEffectiveUser().getEmail() || ""; } catch (e0) {}
       var targetAdminEmail = adminEmail || ownerEmail;
 
-      if (toEmail && activationUrl) {
+      if (toEmail && activationPin) {
         MailApp.sendEmail({
           to: toEmail,
-          subject: "Activate Your Smart Attendance Account",
-          body: "Hello " + username + ",\\n\\nPlease activate your Smart QR Attendance account by opening the link below:\\n" + activationUrl + "\\n\\n" + expiryLine + "\\n\\nIf you signed up by mistake or want to delete your account, please open the app and submit an Account Deletion Request to the Admin.\\n\\nAfter activating, you can sign in to the Lecturer Dashboard.",
-          htmlBody: "<div style='font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;'><h2 style='color:#111827;margin-bottom:8px;'>Activate Your Account</h2><p style='color:#4b5563;font-size:14px;'>Hello <strong>" + username + "</strong>,</p><p style='color:#4b5563;font-size:14px;'>Thank you for signing up for the Smart QR Attendance System. Click the button below to activate your account:</p><p style='margin:24px 0;'><a href='" + activationUrl + "' style='background:#4f46e5;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block;'>Activate Account</a></p><p style='color:#b45309;background:#fffbeb;border:1px solid #fde68a;padding:10px 12px;border-radius:8px;font-size:12px;font-weight:bold;'>" + expiryLine + "</p><p style='color:#6b7280;font-size:12px;'>Signed up by mistake or want to remove your account? Open the app login page and submit an Account Deletion Request to Admin.</p><p style='color:#6b7280;font-size:12px;word-break:break-all;'>Or copy this link: " + activationUrl + "</p></div>"
+          subject: "Your Smart Attendance Account Is Approved — Activation PIN",
+          body: "Hello " + username + ",\\n\\nGood news! Your Smart QR Attendance account has been approved by the Administrator.\\n\\nYour 6-digit Activation PIN is: " + activationPin + "\\n\\nHow to complete activation:\\n1. Open the Smart Attendance Sign In page and log in with your User Name and Password first.\\n2. Key in this 6-digit Activation PIN when prompted to complete activation and start using your account.\\n\\n" + expiryLine,
+          htmlBody: "<div style='font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;'><h2 style='color:#111827;margin-bottom:8px;'>Account Approved — Activation PIN</h2><p style='color:#4b5563;font-size:14px;'>Hello <strong>" + username + "</strong>,</p><p style='color:#4b5563;font-size:14px;'>Your Smart QR Attendance account has been approved by the Administrator. Sign in with your User Name and Password first, then key in this 6-digit Activation PIN when prompted to complete activation and access your account:</p><div style='margin:20px 0;padding:14px 20px;background:#eef2ff;border:2px solid #c7d2fe;border-radius:12px;text-align:center;font-family:monospace;font-size:28px;font-weight:900;letter-spacing:0.25em;color:#3730a3;'>" + activationPin + "</div><p style='color:#b45309;background:#fffbeb;border:1px solid #fde68a;padding:10px 12px;border-radius:8px;font-size:12px;font-weight:bold;'>" + expiryLine + "</p></div>"
         });
-      }
-
-      if (targetAdminEmail) {
+      } else if (targetAdminEmail && !activationUrl && !activationPin) {
         MailApp.sendEmail({
           to: targetAdminEmail,
-          subject: "[Smart Attendance] New User Signup: " + username,
-          body: "A new user has signed up via email on the Smart QR Attendance System.\\n\\nUsername: " + username + "\\nEmail: " + toEmail + "\\nStatus: Pending Activation\\n" + expiryLine + "\\n\\nYou can view, activate, resend, or remove this account from the Admin Dashboard."
+          subject: "[Smart Attendance] Approval Needed: " + username,
+          body: "A new user signed up on the Smart QR Attendance System and is waiting for your approval.\\n\\nUsername: " + username + "\\nEmail: " + toEmail + "\\nStatus: Pending Admin Approval\\n\\nOpen the Admin Control Center -> Users tab to approve and send their Activation PIN."
         });
       }
 

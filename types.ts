@@ -35,10 +35,11 @@ export interface AppUser {
   email: string;
   password?: string;
   role: 'admin' | 'lecturer';
-  status: 'active' | 'pending';
+  status: 'active' | 'pending' | 'approved_pending_pin';
   activationToken?: string;
   activationSentAt?: number;
   activationExpiresAt?: number;
+  approvedAt?: number;
   deletionRequestedAt?: number;
   deletionReason?: string;
   createdAt: number;

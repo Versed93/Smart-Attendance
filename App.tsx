@@ -1126,7 +1126,16 @@ const MainApp: React.FC = () => {
     }
   }, []);
 
-  const handleLogin = async (usernameOrEmail: string, password: string): Promise<{ success: boolean; message?: string }> => {
+  const handleLogin = async (
+    usernameOrEmail: string,
+    password: string
+  ): Promise<{
+    success: boolean;
+    message?: string;
+    requiresActivationPin?: boolean;
+    username?: string;
+    challengeToken?: string;
+  }> => {
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -1138,6 +1147,9 @@ const MainApp: React.FC = () => {
       const data = await readJsonSafe<{
         success?: boolean;
         message?: string;
+        requiresActivationPin?: boolean;
+        username?: string;
+        challengeToken?: string;
         token?: string;
         user?: AppUser;
         session?: AdminSessionActivity;
@@ -1163,7 +1175,13 @@ const MainApp: React.FC = () => {
       }
 
       if (!res.ok || !data?.success || !data?.token || !data?.user) {
-        return { success: false, message: data?.message || 'Invalid User Name / Email or Password.' };
+        return {
+          success: false,
+          requiresActivationPin: Boolean(data?.requiresActivationPin),
+          username: data?.username,
+          challengeToken: data?.challengeToken,
+          message: data?.message || 'Invalid User Name / Email or Password.',
+        };
       }
 
       hasInitializedUserPrefRef.current = false;
@@ -1267,53 +1285,135 @@ const MainApp: React.FC = () => {
     await apiFetch(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' }).catch(() => { /* ignore */ });
   }, [apiFetch, registeredUsers]);
 
-  const handleActivateUser = useCallback(async (userId: string) => {
+  const handleActivateWithPin = async (
+    usernameOrEmail: string,
+    pin: string,
+    challengeToken?: string
+  ): Promise<{ success: boolean; signedIn?: boolean; message: string }> => {
+    try {
+      const res = await fetch('/api/auth/activate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        body: JSON.stringify({ usernameOrEmail, pin, challengeToken }),
+      });
+      const data = await readJsonSafe<{
+        success?: boolean;
+        message?: string;
+        token?: string;
+        user?: AppUser;
+        session?: AdminSessionActivity;
+      }>(res);
+
+      if (res.ok && data?.success && data?.token && data?.user) {
+        hasInitializedUserPrefRef.current = false;
+        courseEditedAtRef.current = 0;
+        authTokenRef.current = data.token;
+        setAuthToken(data.token);
+        setIsAuthenticated(true);
+        setCurrentAdminName(data.user.username);
+        setCurrentUserId(data.user.id);
+        setCurrentUserRole(data.user.role === 'admin' ? 'admin' : 'lecturer');
+        if (data.session?.id) {
+          setActiveSessionId(data.session.id);
+        }
+        localStorage.setItem(AUTH_KEY, 'true');
+        localStorage.setItem(AUTH_TOKEN_KEY, data.token);
+        setView('teacher');
+        if (data.session) {
+          setAdminSessions(prev => [data.session!, ...prev]);
+        }
+        return {
+          success: true,
+          signedIn: true,
+          message: data.message || 'Account activated and ready to use!',
+        };
+      }
+
+      return {
+        success: Boolean(res.ok && data?.success),
+        signedIn: false,
+        message: data?.message || 'Could not verify Activation PIN.',
+      };
+    } catch {
+      return { success: false, signedIn: false, message: 'Network error while verifying Activation PIN.' };
+    }
+  };
+
+  const handleActivateUser = useCallback(async (userId: string): Promise<{
+    success: boolean;
+    emailSent?: boolean;
+    email?: string;
+    pin?: string;
+    error?: string;
+  }> => {
     const now = Date.now();
-    setRegisteredUsers(prev =>
-      prev.map(u => (u.id === userId ? { ...u, status: 'active', activatedAt: now } : u))
-    );
     try {
       const res = await apiFetch(`/api/admin/users/${encodeURIComponent(userId)}/activate`, { method: 'POST' });
       const data = await readJsonSafe<{
         success?: boolean;
+        status?: AppUser['status'];
+        approvedAt?: number;
         activatedAt?: number;
-        adminNotification?: AdminNotification;
-        userNotification?: UserNotification;
+        alreadyActive?: boolean;
+        emailSent?: boolean;
+        email?: string;
+        pin?: string;
+        error?: string;
       }>(res);
-      if (data?.adminNotification) {
-        const newNotif = data.adminNotification;
-        setAdminNotifications(prev => {
-          const updated = prev.map(n =>
-            n.type === 'user_signup' && n.userId === userId ? { ...n, read: true } : n
-          );
-          if (updated.some(n => n.id === newNotif.id)) return updated;
-          return [newNotif, ...updated];
-        });
+      if (!res.ok || !data?.success) {
+        return { success: false, error: data?.error || 'Could not approve user.' };
       }
-      if (data?.userNotification && data.userNotification.userId === currentUserId) {
-        const newUserNotif = data.userNotification;
-        setUserNotifications(prev =>
-          prev.some(n => n.id === newUserNotif.id) ? prev : [newUserNotif, ...prev]
-        );
-      }
+      const nextStatus: AppUser['status'] = data.alreadyActive ? 'active' : (data.status || 'approved_pending_pin');
+      setRegisteredUsers(prev =>
+        prev.map(u =>
+          u.id === userId
+            ? {
+                ...u,
+                status: nextStatus,
+                approvedAt: data.approvedAt || u.approvedAt || now,
+                activatedAt: data.activatedAt || u.activatedAt,
+              }
+            : u
+        )
+      );
+      setAdminNotifications(prev =>
+        prev.map(n => (n.type === 'user_signup' && n.userId === userId ? { ...n, read: true } : n))
+      );
+      return {
+        success: true,
+        emailSent: Boolean(data.emailSent),
+        email: data.email,
+        pin: data.pin,
+      };
     } catch {
-      /* ignore */
+      return { success: false, error: 'Network error while approving account.' };
     }
-  }, [apiFetch, currentUserId]);
+  }, [apiFetch]);
 
-  const handleResendActivationEmail = useCallback(async (user: AppUser): Promise<{ sent: boolean; activationUrl: string }> => {
+  const handleResendActivationEmail = useCallback(async (user: AppUser): Promise<{
+    sent: boolean;
+    activationUrl: string;
+    pin?: string;
+    email?: string;
+    error?: string;
+  }> => {
     try {
       const res = await apiFetch(`/api/admin/users/${encodeURIComponent(user.id)}/resend-activation`, {
         method: 'POST',
-        body: JSON.stringify({ publicAppUrl: getPublicAppUrl() }),
+        body: JSON.stringify({}),
       });
       const data = await res.json();
       return {
         sent: Boolean(data?.sent),
-        activationUrl: data?.activationUrl || `${getPublicAppUrl()}?user=${encodeURIComponent(user.id)}`,
+        activationUrl: '',
+        pin: data?.pin,
+        email: data?.email || user.email,
+        error: data?.error,
       };
     } catch {
-      return { sent: false, activationUrl: `${getPublicAppUrl()}?user=${encodeURIComponent(user.id)}` };
+      return { sent: false, activationUrl: '', error: 'Network error while resending PIN.' };
     }
   }, [apiFetch]);
 
@@ -1865,6 +1965,7 @@ const MainApp: React.FC = () => {
           <LoginView
             onLogin={handleLogin}
             onSignUp={handleSignUp}
+            onActivateWithPin={handleActivateWithPin}
             activationNotice={activationNotice}
             onDismissActivationNotice={() => setActivationNotice(null)}
           />
