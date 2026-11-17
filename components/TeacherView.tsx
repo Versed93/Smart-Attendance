@@ -35,6 +35,21 @@ import { TrashIcon } from './icons/TrashIcon';
 import { HistoryIcon } from './icons/HistoryIcon';
 import { ListBulletIcon } from './icons/ListBulletIcon';
 import { ChevronDownIcon } from './icons/ChevronDownIcon';
+import { ClassroomDisplay } from './ClassroomDisplay';
+import {
+  buildAttendanceQrUrl,
+  buildStandaloneClassroomUrl,
+  CLASSROOM_CHANNEL_NAME,
+  getScreenDetailsSafe,
+  isExtendedScreenReported,
+  openExtendedClassroomWindow,
+  pickExtendedScreen,
+  publishClassroomSyncState,
+  requestAdaptiveFullscreen,
+  type ClassroomSyncPayload,
+  type ExtendedScreenInfo,
+  type ScreenDetailsLike,
+} from '../utils/classroomWindow';
 
 interface TeacherViewProps {
   attendanceList: Student[];
@@ -189,6 +204,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [showClassroomGeoPrompt, setShowClassroomGeoPrompt] = useState(false);
   const [isLockingClassroomGeo, setIsLockingClassroomGeo] = useState(false);
   const [classroomGeoError, setClassroomGeoError] = useState<string | null>(null);
+  const [isExtendedClassroomOpen, setIsExtendedClassroomOpen] = useState(false);
+  const [extendedScreenInfo, setExtendedScreenInfo] = useState<ExtendedScreenInfo | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(() =>
+    typeof document !== 'undefined' ? Boolean(document.fullscreenElement) : false
+  );
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [scanResult, setScanResult] = useState<{ type: 'success' | 'error' | 'duplicate', message: string} | null>(null);
@@ -288,10 +308,18 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const lastConfigRef = useRef('');
+  const extendedWindowRef = useRef<Window | null>(null);
+  const screenDetailsRef = useRef<ScreenDetailsLike | null>(null);
   
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    const onFsChange = () => setIsFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener('fullscreenchange', onFsChange);
+    return () => document.removeEventListener('fullscreenchange', onFsChange);
   }, []);
 
   useEffect(() => {
@@ -632,23 +660,27 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   
   useEffect(() => {
     const updateQR = () => {
-        let params = `t=${Date.now()}&w=${encodeURIComponent(selectedWeek)}`;
-        if (courseName) {
-          params += `&c=${encodeURIComponent(courseName)}`;
-          const matchedCourse = courses.find(c => c.courseName.trim().toUpperCase() === courseName.trim().toUpperCase());
-          if (matchedCourse?.id) params += `&cid=${encodeURIComponent(matchedCourse.id)}`;
-        }
-        if (isOfflineMode) params += `&offline=true`;
-        if (isGeoEnabled && teacherLocation) params += `&lat=${teacherLocation.lat.toFixed(6)}&lng=${teacherLocation.lng.toFixed(6)}&rad=150`;
-        
-        // Only show loading if configuration changes (not just timestamp)
+        const matchedCourse = courseName
+          ? courses.find(c => c.courseName.trim().toUpperCase() === courseName.trim().toUpperCase())
+          : undefined;
+
         const configString = `${courseName}-${selectedWeek}-${isOfflineMode}-${isGeoEnabled}-${teacherLocation?.lat}-${teacherLocation?.lng}`;
         if (configString !== lastConfigRef.current) {
             setIsQrLoading(true);
             lastConfigRef.current = configString;
         }
 
-        setQrData(`${baseUrl}?${params}`);
+        setQrData(
+          buildAttendanceQrUrl({
+            baseUrl,
+            selectedWeek,
+            courseName,
+            courseId: matchedCourse?.id,
+            isOfflineMode,
+            isGeoEnabled,
+            teacherLocation,
+          })
+        );
     };
     updateQR();
     const interval = setInterval(updateQR, 1000);
@@ -658,7 +690,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   useEffect(() => {
     if (canvasRef.current && qrData) {
       QRCode.toCanvas(canvasRef.current, qrData, { 
-          width: viewMode === 'classroom' ? 720 : 320,
+          width: 320,
           margin: qrMargin, 
           errorCorrectionLevel: qrErrorCorrection.toLowerCase() as 'low' | 'medium' | 'quartile' | 'high',
       }, (err) => {
@@ -666,7 +698,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
         setIsQrLoading(false);
       });
     }
-  }, [qrData, qrErrorCorrection, qrMargin, viewMode]);
+  }, [qrData, qrErrorCorrection, qrMargin]);
 
   const stats = useMemo(() => {
       const present = attendanceList.filter(s => s.status.toUpperCase() === 'P').length;
@@ -1294,60 +1326,207 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     return <span className="px-2 py-0.5 text-[10px] font-bold rounded-full bg-yellow-100 text-yellow-800 border border-yellow-200">{s}</span>;
   };
 
-  const toggleClassroomView = async (mode: 'teacher' | 'classroom') => {
+  const buildCurrentSyncPayload = useCallback(
+    (overrides?: Partial<ClassroomSyncPayload>): ClassroomSyncPayload => {
+      const matchedCourse = courseName
+        ? courses.find((c) => c.courseName.trim().toUpperCase() === courseName.trim().toUpperCase())
+        : undefined;
+      return {
+        active: true,
+        geoPending: false,
+        baseUrl,
+        courseName,
+        courseId: matchedCourse?.id,
+        selectedWeek,
+        isOfflineMode,
+        isGeoEnabled,
+        teacherLocation,
+        qrErrorCorrection,
+        qrMargin,
+        updatedAt: Date.now(),
+        ...overrides,
+      };
+    },
+    [baseUrl, courseName, courses, selectedWeek, isOfflineMode, isGeoEnabled, teacherLocation, qrErrorCorrection, qrMargin]
+  );
+
+  const closeExtendedClassroom = useCallback(() => {
+    publishClassroomSyncState(buildCurrentSyncPayload({ active: false }));
+    try {
+      if (extendedWindowRef.current && !extendedWindowRef.current.closed) {
+        extendedWindowRef.current.close();
+      }
+    } catch {
+      // Ignore cross-window close errors
+    }
+    extendedWindowRef.current = null;
+    setIsExtendedClassroomOpen(false);
+  }, [buildCurrentSyncPayload]);
+
+  useEffect(() => {
+    if (!isExtendedClassroomOpen) return;
+
+    publishClassroomSyncState(
+      buildCurrentSyncPayload({
+        active: true,
+        geoPending: isLockingClassroomGeo,
+      })
+    );
+
+    const checkInterval = setInterval(() => {
+      if (!extendedWindowRef.current || extendedWindowRef.current.closed) {
+        extendedWindowRef.current = null;
+        setIsExtendedClassroomOpen(false);
+      }
+    }, 1000);
+
+    let channel: BroadcastChannel | null = null;
+    if (typeof BroadcastChannel !== 'undefined') {
+      channel = new BroadcastChannel(CLASSROOM_CHANNEL_NAME);
+      channel.onmessage = (event: MessageEvent<{ type?: string }>) => {
+        if (event?.data?.type === 'CLASSROOM_WINDOW_CLOSED') {
+          extendedWindowRef.current = null;
+          setIsExtendedClassroomOpen(false);
+        }
+      };
+    }
+
+    return () => {
+      clearInterval(checkInterval);
+      channel?.close();
+    };
+  }, [isExtendedClassroomOpen, isLockingClassroomGeo, buildCurrentSyncPayload]);
+
+  const toggleClassroomView = async (mode: 'teacher' | 'classroom', preferredScreen?: ExtendedScreenInfo | null) => {
     setViewMode(mode);
     try {
-        if (mode === 'classroom') {
-            if (document.documentElement.requestFullscreen) {
-                await document.documentElement.requestFullscreen();
-            }
-        } else {
-            if (document.fullscreenElement && document.exitFullscreen) {
-                await document.exitFullscreen();
-            }
-        }
+      if (mode === 'classroom') {
+        await requestAdaptiveFullscreen(preferredScreen);
+      } else if (document.fullscreenElement && document.exitFullscreen) {
+        await document.exitFullscreen();
+      }
     } catch (err) {
-        console.warn("Fullscreen API failed", err);
+      console.warn('Fullscreen API failed', err);
     }
+  };
+
+  const launchClassroomDisplay = (options: {
+    geoEnabled: boolean;
+    location: { lat: number; lng: number } | null;
+    geoPending?: boolean;
+  }): 'extended_window' | 'in_page' => {
+    const payload = buildCurrentSyncPayload({
+      active: true,
+      isGeoEnabled: options.geoEnabled,
+      teacherLocation: options.location,
+      geoPending: Boolean(options.geoPending),
+    });
+
+    const targetExtendedScreen = extendedScreenInfo || pickExtendedScreen(screenDetailsRef.current);
+
+    if (targetExtendedScreen) {
+      publishClassroomSyncState(payload);
+      if (extendedWindowRef.current && !extendedWindowRef.current.closed) {
+        try {
+          extendedWindowRef.current.focus();
+        } catch { /* ignore */ }
+        setIsExtendedClassroomOpen(true);
+        setViewMode('teacher');
+        return 'extended_window';
+      }
+
+      const classroomUrl = buildStandaloneClassroomUrl(payload);
+      const popup = openExtendedClassroomWindow(classroomUrl, targetExtendedScreen);
+      if (popup) {
+        extendedWindowRef.current = popup;
+        setIsExtendedClassroomOpen(true);
+        setViewMode('teacher');
+        showToast('success', 'Classroom View opened on your extended screen.');
+        return 'extended_window';
+      }
+
+      // Fallback to in-page Classroom View (trying extended screen fullscreen if available)
+      void toggleClassroomView('classroom', targetExtendedScreen);
+      return 'in_page';
+    }
+
+    if (extendedWindowRef.current && !extendedWindowRef.current.closed) {
+      closeExtendedClassroom();
+    }
+    void toggleClassroomView('classroom');
+    return 'in_page';
   };
 
   const handleOpenClassroomPrompt = () => {
     setClassroomGeoError(null);
     setShowClassroomGeoPrompt(true);
+    void getScreenDetailsSafe().then((details) => {
+      if (details) {
+        screenDetailsRef.current = details;
+        setExtendedScreenInfo(pickExtendedScreen(details));
+      } else {
+        setExtendedScreenInfo(null);
+      }
+    });
   };
 
   const handleLaunchClassroomWithoutGeo = () => {
     handleGeoToggle(false);
     setClassroomGeoError(null);
     setShowClassroomGeoPrompt(false);
-    void toggleClassroomView('classroom');
+    launchClassroomDisplay({ geoEnabled: false, location: null });
   };
 
   const handleLaunchClassroomWithGeo = () => {
     if (isGeoEnabled && teacherLocation) {
       setClassroomGeoError(null);
       setShowClassroomGeoPrompt(false);
-      void toggleClassroomView('classroom');
+      launchClassroomDisplay({ geoEnabled: true, location: teacherLocation });
       return;
     }
+
+    // If an extended screen is ready, open its window immediately inside the user click gesture
+    // so popup blockers do not block window.open after async GPS acquisition.
+    const hasExtendedTarget = Boolean(extendedScreenInfo || pickExtendedScreen(screenDetailsRef.current));
+    let openedExtendedSynchronously = false;
+    if (hasExtendedTarget) {
+      const target = launchClassroomDisplay({ geoEnabled: true, location: null, geoPending: true });
+      openedExtendedSynchronously = target === 'extended_window';
+    }
+
     setIsLockingClassroomGeo(true);
     setClassroomGeoError(null);
     setIsGeoEnabled(true);
     setLocationStatus('fetching');
     requestCurrentPosition(
       (pos) => {
-        setTeacherLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setTeacherLocation(loc);
         setLocationStatus('success');
         setIsLockingClassroomGeo(false);
         setShowClassroomGeoPrompt(false);
-        void toggleClassroomView('classroom');
+        if (openedExtendedSynchronously) {
+          publishClassroomSyncState(
+            buildCurrentSyncPayload({
+              active: true,
+              isGeoEnabled: true,
+              teacherLocation: loc,
+              geoPending: false,
+            })
+          );
+        } else {
+          launchClassroomDisplay({ geoEnabled: true, location: loc });
+        }
       },
       (code, msg) => {
         setIsLockingClassroomGeo(false);
         setIsGeoEnabled(false);
         setTeacherLocation(null);
         setLocationStatus(code === 1 ? 'denied' : 'error');
-        setClassroomGeoError(`${msg} You can also choose "Keep Geolocation Off & Launch".`);
+        if (openedExtendedSynchronously) {
+          closeExtendedClassroom();
+        }
+        setClassroomGeoError(`${msg} You can also choose "OFF".`);
       }
     );
   };
@@ -1356,60 +1535,23 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
   if (viewMode === 'classroom') {
     return (
-        <div className="fixed inset-0 bg-gray-900/95 backdrop-blur-lg z-[100] flex flex-col justify-between p-4 sm:p-6 overflow-y-auto animate-in fade-in duration-300">
-            <button
-                type="button"
-                onClick={() => toggleClassroomView('teacher')}
-                title="Close Classroom View"
-                aria-label="Close Classroom View"
-                className="fixed top-3.5 right-3.5 sm:top-6 sm:right-6 z-20 flex items-center justify-center w-9 h-9 sm:w-11 sm:h-11 bg-white/10 hover:bg-white/20 border border-white/15 text-white rounded-xl sm:rounded-2xl active:scale-95 transition-all"
-            >
-                <XMarkIcon className="w-5 h-5 sm:w-6 sm:h-6" />
-            </button>
-
-            <header className="w-full flex items-center justify-center px-12 sm:px-16 pt-1 shrink-0">
-                <div className="flex items-center justify-center gap-3 sm:gap-4 min-w-0">
-                    <div className="flex items-center justify-center w-12 h-12 bg-gradient-to-br from-brand-primary to-brand-secondary text-white rounded-2xl shadow-lg shrink-0">
-                        <BrandLogoIcon className="w-7 h-7" />
-                    </div>
-                    <div className="min-w-0 text-left">
-                        <span className="block text-lg sm:text-2xl font-black text-white tracking-tight leading-none truncate">
-                            SMART ATTENDANCE
-                        </span>
-                        <span className="block text-[10px] font-bold text-white/55 uppercase tracking-[0.2em] mt-1.5 truncate">
-                            Classroom View
-                        </span>
-                    </div>
-                </div>
-            </header>
-
-            <div className="flex-1 flex flex-col items-center justify-center py-4 sm:py-6 gap-4 sm:gap-5">
-                <div className="w-full max-w-4xl text-center text-white shrink-0">
-                    <p className="text-xs sm:text-sm font-bold text-brand-light uppercase tracking-[0.3em] mb-1.5 opacity-70">Join Session</p>
-                    <h2 className="text-2xl sm:text-4xl lg:text-5xl font-bold mb-3 px-2 sm:px-4 break-words whitespace-normal leading-tight">
-                      {courseName || 'General Session'}
-                    </h2>
-                    <div className="flex items-center justify-center gap-2.5 flex-wrap">
-                      <div className="flex items-center gap-3 bg-white/5 py-1.5 sm:py-2 px-5 rounded-full border border-white/10">
-                          <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
-                          <p className="font-mono text-lg sm:text-2xl font-bold tracking-tight">{currentTime.toLocaleTimeString([], { hour12: false })}</p>
-                      </div>
-                      <span className="text-[11px] font-bold uppercase tracking-widest px-4 py-2 rounded-full bg-white/10 border border-white/15 text-amber-300">
-                        {selectedWeek.replace(/^W(\d+)$/i, 'WEEK $1')}
-                      </span>
-                    </div>
-                </div>
-                <div className="bg-white p-3.5 sm:p-5 rounded-[2rem] sm:rounded-[2.5rem] shadow-2xl w-[min(88vw,56vh)] sm:w-[min(84vw,62vh)] max-w-[600px] min-w-[270px] aspect-square flex items-center justify-center relative border-8 border-brand-primary/10 shrink-0">
-                     <canvas ref={canvasRef} className="!w-full !h-full rounded-2xl sm:rounded-3xl" />
-                </div>
-            </div>
-
-            <footer className="w-full max-w-6xl mx-auto text-center pt-2 shrink-0">
-                <p className="text-[11px] sm:text-xs font-semibold text-white/60 tracking-wide">
-                    Developed with <span className="text-rose-400" aria-label="love">♥</span> by <span className="font-bold text-white/85">VERSED PLT</span> · Copyright © {new Date().getFullYear()}
-                </p>
-            </footer>
-        </div>
+      <ClassroomDisplay
+        courseName={courseName}
+        selectedWeek={selectedWeek}
+        qrData={qrData}
+        currentTime={currentTime}
+        qrErrorCorrection={qrErrorCorrection}
+        qrMargin={qrMargin}
+        onClose={() => void toggleClassroomView('teacher')}
+        onToggleFullscreen={() => {
+          if (document.fullscreenElement) {
+            void document.exitFullscreen?.().catch(() => { /* ignore */ });
+          } else {
+            void requestAdaptiveFullscreen(extendedScreenInfo || pickExtendedScreen(screenDetailsRef.current));
+          }
+        }}
+        isFullscreen={isFullscreen}
+      />
     );
   }
 
@@ -1449,10 +1591,46 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   <EyeIcon className="w-4 h-4 sm:w-5 sm:h-5" />
               </button>
               <div className="w-[1px] h-7 sm:h-8 bg-gray-100 mx-0.5 sm:mx-1 shrink-0 hidden sm:block"></div>
-              <button onClick={onLogout} className="flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 bg-red-50 text-red-600 rounded-xl border-2 border-red-100 hover:bg-red-100 shrink-0 active:scale-90" title="Log Out"><LockClosedIcon className="w-5 h-5" /></button>
+              <button onClick={() => { closeExtendedClassroom(); onLogout(); }} className="flex items-center justify-center w-10 h-10 sm:w-11 sm:h-11 bg-red-50 text-red-600 rounded-xl border-2 border-red-100 hover:bg-red-100 shrink-0 active:scale-90" title="Log Out"><LockClosedIcon className="w-5 h-5" /></button>
             </div>
          </div>
        </div>
+
+       {isExtendedClassroomOpen && (
+         <div className="bg-indigo-50 border border-indigo-200 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
+           <div className="flex items-center gap-3 min-w-0">
+             <span className="w-2.5 h-2.5 rounded-full bg-indigo-600 shrink-0 animate-pulse"></span>
+             <div className="min-w-0">
+               <p className="text-xs font-black text-indigo-900 uppercase tracking-wider">
+                 Classroom View Active on Extended Screen
+               </p>
+               <p className="text-xs font-semibold text-indigo-700 mt-0.5 truncate">
+                 Projecting {courseName || 'General Session'} · {selectedWeek.replace(/^W(\d+)$/i, 'Week $1')} — updates automatically from this dashboard.
+               </p>
+             </div>
+           </div>
+           <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+             <button
+               type="button"
+               onClick={() => {
+                 try {
+                   extendedWindowRef.current?.focus();
+                 } catch { /* ignore */ }
+               }}
+               className="text-[10px] font-bold uppercase tracking-wider bg-white text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-xl hover:bg-indigo-100 transition-all"
+             >
+               Focus Window
+             </button>
+             <button
+               type="button"
+               onClick={closeExtendedClassroom}
+               className="text-[10px] font-bold uppercase tracking-wider bg-indigo-600 text-white px-3 py-1.5 rounded-xl hover:bg-indigo-700 transition-all"
+             >
+               Close Extended View
+             </button>
+           </div>
+         </div>
+       )}
 
        {unreadUserNotifications.length > 0 && (
          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
@@ -3244,8 +3422,15 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
             <h2 className="text-xl sm:text-2xl font-bold text-gray-900 mb-2 tracking-tight">
               Turn On Geolocation?
             </h2>
-            <p className="text-xs font-bold text-gray-500 mb-4 leading-relaxed break-words">
+            <p className="text-xs font-bold text-gray-500 mb-3 leading-relaxed break-words">
               Course: <span className="text-gray-900">{courseName || 'General Session'}</span> • {selectedWeek.replace(/^W(\d+)$/i, 'WEEK $1')}
+            </p>
+            <p className="text-[11px] font-bold text-indigo-700 bg-indigo-50/70 border border-indigo-100 rounded-xl px-3 py-2 mb-4">
+              {extendedScreenInfo
+                ? `Extended display detected (${extendedScreenInfo.label || `${extendedScreenInfo.availWidth}×${extendedScreenInfo.availHeight}`}) — Classroom View will launch there automatically.`
+                : isExtendedScreenReported()
+                  ? 'Extended display detected — allow Window Management if prompted to launch directly on your second screen.'
+                  : 'Adapts automatically in full section to your available screen size.'}
             </p>
             <p className="text-xs font-bold text-gray-400 mb-5 leading-relaxed">
               Turn on geolocation to verify students are within 150m of the classroom, or keep it off to allow check-ins without GPS check.

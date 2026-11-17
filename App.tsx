@@ -2,6 +2,7 @@ import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { TeacherView } from './components/TeacherView';
 import { StudentView } from './components/StudentView';
 import { LoginView } from './components/LoginView';
+import { StandaloneClassroomView } from './components/ClassroomDisplay';
 import type {
   Student,
   AppUser,
@@ -73,7 +74,7 @@ const normalizeCourses = (list: unknown): CourseProfile[] => {
     }));
 };
 
-const App: React.FC = () => {
+const MainApp: React.FC = () => {
   const [initialUrlParams] = useState(() => new URLSearchParams(window.location.search));
   const token = initialUrlParams.get('t');
   const courseNameParam = initialUrlParams.get('c');
@@ -1808,6 +1809,16 @@ const App: React.FC = () => {
       )}
     </div>
   );
+};
+
+const App: React.FC = () => {
+  const [isClassroomStandalone] = useState(
+    () => new URLSearchParams(window.location.search).get('view') === 'classroom'
+  );
+  if (isClassroomStandalone) {
+    return <StandaloneClassroomView />;
+  }
+  return <MainApp />;
 };
 
 export default App;
