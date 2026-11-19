@@ -462,6 +462,32 @@ function normalizeCourse(raw) {
     sharedWith: Array.isArray(raw.sharedWith) ? raw.sharedWith : []
   };
 }
+function normalizeStudentsList(rawList) {
+  if (!Array.isArray(rawList)) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const normalized = [];
+  for (const item of rawList) {
+    const rec = item;
+    const id = String(rec?.id || "").trim().toUpperCase();
+    const name = String(rec?.name || "").trim().toUpperCase();
+    if (id && name && !seen.has(id)) {
+      seen.add(id);
+      normalized.push({ id, name });
+    }
+  }
+  return normalized;
+}
+function areStudentRostersEqual(a = [], b = []) {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const sa = a[i];
+    const sb = b[i];
+    if (String(sa?.id || "").trim().toUpperCase() !== String(sb?.id || "").trim().toUpperCase() || String(sa?.name || "").trim().toUpperCase() !== String(sb?.name || "").trim().toUpperCase()) {
+      return false;
+    }
+  }
+  return true;
+}
 function canAccessCourse(course, auth) {
   if (auth.role === "admin") return true;
   if (course.ownerId && course.ownerId === auth.uid) return true;
@@ -1163,17 +1189,11 @@ async function resolveRosterForCourse(params) {
           if (matchedTab) sheetTabMatched = true;
           const rawStudents = targetNorm && sheetsArr.length > 0 ? matchedTab && Array.isArray(matchedTab.students) ? matchedTab.students : [] : Array.isArray(data.students) ? data.students : [];
           if (rawStudents.length > 0) {
-            const seen = /* @__PURE__ */ new Set();
-            const normalized = [];
-            for (const item of rawStudents) {
-              const id = String(item?.id || "").trim().toUpperCase();
-              const name = String(item?.name || "").trim().toUpperCase();
-              if (id && name && !seen.has(id)) {
-                seen.add(id);
-                normalized.push({ id, name });
-              }
-            }
+            const normalized = normalizeStudentsList(rawStudents);
             if (normalized.length > 0) return normalized;
+          }
+          if (matchedTab && Array.isArray(matchedTab.students)) {
+            return [];
           }
         }
       }
@@ -1330,6 +1350,11 @@ function createApiApp() {
         res.status(400).json({ success: false, message: "Please enter a valid email address." });
         return;
       }
+      if (cleanUser.toLowerCase() === "admin") {
+        res.status(409).json({ success: false, message: 'Username "admin" is reserved.' });
+        return;
+      }
+      await ensureAdminUserExists();
       const usersObj = await fbGet("app_users") || {};
       const latestUsers = listStoredUsers(usersObj);
       if (latestUsers.some((u) => u.username.toLowerCase() === cleanUser.toLowerCase())) {
@@ -1965,6 +1990,9 @@ function createApiApp() {
         user: { id: auth.uid, username: auth.username, role: auth.role },
         config: {
           scriptUrl: auth.role === "admin" ? cfg.scriptUrl : "",
+          scriptConfigured: Boolean(
+            cfg.scriptUrl && cfg.scriptUrl !== DEFAULT_SCRIPT_URL && !cfg.scriptUrl.trim().endsWith("/dev")
+          ),
           databaseUrl: auth.role === "admin" ? getFirebaseDbUrl() : "",
           integrationType: cfg.integrationType,
           adminEmail: auth.role === "admin" ? cfg.adminEmail : "",
@@ -2034,6 +2062,8 @@ function createApiApp() {
       const rawSheets = Array.isArray(data.sheets) ? data.sheets : [];
       const seenCourses = /* @__PURE__ */ new Set();
       const sanitizedSheets = [];
+      const updatedCourses = [];
+      const now = Date.now();
       for (const tab of rawSheets) {
         if (!tab) continue;
         const cleanCourse = String(tab.courseName || "").trim();
@@ -2041,23 +2071,42 @@ function createApiApp() {
         const key = normalizeCourseNameKey(cleanCourse);
         if (seenCourses.has(key)) continue;
         seenCourses.add(key);
-        const seenStudents = /* @__PURE__ */ new Set();
-        const normalizedStudents = [];
-        if (Array.isArray(tab.students)) {
-          for (const item of tab.students) {
-            const id = String(item?.id || "").trim().toUpperCase();
-            const name = String(item?.name || "").trim().toUpperCase();
-            if (id && name && !seenStudents.has(id)) {
-              seenStudents.add(id);
-              normalizedStudents.push({ id, name });
+        const hasStudentsArray = Array.isArray(tab.students);
+        const normalizedStudents = normalizeStudentsList(tab.students);
+        const cleanSheetName = String(tab.sheetName || "").trim();
+        const rawOwnerStr = typeof tab.owner === "string" ? tab.owner.trim() : "";
+        const ownerExplicit = Boolean(tab.ownerExplicit);
+        const matchingCourses = allCourses.filter((c) => isSameCourse(c, cleanCourse));
+        const directMine = matchingCourses.find((c) => isDirectOwnerOrShared(c, auth));
+        const otherCourse = matchingCourses.find((c) => !isDirectOwnerOrShared(c, auth));
+        const sheetOwner = resolveSheetTabOwner(rawOwnerStr, ownerExplicit, allUsers);
+        const ownedByOtherInSheet = auth.role !== "admin" && !directMine && (Boolean(otherCourse) || sheetOwner.recognized && !doesAuthMatchSheetOwner(sheetOwner.tokens, auth, authUser));
+        if (hasStudentsArray && !ownedByOtherInSheet && matchingCourses.length > 0) {
+          const accessibleMatches = matchingCourses.filter((c) => canAccessCourse(c, auth));
+          for (const existingCourse of accessibleMatches) {
+            if (sheetOwner.recognized && auth.role !== "admin" && !doesAuthMatchSheetOwner(sheetOwner.tokens, auth, authUser) && !isDirectOwnerOrShared(existingCourse, auth)) {
+              continue;
+            }
+            const currentStudents = normalizeStudentsList(existingCourse.students);
+            const studentsChanged = !areStudentRostersEqual(currentStudents, normalizedStudents);
+            const sheetNameChanged = Boolean(
+              cleanSheetName && cleanSheetName !== String(existingCourse.sheetName || "").trim()
+            );
+            if (studentsChanged || sheetNameChanged) {
+              const updatedCourse = {
+                ...existingCourse,
+                sheetName: cleanSheetName || existingCourse.sheetName || "",
+                students: normalizedStudents,
+                updatedAt: now
+              };
+              await fbPut(`courses/${updatedCourse.id}`, updatedCourse);
+              updatedCourses.push(updatedCourse);
             }
           }
         }
-        const rawOwnerStr = typeof tab.owner === "string" ? tab.owner.trim() : "";
-        const ownerExplicit = Boolean(tab.ownerExplicit);
         if (auth.role === "admin") {
           sanitizedSheets.push({
-            sheetName: String(tab.sheetName || ""),
+            sheetName: cleanSheetName,
             courseName: cleanCourse,
             owner: rawOwnerStr,
             ownerExplicit,
@@ -2065,15 +2114,10 @@ function createApiApp() {
           });
           continue;
         }
-        const matchingCourses = allCourses.filter((c) => isSameCourse(c, cleanCourse));
-        const directMine = matchingCourses.find((c) => isDirectOwnerOrShared(c, auth));
-        const otherCourse = matchingCourses.find((c) => !isDirectOwnerOrShared(c, auth));
-        const sheetOwner = resolveSheetTabOwner(rawOwnerStr, ownerExplicit, allUsers);
-        const ownedByOtherInSheet = !directMine && (Boolean(otherCourse) || sheetOwner.recognized && !doesAuthMatchSheetOwner(sheetOwner.tokens, auth, authUser));
         if (ownedByOtherInSheet) {
           const safeOwnerDisplay = sheetOwner.matchedUsers.length > 0 ? sheetOwner.matchedUsers.map((u) => u.username).join(", ") : otherCourse?.createdBy || "Another Lecturer";
           sanitizedSheets.push({
-            sheetName: String(tab.sheetName || ""),
+            sheetName: cleanSheetName,
             courseName: cleanCourse,
             owner: safeOwnerDisplay,
             ownerExplicit: true,
@@ -2081,7 +2125,7 @@ function createApiApp() {
           });
         } else {
           sanitizedSheets.push({
-            sheetName: String(tab.sheetName || ""),
+            sheetName: cleanSheetName,
             courseName: cleanCourse,
             owner: rawOwnerStr,
             ownerExplicit,
@@ -2089,7 +2133,7 @@ function createApiApp() {
           });
         }
       }
-      res.json({ success: true, sheets: sanitizedSheets });
+      res.json({ success: true, sheets: sanitizedSheets, updatedCourses });
     } catch {
       res.status(502).json({
         success: false,
@@ -2436,7 +2480,7 @@ function createApiApp() {
         const normKey = normalizeCourseNameKey(cleanName);
         if (seenSyncKeys.has(normKey)) continue;
         seenSyncKeys.add(normKey);
-        const students = Array.isArray(tab.students) ? tab.students : [];
+        const students = normalizeStudentsList(tab.students);
         const sheetOwner = resolveSheetTabOwner(tab.owner, Boolean(tab.ownerExplicit), allUsers);
         const existingCourse = allCourses.find((c) => isSameCourse(c, cleanName));
         if (existingCourse) {
@@ -2468,10 +2512,11 @@ function createApiApp() {
               continue;
             }
           }
+          const cleanSheetName = typeof tab.sheetName === "string" ? tab.sheetName.trim() : "";
           const updated = {
             ...existingCourse,
-            sheetName: tab.sheetName || existingCourse.sheetName,
-            students: students.length > 0 ? students : existingCourse.students,
+            sheetName: cleanSheetName || existingCourse.sheetName,
+            students,
             updatedAt: now
           };
           await fbPut(`courses/${updated.id}`, updated);
@@ -3725,6 +3770,27 @@ Verification link: ${testLink}
   app2.delete("/api/admin/notifications", requireAuth, requireAdmin, async (_req, res) => {
     await fbDelete("admin_notifications");
     res.json({ success: true });
+  });
+  app2.use((err, req, res, next) => {
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    const status = typeof err?.status === "number" ? err.status : typeof err?.statusCode === "number" ? err.statusCode : 500;
+    if (req.path.startsWith("/api")) {
+      if (status === 400 && err?.type === "entity.parse.failed") {
+        res.status(400).json({ success: false, error: "Invalid JSON request body.", message: "Invalid JSON request body." });
+        return;
+      }
+      const formatted = formatAuthServerError(err, "Unexpected server error.");
+      res.status(status >= 400 && status < 600 ? status : formatted.status).json({
+        success: false,
+        error: formatted.message,
+        message: formatted.message
+      });
+      return;
+    }
+    next(err);
   });
   return app2;
 }

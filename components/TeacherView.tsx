@@ -76,7 +76,12 @@ interface TeacherViewProps {
   onSelectCourse?: (course: CourseProfile) => void;
   onAddCourse?: (courseName: string, initialStudents?: PreRegisteredStudent[], ownerId?: string, sharedWith?: string[]) => CourseProfile | null;
   onDeleteCourse?: (courseId: string) => Promise<void> | void;
-  onFetchSheetTabs?: (params?: { course?: string }) => Promise<{ success: boolean; sheets?: SheetTabCandidate[]; error?: string }>;
+  onFetchSheetTabs?: (params?: { course?: string }) => Promise<{
+    success: boolean;
+    sheets?: SheetTabCandidate[];
+    updatedCourses?: CourseProfile[];
+    error?: string;
+  }>;
   onCheckSheetTabOwnership?: (sheetTabs: SheetTabCandidate[]) => Promise<SheetTabOwnershipResult[]>;
   onSyncSheetCourses?: (
     sheetTabs: SheetTabCandidate[],
@@ -334,6 +339,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     sharedBy?: string;
     reason?: string;
   }> | null>(null);
+  const [sheetSyncUpdatedNames, setSheetSyncUpdatedNames] = useState<string[]>([]);
   const [selectedSyncCourseKeys, setSelectedSyncCourseKeys] = useState<Set<string>>(new Set());
   const [selectedSyncOwnerByCourse, setSelectedSyncOwnerByCourse] = useState<Record<string, string>>({});
   const [selectedSyncSharedByCourse, setSelectedSyncSharedByCourse] = useState<Record<string, string[]>>({});
@@ -500,7 +506,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       setIsLoadingSheetCourse(true);
       setSheetReadError(null);
       try {
-          const data = await onFetchSheetTabs({ course: courseName || undefined });
+          const data = await onFetchSheetTabs(
+              mode === 'active-only' && courseName ? { course: courseName } : undefined
+          );
           if (!data || !data.success) {
               const msg = data?.error || 'Could not read Course Name from Google Sheet. Re-deploy updated Apps Script.';
               setSheetReadError(msg);
@@ -509,6 +517,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           }
 
           const validCourseSheets = parseValidCourseSheets(data);
+          const autoUpdatedNames = (data.updatedCourses || []).map((c) => c.courseName).filter(Boolean);
           setSheetReadError(null);
 
           // Automatic background refresh: NEVER import other tabs or change active subject; only refresh current owned course roster.
@@ -518,7 +527,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               const ownsCurrent = courses.some((c) => c.courseName.replace(/\s+/g, ' ').trim().toUpperCase() === targetUpper);
               if (!ownsCurrent) return;
               const matchedSheet = validCourseSheets.find((s) => s.courseName.replace(/\s+/g, ' ').trim().toUpperCase() === targetUpper);
-              if (matchedSheet && matchedSheet.students.length > 0) {
+              if (matchedSheet && autoUpdatedNames.length === 0) {
                   onUpdateKnownStudents(matchedSheet.students);
               }
               return;
@@ -547,10 +556,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                   showToast('error', `Skipped "${matchedSheet.courseName}": ${result.skippedCourses[0].reason}.`);
                   return;
               }
-              if (matchedSheet.students.length > 0) {
+              if (!result || result.courses.length === 0) {
                   onUpdateKnownStudents(matchedSheet.students);
               }
-              showToast('success', `Synced "${matchedSheet.courseName}" (${matchedSheet.students.length} students from Sheet).`);
+              const count = matchedSheet.students.length;
+              showToast('success', `Synced "${matchedSheet.courseName}" (${count} ${count === 1 ? 'student' : 'students'} from Sheet).`);
               return;
           }
 
@@ -604,6 +614,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
           setSelectedSyncOwnerByCourse(initialOwners);
           setSelectedSyncSharedByCourse(initialShared);
           setSelectedSyncCourseKeys(preselected);
+          setSheetSyncUpdatedNames(autoUpdatedNames);
           setSheetSyncModalItems(pickerItems);
       } catch {
           const msg = 'Could not read Google Sheet. Check Apps Script URL in Settings (must be /exec with access = Anyone).';
@@ -650,15 +661,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               : undefined;
 
           if (syncedActiveCourse) {
-              if (syncedActiveCourse.students.length > 0) {
-                  onUpdateKnownStudents(syncedActiveCourse.students);
-              }
+              onUpdateKnownStudents(syncedActiveCourse.students || []);
           } else if (!activeUpper && syncedCourses.length > 0) {
               const firstSynced = syncedCourses[0];
               setCourseName(firstSynced.courseName);
-              if (firstSynced.students.length > 0) {
-                  onUpdateKnownStudents(firstSynced.students);
-              }
+              onUpdateKnownStudents(firstSynced.students || []);
           }
 
           if (skippedCourses.length > 0 && syncedCourses.length === 0) {
@@ -4783,9 +4790,16 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     </div>
                   </div>
 
+                  {sheetSyncUpdatedNames.length > 0 && (
+                    <div className="mt-3 px-3.5 py-2.5 rounded-xl bg-indigo-50 border border-indigo-200 text-[11px] font-semibold text-indigo-800">
+                      Updated student roster{sheetSyncUpdatedNames.length === 1 ? '' : 's'} from Google Sheet for:{' '}
+                      <span className="font-bold">{sheetSyncUpdatedNames.join(', ')}</span>.
+                    </div>
+                  )}
+
                   {syncableCount === 0 && (
                     <div className="mt-3 px-3.5 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-[11px] font-semibold text-emerald-800">
-                      All available subjects from this Google Sheet are already in Subjects (or owned by other lecturers) and will not be duplicated or re-synced.
+                      All available subjects from this Google Sheet are already in Subjects (or owned by other lecturers). Synced subjects automatically keep their student rosters up to date.
                     </div>
                   )}
 

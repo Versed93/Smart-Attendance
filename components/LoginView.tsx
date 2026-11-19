@@ -3,7 +3,6 @@ import { BrandLogoIcon } from './icons/BrandLogoIcon';
 import { UserPlusIcon } from './icons/UserPlusIcon';
 import { EyeIcon } from './icons/EyeIcon';
 import { EyeSlashIcon } from './icons/EyeSlashIcon';
-import { PWAInstallButton } from './PWAInstallButton';
 
 interface LoginViewProps {
   onLogin: (usernameOrEmail: string, password: string) => Promise<{
@@ -152,7 +151,7 @@ export const LoginView: React.FC<LoginViewProps> = ({
             {isSignUp ? <UserPlusIcon className="w-9 h-9" /> : <BrandLogoIcon className="w-9 h-9" />}
           </div>
           <h1 className="text-2xl font-black text-gray-900 tracking-tight leading-none">
-            {isSignUp ? 'Create Account' : isActivatePin ? 'Activate Account' : 'SMART ATTENDANCE'}
+            {isSignUp ? 'Create Account' : isActivatePin ? 'Activate Account' : 'Smart Attendance'}
           </h1>
           <p className="text-[11px] text-gray-400 font-bold uppercase tracking-[0.2em] mt-2">
             Smart QR Attendance System
@@ -325,9 +324,6 @@ export const LoginView: React.FC<LoginViewProps> = ({
             </div>
           )}
         </form>
-        <div className="mt-4 empty:hidden">
-          <PWAInstallButton variant="card" />
-        </div>
       </div>
     </div>
   );

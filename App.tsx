@@ -73,6 +73,21 @@ const normalizeCourses = (list: unknown): CourseProfile[] => {
     }));
 };
 
+const areStudentRostersEqual = (a: PreRegisteredStudent[] = [], b: PreRegisteredStudent[] = []): boolean => {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    const sa = a[i];
+    const sb = b[i];
+    if (
+      String(sa?.id || '').trim().toUpperCase() !== String(sb?.id || '').trim().toUpperCase() ||
+      String(sa?.name || '').trim().toUpperCase() !== String(sb?.name || '').trim().toUpperCase()
+    ) {
+      return false;
+    }
+  }
+  return true;
+};
+
 const MainApp: React.FC = () => {
   const [initialUrlParams] = useState(() => new URLSearchParams(window.location.search));
   const token = initialUrlParams.get('t');
@@ -82,8 +97,6 @@ const MainApp: React.FC = () => {
   const courseIdParam = initialUrlParams.get('cid');
   const weekParam = initialUrlParams.get('w');
   const isOfflineScan = initialUrlParams.get('offline') === 'true';
-  const activateTokenParam = initialUrlParams.get('activate');
-  const activateUserParam = initialUrlParams.get('user');
   const testEmailParam = initialUrlParams.get('test_email');
 
   const latParam = initialUrlParams.get('lat');
@@ -98,7 +111,7 @@ const MainApp: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
     localStorage.removeItem(VIEW_PREF_KEY);
     localStorage.removeItem(KIOSK_PREF_KEY);
-    if ((activateTokenParam && activateUserParam) || testEmailParam === 'verified') return false;
+    if (testEmailParam === 'verified') return false;
     const auth = localStorage.getItem(AUTH_KEY) === 'true';
     const savedToken = localStorage.getItem(AUTH_TOKEN_KEY);
     return auth && Boolean(savedToken);
@@ -106,7 +119,7 @@ const MainApp: React.FC = () => {
 
   // Always direct root URL opens to Main Access ('teacher' -> LoginView when unauthenticated),
   // reserving 'student' view strictly for QR scan links (?t=...) or active Kiosk sessions.
-  const initialView: View = (activateTokenParam && activateUserParam) || testEmailParam === 'verified'
+  const initialView: View = testEmailParam === 'verified'
     ? 'teacher'
     : token
       ? 'student'
@@ -214,6 +227,10 @@ const MainApp: React.FC = () => {
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
     return localStorage.getItem(SCRIPT_URL_KEY) || '';
   });
+  const [isSheetScriptConfigured, setIsSheetScriptConfigured] = useState<boolean>(() => {
+    const saved = localStorage.getItem(SCRIPT_URL_KEY) || '';
+    return saved.startsWith('https://script.google.com/') && !saved.endsWith('/dev');
+  });
 
   const courseEditedAtRef = useRef<number>(0);
   const courseDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -221,6 +238,8 @@ const MainApp: React.FC = () => {
   const coursesRef = useRef<CourseProfile[]>(courses);
   const activeCourseRef = useRef<string>(activeCourse);
   const authTokenRef = useRef<string>(authToken);
+  const sheetSyncInFlightRef = useRef<boolean>(false);
+  const lastSheetSyncAtRef = useRef<number>(0);
 
   useEffect(() => {
     coursesRef.current = courses;
@@ -428,6 +447,9 @@ const MainApp: React.FC = () => {
         ) {
           setIntegrationType(data.config.integrationType);
         }
+        if (typeof data.config.scriptConfigured === 'boolean') {
+          setIsSheetScriptConfigured(data.config.scriptConfigured);
+        }
         if (effectiveRole === 'admin') {
           if (typeof data.config.scriptUrl === 'string' && data.config.scriptUrl.startsWith('https://script.google.com/')) {
             setScriptUrl(data.config.scriptUrl);
@@ -452,6 +474,16 @@ const MainApp: React.FC = () => {
       const loadedCourses = normalizeCourses(data.courses);
       if (Date.now() - courseEditedAtRef.current > 4000) {
         setCourses(loadedCourses);
+        const currentActiveKey = normCourseKey(activeCourseRef.current);
+        if (hasInitializedUserPrefRef.current && currentActiveKey) {
+          const matchedActive = loadedCourses.find(
+            c => normCourseKey(c.courseName) === currentActiveKey
+          );
+          if (matchedActive) {
+            const nextStudents = matchedActive.students || [];
+            setKnownStudents(prev => (areStudentRostersEqual(prev, nextStudents) ? prev : nextStudents));
+          }
+        }
       }
 
       if (data.userPref && typeof data.userPref === 'object' && Date.now() - courseEditedAtRef.current > 3000) {
@@ -524,43 +556,12 @@ const MainApp: React.FC = () => {
     }
   }, [isAuthenticated, apiFetch]);
 
-  // Handle email activation link (?activate=TOKEN&user=USER_ID) and test email verification (?test_email=verified)
+  // Clean up test email verification query parameter (?test_email=verified)
   useEffect(() => {
-    if (testEmailParam === 'verified') {
-      if (window.location.search) {
-        window.history.replaceState({}, '', window.location.pathname);
-      }
-      return;
+    if (testEmailParam === 'verified' && window.location.search) {
+      window.history.replaceState({}, '', window.location.pathname);
     }
-    if (!activateTokenParam || !activateUserParam) return;
-    let cancelled = false;
-
-    const processActivation = async () => {
-      try {
-        const res = await fetch('/api/auth/activate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token: activateTokenParam, userId: activateUserParam }),
-        });
-        const data = await res.json();
-        if (cancelled) return;
-        setActivationNotice({
-          type: data?.success ? 'success' : 'error',
-          message: data?.message || 'Could not verify activation link.',
-        });
-        if (data?.success && window.location.search) {
-          window.history.replaceState({}, '', window.location.pathname);
-        }
-      } catch {
-        if (!cancelled) {
-          setActivationNotice({ type: 'error', message: 'Network error while activating account.' });
-        }
-      }
-    };
-
-    void processActivation();
-    return () => { cancelled = true; };
-  }, [activateTokenParam, activateUserParam, testEmailParam]);
+  }, [testEmailParam]);
 
   // Initial sync + cross-device polling when authenticated
   useEffect(() => {
@@ -615,10 +616,13 @@ const MainApp: React.FC = () => {
     const trimmed = nextUrl.trim();
     setScriptUrl(trimmed);
     if (trimmed.startsWith('https://script.google.com/')) {
+      setIsSheetScriptConfigured(!trimmed.endsWith('/dev'));
       void apiFetch('/api/admin/config', {
         method: 'PATCH',
         body: JSON.stringify({ scriptUrl: trimmed }),
       }).catch(() => { /* ignore */ });
+    } else if (!trimmed) {
+      setIsSheetScriptConfigured(false);
     }
   }, [apiFetch]);
 
@@ -781,6 +785,7 @@ const MainApp: React.FC = () => {
   const handleFetchSheetTabs = useCallback(async (params?: { course?: string }): Promise<{
     success: boolean;
     sheets?: SheetTabCandidate[];
+    updatedCourses?: CourseProfile[];
     error?: string;
   }> => {
     try {
@@ -789,6 +794,7 @@ const MainApp: React.FC = () => {
       const data = (await res.json().catch(() => null)) as {
         success?: boolean;
         sheets?: SheetTabCandidate[];
+        updatedCourses?: CourseProfile[];
         error?: string;
       } | null;
       if (!res.ok || !data?.success) {
@@ -797,14 +803,94 @@ const MainApp: React.FC = () => {
           error: data?.error || `Could not read Google Sheet tabs (HTTP ${res.status}).`,
         };
       }
+
+      const updatedCourses = normalizeCourses(data.updatedCourses);
+      if (updatedCourses.length > 0) {
+        courseEditedAtRef.current = Date.now();
+        setCourses(prev => {
+          const byId = new Map<string, CourseProfile>();
+          prev.forEach(c => byId.set(c.id, c));
+          updatedCourses.forEach(c => byId.set(c.id, c));
+          return Array.from(byId.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
+        });
+        const activeKey = normCourseKey(activeCourseRef.current);
+        if (activeKey) {
+          const matchedActive = updatedCourses.find(c => normCourseKey(c.courseName) === activeKey);
+          if (matchedActive) {
+            setKnownStudents(matchedActive.students || []);
+          }
+        }
+      }
+
       return {
         success: true,
         sheets: Array.isArray(data.sheets) ? data.sheets : [],
+        updatedCourses,
       };
     } catch {
       return { success: false, error: 'Network error reading Google Sheet tabs.' };
     }
   }, [apiFetch]);
+
+  // Automatic background Google Sheet roster sync so student additions/removals update synced subjects automatically
+  const hasCourses = courses.length > 0;
+  useEffect(() => {
+    if (
+      !isAuthenticated ||
+      !authToken ||
+      view !== 'teacher' ||
+      integrationType !== 'google_sheets' ||
+      !isSheetScriptConfigured ||
+      !hasCourses
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const triggerAutoSheetSync = async (bypassThrottle = false) => {
+      if (cancelled || sheetSyncInFlightRef.current) return;
+      const now = Date.now();
+      if (!bypassThrottle && now - lastSheetSyncAtRef.current < 15000) return;
+      sheetSyncInFlightRef.current = true;
+      lastSheetSyncAtRef.current = now;
+      try {
+        await handleFetchSheetTabs();
+      } catch {
+        // Ignore transient background sheet sync errors
+      } finally {
+        sheetSyncInFlightRef.current = false;
+      }
+    };
+
+    const initialSyncTimer = setTimeout(() => {
+      void triggerAutoSheetSync(lastSheetSyncAtRef.current === 0);
+    }, 600);
+
+    const sheetPollInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void triggerAutoSheetSync(false);
+      }
+    }, 20000);
+
+    const handleReturnToTab = () => {
+      if (document.visibilityState === 'visible') {
+        void triggerAutoSheetSync(false);
+      }
+    };
+
+    window.addEventListener('focus', handleReturnToTab);
+    window.addEventListener('online', handleReturnToTab);
+    document.addEventListener('visibilitychange', handleReturnToTab);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(initialSyncTimer);
+      clearInterval(sheetPollInterval);
+      window.removeEventListener('focus', handleReturnToTab);
+      window.removeEventListener('online', handleReturnToTab);
+      document.removeEventListener('visibilitychange', handleReturnToTab);
+    };
+  }, [isAuthenticated, authToken, view, integrationType, isSheetScriptConfigured, hasCourses, handleFetchSheetTabs]);
 
   const handleCheckSheetTabOwnership = useCallback(async (
     sheetTabs: SheetTabCandidate[]
@@ -870,6 +956,13 @@ const MainApp: React.FC = () => {
           });
           return Array.from(byId.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
         });
+        const activeKey = normCourseKey(activeCourseRef.current);
+        if (activeKey) {
+          const matchedActive = syncedList.find(c => normCourseKey(c.courseName) === activeKey);
+          if (matchedActive) {
+            setKnownStudents(matchedActive.students || []);
+          }
+        }
       }
       void syncAllCloudState();
       return {
@@ -967,6 +1060,7 @@ const MainApp: React.FC = () => {
 
   const syncKnownStudentsToCloud = useCallback((students: PreRegisteredStudent[], targetCourseName?: string) => {
     if (!authTokenRef.current) return;
+    courseEditedAtRef.current = Date.now();
     const courseLabel = (targetCourseName ?? activeCourseRef.current).trim();
     if (!courseLabel) return;
     const existing = coursesRef.current.find(
