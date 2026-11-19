@@ -7,6 +7,29 @@ import nodemailer from "nodemailer";
 // studentList.ts
 var PRE_REGISTERED_STUDENTS = [];
 
+// utils/passwordPolicy.ts
+function validateSignupPassword(password) {
+  const value = typeof password === "string" ? password : "";
+  const checks = {
+    minLength: value.length >= 8,
+    uppercase: /[A-Z]/.test(value),
+    lowercase: /[a-z]/.test(value),
+    number: /[0-9]/.test(value),
+    symbol: /[^A-Za-z0-9\s]/.test(value)
+  };
+  const missing = [];
+  if (!checks.minLength) missing.push("at least 8 characters");
+  if (!checks.uppercase) missing.push("an uppercase letter (A-Z)");
+  if (!checks.lowercase) missing.push("a lowercase letter (a-z)");
+  if (!checks.number) missing.push("a number (0-9)");
+  if (!checks.symbol) missing.push("a symbol/special character (e.g. !@#$%)");
+  return {
+    valid: missing.length === 0,
+    checks,
+    errorMessage: missing.length > 0 ? `Password must include ${missing.join(", ")}.` : null
+  };
+}
+
 // serverApp.ts
 var SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
 var ACTIVATION_PIN_EXPIRY_MS = 24 * 60 * 60 * 1e3;
@@ -1393,6 +1416,14 @@ function createApiApp() {
       }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
         res.status(400).json({ success: false, message: "Please enter a valid email address." });
+        return;
+      }
+      const passwordCheck = validateSignupPassword(password);
+      if (!passwordCheck.valid) {
+        res.status(400).json({
+          success: false,
+          message: passwordCheck.errorMessage || "Password does not meet security requirements."
+        });
         return;
       }
       if (cleanUser.toLowerCase() === "admin") {

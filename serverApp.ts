@@ -16,6 +16,7 @@ import type {
   UserNotification,
 } from './types.ts';
 import { PRE_REGISTERED_STUDENTS, type PreRegisteredStudent } from './studentList.ts';
+import { validateSignupPassword } from './utils/passwordPolicy.ts';
 
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ACTIVATION_PIN_EXPIRY_MS = 24 * 60 * 60 * 1000;
@@ -1829,6 +1830,14 @@ export function createApiApp(): express.Express {
       }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
         res.status(400).json({ success: false, message: 'Please enter a valid email address.' });
+        return;
+      }
+      const passwordCheck = validateSignupPassword(password);
+      if (!passwordCheck.valid) {
+        res.status(400).json({
+          success: false,
+          message: passwordCheck.errorMessage || 'Password does not meet security requirements.',
+        });
         return;
       }
       if (cleanUser.toLowerCase() === 'admin') {

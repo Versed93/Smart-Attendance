@@ -3,6 +3,7 @@ import { BrandLogoIcon } from './icons/BrandLogoIcon';
 import { UserPlusIcon } from './icons/UserPlusIcon';
 import { EyeIcon } from './icons/EyeIcon';
 import { EyeSlashIcon } from './icons/EyeSlashIcon';
+import { validateSignupPassword } from '../utils/passwordPolicy';
 
 interface LoginViewProps {
   onLogin: (usernameOrEmail: string, password: string) => Promise<{
@@ -76,6 +77,11 @@ export const LoginView: React.FC<LoginViewProps> = ({
       }
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
         setError('Please enter a valid email address.');
+        return;
+      }
+      const passwordCheck = validateSignupPassword(password);
+      if (!passwordCheck.valid) {
+        setError(passwordCheck.errorMessage || 'Password does not meet security requirements.');
         return;
       }
       if (onSignUp) {
@@ -266,8 +272,9 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   autoComplete={isSignUp ? 'new-password' : 'current-password'}
+                  minLength={isSignUp ? 8 : undefined}
                   className="block w-full border-2 border-gray-200 rounded-xl px-4 py-3 pr-12 outline-none focus:border-brand-primary transition-colors text-gray-900 font-bold placeholder-gray-300 text-sm"
-                  placeholder="Password"
+                  placeholder={isSignUp ? 'Min 8 chars, upper, lower, number & symbol' : 'Password'}
                   required
                 />
                 <button
@@ -279,6 +286,36 @@ export const LoginView: React.FC<LoginViewProps> = ({
                   {showPassword ? <EyeSlashIcon className="w-5 h-5" /> : <EyeIcon className="w-5 h-5" />}
                 </button>
               </div>
+              {isSignUp && (() => {
+                const { checks } = validateSignupPassword(password);
+                const rules = [
+                  { ok: checks.minLength, label: '8+ characters' },
+                  { ok: checks.uppercase, label: 'Uppercase (A-Z)' },
+                  { ok: checks.lowercase, label: 'Lowercase (a-z)' },
+                  { ok: checks.number, label: 'Number (0-9)' },
+                  { ok: checks.symbol, label: 'Symbol (!@#$...)' },
+                ];
+                return (
+                  <div className="mt-2.5 grid grid-cols-2 gap-1.5 bg-gray-50 border border-gray-100 rounded-xl p-2.5">
+                    {rules.map((rule) => (
+                      <div
+                        key={rule.label}
+                        className={`flex items-center gap-1.5 text-[11px] font-semibold ${
+                          rule.ok ? 'text-emerald-700' : 'text-gray-500'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block w-2 h-2 rounded-full shrink-0 ${
+                            rule.ok ? 'bg-emerald-500' : 'bg-gray-300'
+                          }`}
+                          aria-hidden="true"
+                        />
+                        <span>{rule.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
             </div>
           )}
 
