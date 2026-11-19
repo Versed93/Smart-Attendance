@@ -1477,6 +1477,46 @@ const MainApp: React.FC = () => {
     }
   }, [apiFetch]);
 
+  const handleResetUserPassword = useCallback(async (params: {
+    userId: string;
+    newPassword: string;
+    activateAccount?: boolean;
+  }): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const res = await apiFetch(`/api/admin/users/${encodeURIComponent(params.userId)}/reset-password`, {
+        method: 'POST',
+        body: JSON.stringify({
+          newPassword: params.newPassword,
+          activateAccount: Boolean(params.activateAccount),
+        }),
+      });
+      const data = await readJsonSafe<{
+        success?: boolean;
+        status?: AppUser['status'];
+        activatedAt?: number;
+        error?: string;
+      }>(res);
+      if (!res.ok || !data?.success) {
+        return { success: false, error: data?.error || 'Could not reset password.' };
+      }
+      setRegisteredUsers(prev =>
+        prev.map(u =>
+          u.id === params.userId
+            ? {
+                ...u,
+                status: data.status || u.status,
+                activatedAt: data.activatedAt || u.activatedAt,
+              }
+            : u
+        )
+      );
+      void syncAllCloudState();
+      return { success: true };
+    } catch {
+      return { success: false, error: 'Network error while resetting password.' };
+    }
+  }, [apiFetch, syncAllCloudState]);
+
   const handleRevokeSession = useCallback(async (sessionId: string) => {
     const now = Date.now();
     setAdminSessions(prev =>
@@ -2025,6 +2065,7 @@ const MainApp: React.FC = () => {
               onDeleteUser={handleDeleteUser}
               onActivateUser={handleActivateUser}
               onResendActivationEmail={handleResendActivationEmail}
+              onResetUserPassword={handleResetUserPassword}
               onRevokeSession={handleRevokeSession}
               onClearInactiveSessions={handleClearInactiveSessions}
               onMarkNotificationRead={handleMarkNotificationRead}

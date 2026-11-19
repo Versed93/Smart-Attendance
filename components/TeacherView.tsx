@@ -131,6 +131,11 @@ interface TeacherViewProps {
     email?: string;
     error?: string;
   }>;
+  onResetUserPassword?: (params: {
+    userId: string;
+    newPassword: string;
+    activateAccount?: boolean;
+  }) => Promise<{ success: boolean; error?: string }>;
   onRevokeSession?: (sessionId: string) => Promise<void> | void;
   onClearInactiveSessions?: () => Promise<void> | void;
   onMarkNotificationRead?: (notifId: string) => Promise<void> | void;
@@ -209,6 +214,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onDeleteUser,
   onActivateUser,
   onResendActivationEmail,
+  onResetUserPassword,
   onRevokeSession,
   onClearInactiveSessions,
   onMarkNotificationRead,
@@ -363,6 +369,13 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
     | { type: 'delete-course'; id: string; courseName: string }
     | null
   >(null);
+  const [resetPasswordModal, setResetPasswordModal] = useState<{
+    user: AppUser;
+    newPassword: string;
+    activateAccount: boolean;
+    isSaving: boolean;
+    error?: string;
+  } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const addCourseFileInputRef = useRef<HTMLInputElement>(null);
 
@@ -2397,6 +2410,21 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                               )}
                               <button
                                 type="button"
+                                onClick={() =>
+                                  setResetPasswordModal({
+                                    user,
+                                    newPassword: '',
+                                    activateAccount: (user.status || 'active') !== 'active',
+                                    isSaving: false,
+                                  })
+                                }
+                                className="text-[10px] font-bold text-gray-700 bg-white hover:bg-gray-100 border border-gray-200 px-2.5 py-1.5 rounded-xl uppercase transition-all"
+                                title={`Reset password for ${user.username}`}
+                              >
+                                Reset Password
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => setPendingDeleteAction({ type: 'delete-user', id: user.id, username: user.username, email: user.email })}
                                 className="inline-flex items-center gap-1 text-[10px] font-bold text-red-600 bg-red-50 hover:bg-red-100 border border-red-200 px-2.5 py-1.5 rounded-xl uppercase transition-all"
                                 title={`Remove user ${user.username}`}
@@ -4217,6 +4245,96 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                     <button type="button" onClick={executePendingDeleteAction} className="flex-1 px-4 py-3.5 font-bold text-white bg-red-600 rounded-2xl hover:bg-red-700 transition-all uppercase text-[10px] tracking-widest shadow-lg shadow-red-100">Delete</button>
                 </div>
             </div>
+        </div>
+      )}
+
+      {resetPasswordModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md z-[215] flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl sm:rounded-[2.5rem] shadow-2xl p-6 sm:p-8 border-t-8 border-indigo-600 animate-in zoom-in duration-200">
+            <h2 className="text-xl font-bold text-gray-900 mb-1 text-center">Reset Account Password</h2>
+            <p className="text-xs font-bold text-gray-400 mb-5 text-center">
+              Set a new password for <span className="text-gray-700">{resetPasswordModal.user.username}</span>
+              {resetPasswordModal.user.email ? ` (${resetPasswordModal.user.email})` : ''}
+            </p>
+            <div className="space-y-4 text-left">
+              <div>
+                <label htmlFor="admin-reset-pwd" className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1.5 ml-1">
+                  New Password (min 4 chars)
+                </label>
+                <input
+                  id="admin-reset-pwd"
+                  type="text"
+                  value={resetPasswordModal.newPassword}
+                  onChange={(e) =>
+                    setResetPasswordModal(prev => (prev ? { ...prev, newPassword: e.target.value, error: undefined } : prev))
+                  }
+                  placeholder="Enter temporary password"
+                  autoFocus
+                  className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 text-sm font-bold text-gray-900 outline-none focus:border-brand-primary"
+                />
+              </div>
+              {(resetPasswordModal.user.status || 'active') !== 'active' && (
+                <label className="flex items-center gap-2.5 p-3 rounded-xl bg-indigo-50/70 border border-indigo-100 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={resetPasswordModal.activateAccount}
+                    onChange={(e) =>
+                      setResetPasswordModal(prev => (prev ? { ...prev, activateAccount: e.target.checked } : prev))
+                    }
+                    className="w-4 h-4 rounded accent-indigo-600"
+                  />
+                  <span className="text-xs font-bold text-indigo-900">
+                    Activate account immediately (skip PIN)
+                  </span>
+                </label>
+              )}
+              {resetPasswordModal.error && (
+                <div className="bg-red-50 text-red-600 text-xs font-bold p-2.5 rounded-xl border border-red-100 text-center">
+                  {resetPasswordModal.error}
+                </div>
+              )}
+              <div className="flex gap-3 pt-1">
+                <button
+                  type="button"
+                  disabled={resetPasswordModal.isSaving}
+                  onClick={() => setResetPasswordModal(null)}
+                  className="flex-1 px-4 py-3.5 font-bold text-gray-500 bg-gray-100 rounded-2xl hover:bg-gray-200 transition-all uppercase text-[10px] tracking-widest"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={resetPasswordModal.isSaving}
+                  onClick={async () => {
+                    if (!onResetUserPassword) return;
+                    if (resetPasswordModal.newPassword.trim().length < 4) {
+                      setResetPasswordModal(prev =>
+                        prev ? { ...prev, error: 'Password must be at least 4 characters.' } : prev
+                      );
+                      return;
+                    }
+                    setResetPasswordModal(prev => (prev ? { ...prev, isSaving: true, error: undefined } : prev));
+                    const res = await onResetUserPassword({
+                      userId: resetPasswordModal.user.id,
+                      newPassword: resetPasswordModal.newPassword,
+                      activateAccount: resetPasswordModal.activateAccount,
+                    });
+                    if (!res.success) {
+                      setResetPasswordModal(prev =>
+                        prev ? { ...prev, isSaving: false, error: res.error || 'Could not reset password.' } : prev
+                      );
+                      return;
+                    }
+                    showToast('success', `Password updated for "${resetPasswordModal.user.username}".`);
+                    setResetPasswordModal(null);
+                  }}
+                  className="flex-1 px-4 py-3.5 font-bold text-white bg-indigo-600 rounded-2xl hover:bg-indigo-700 transition-all uppercase text-[10px] tracking-widest shadow-lg shadow-indigo-100 disabled:opacity-60"
+                >
+                  {resetPasswordModal.isSaving ? 'Saving...' : 'Save Password'}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

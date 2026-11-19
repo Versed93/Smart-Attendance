@@ -20,14 +20,21 @@ import { PRE_REGISTERED_STUDENTS, type PreRegisteredStudent } from './studentLis
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ACTIVATION_PIN_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
-const FIREBASE_DB_URL = (
-  process.env.FIREBASE_DATABASE_URL ||
-  'https://gen-lang-client-0701481146-default-rtdb.asia-southeast1.firebasedatabase.app'
-).replace(/\/+$/, '');
+const normalizeEnvString = (raw: string | undefined): string =>
+  (raw || '').trim().replace(/^["']|["']$/g, '').trim();
 
-const FIREBASE_DB_SECRET = (process.env.FIREBASE_DATABASE_SECRET || '').trim();
+const getFirebaseDbUrl = (): string =>
+  (
+    normalizeEnvString(process.env.FIREBASE_DATABASE_URL) ||
+    'https://gen-lang-client-0701481146-default-rtdb.asia-southeast1.firebasedatabase.app'
+  )
+    .replace(/\.json$/i, '')
+    .replace(/\/+$/, '');
 
-let resolvedAuthSecret: string | null = (process.env.AUTH_SECRET || '').trim() || null;
+const getFirebaseDbSecret = (): string =>
+  normalizeEnvString(process.env.FIREBASE_DATABASE_SECRET || process.env.FIREBASE_DB_SECRET);
+
+let resolvedAuthSecret: string | null = null;
 let authSecretPromise: Promise<string> | null = null;
 
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || 'adminscm';
@@ -81,14 +88,20 @@ const getSessionDateId = (): string => new Date().toISOString().slice(0, 10);
 const buildDbUrl = (dbPath: string): string => {
   const cleanPath = dbPath.replace(/^\/+/, '');
   const params = new URLSearchParams();
-  if (FIREBASE_DB_SECRET) {
-    params.set('auth', FIREBASE_DB_SECRET);
+  const dbSecret = getFirebaseDbSecret();
+  if (dbSecret) {
+    params.set('auth', dbSecret);
   }
   params.set('_ts', String(Date.now()));
-  return `${FIREBASE_DB_URL}/${cleanPath}.json?${params.toString()}`;
+  return `${getFirebaseDbUrl()}/${cleanPath}.json?${params.toString()}`;
 };
 
 async function getAuthSecret(): Promise<string> {
+  const envAuthSecret = normalizeEnvString(process.env.AUTH_SECRET);
+  if (envAuthSecret) {
+    resolvedAuthSecret = envAuthSecret;
+    return envAuthSecret;
+  }
   if (resolvedAuthSecret) return resolvedAuthSecret;
   if (authSecretPromise) return authSecretPromise;
   authSecretPromise = (async () => {
@@ -113,11 +126,51 @@ async function getAuthSecret(): Promise<string> {
   }
 }
 
+class DatabaseHttpError extends Error {
+  status: number;
+  operation: string;
+  constructor(operation: string, status: number, message?: string) {
+    super(message || `Database ${operation} failed (${status})`);
+    this.name = 'DatabaseHttpError';
+    this.status = status;
+    this.operation = operation;
+  }
+}
+
+function formatAuthServerError(err: unknown, fallbackMessage: string): { status: number; message: string } {
+  const errMsg = err instanceof Error ? err.message : String(err);
+  console.error('[Auth Error]', errMsg);
+  if (err instanceof DatabaseHttpError) {
+    if (err.status === 401 || err.status === 403) {
+      if (!getFirebaseDbSecret()) {
+        return {
+          status: 500,
+          message:
+            'Database authentication is not configured on this server (missing FIREBASE_DATABASE_SECRET). Add FIREBASE_DATABASE_SECRET and FIREBASE_DATABASE_URL in your deployment environment variables and redeploy.',
+        };
+      }
+      return {
+        status: 500,
+        message:
+          'Database authentication was rejected (HTTP 401/403). Verify FIREBASE_DATABASE_SECRET and FIREBASE_DATABASE_URL in your deployment environment variables.',
+      };
+    }
+    if (err.status === 404) {
+      return {
+        status: 500,
+        message:
+          'Database endpoint returned 404. Verify FIREBASE_DATABASE_URL in your deployment environment variables.',
+      };
+    }
+  }
+  return { status: 500, message: fallbackMessage };
+}
+
 async function fbGet<T>(dbPath: string): Promise<T | null> {
   const res = await fetch(buildDbUrl(dbPath), { cache: 'no-store' });
   if (res.status === 404) return null;
   if (!res.ok) {
-    throw new Error(`Database read failed (${res.status})`);
+    throw new DatabaseHttpError('read', res.status);
   }
   return (await res.json()) as T | null;
 }
@@ -129,7 +182,7 @@ async function fbPut(dbPath: string, payload: unknown): Promise<void> {
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    throw new Error(`Database write failed (${res.status})`);
+    throw new DatabaseHttpError('write', res.status);
   }
 }
 
@@ -140,15 +193,56 @@ async function fbPatch(dbPath: string, payload: unknown): Promise<void> {
     body: JSON.stringify(payload),
   });
   if (!res.ok) {
-    throw new Error(`Database update failed (${res.status})`);
+    throw new DatabaseHttpError('update', res.status);
   }
 }
 
 async function fbDelete(dbPath: string): Promise<void> {
   const res = await fetch(buildDbUrl(dbPath), { method: 'DELETE' });
   if (!res.ok && res.status !== 404) {
-    throw new Error(`Database delete failed (${res.status})`);
+    throw new DatabaseHttpError('delete', res.status);
   }
+}
+
+interface NormalizedStoredUser extends StoredAppUser {
+  dbKey: string;
+}
+
+function listStoredUsers(usersObj: Record<string, StoredAppUser> | null | undefined): NormalizedStoredUser[] {
+  if (!usersObj || typeof usersObj !== 'object') return [];
+  const result: NormalizedStoredUser[] = [];
+  for (const [key, raw] of Object.entries(usersObj)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const cleanUsername = typeof raw.username === 'string' ? raw.username.trim() : '';
+    if (!cleanUsername) continue;
+    const cleanId = (typeof raw.id === 'string' && raw.id.trim()) || key;
+    const cleanEmail = typeof raw.email === 'string' ? raw.email.trim() : '';
+    result.push({
+      ...raw,
+      id: cleanId,
+      username: cleanUsername,
+      email: cleanEmail,
+      dbKey: key,
+    });
+  }
+  return result;
+}
+
+async function findStoredUserById(userId: string): Promise<NormalizedStoredUser | null> {
+  const cleanId = userId.trim();
+  if (!cleanId) return null;
+  const direct = await fbGet<StoredAppUser>(`app_users/${cleanId}`);
+  if (direct && typeof direct === 'object' && typeof direct.username === 'string' && direct.username.trim()) {
+    return {
+      ...direct,
+      id: (typeof direct.id === 'string' && direct.id.trim()) || cleanId,
+      username: direct.username.trim(),
+      email: typeof direct.email === 'string' ? direct.email.trim() : '',
+      dbKey: cleanId,
+    };
+  }
+  const usersObj = await fbGet<Record<string, StoredAppUser>>('app_users');
+  return listStoredUsers(usersObj).find((u) => u.id === cleanId || u.dbKey === cleanId) || null;
 }
 
 function hashPassword(password: string): string {
@@ -158,13 +252,18 @@ function hashPassword(password: string): string {
 }
 
 function verifyPasswordHash(password: string, storedHash: string): boolean {
-  const parts = storedHash.split('$');
-  if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
-  const [, salt, hashHex] = parts;
-  const derivedBuf = crypto.scryptSync(password, salt, 64);
-  const expectedBuf = Buffer.from(hashHex, 'hex');
-  if (derivedBuf.length !== expectedBuf.length) return false;
-  return crypto.timingSafeEqual(derivedBuf, expectedBuf);
+  try {
+    const parts = storedHash.split('$');
+    if (parts.length !== 3 || parts[0] !== 'scrypt') return false;
+    const [, salt, hashHex] = parts;
+    if (!salt || !hashHex) return false;
+    const derivedBuf = crypto.scryptSync(password, salt, 64);
+    const expectedBuf = Buffer.from(hashHex, 'hex');
+    if (derivedBuf.length !== expectedBuf.length) return false;
+    return crypto.timingSafeEqual(derivedBuf, expectedBuf);
+  } catch {
+    return false;
+  }
 }
 
 function timingSafeStringEqual(a: string, b: string): boolean {
@@ -174,15 +273,19 @@ function timingSafeStringEqual(a: string, b: string): boolean {
   return crypto.timingSafeEqual(aBuf, bBuf);
 }
 
-async function verifyAndUpgradeUserPassword(user: StoredAppUser, plainPassword: string): Promise<boolean> {
-  if (user.passwordHash) {
+async function verifyAndUpgradeUserPassword(
+  user: StoredAppUser & { dbKey?: string },
+  plainPassword: string
+): Promise<boolean> {
+  const dbKey = user.dbKey || user.id;
+  if (typeof user.passwordHash === 'string' && user.passwordHash.startsWith('scrypt$')) {
     return verifyPasswordHash(plainPassword, user.passwordHash);
   }
   if (typeof user.password === 'string' && user.password.length > 0) {
     const matched = timingSafeStringEqual(plainPassword, user.password);
     if (matched) {
       const upgradedHash = hashPassword(plainPassword);
-      await fbPatch(`app_users/${user.id}`, {
+      await fbPatch(`app_users/${dbKey}`, {
         passwordHash: upgradedHash,
         password: null,
       }).catch(() => { /* ignore */ });
@@ -1356,7 +1459,7 @@ async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextF
   }
   try {
     const [userRecord, sessionRecord] = await Promise.all([
-      fbGet<StoredAppUser>(`app_users/${payload.uid}`),
+      findStoredUserById(payload.uid),
       payload.sid ? fbGet<AdminSessionActivity>(`admin_logins/${payload.sid}`) : Promise.resolve(null),
     ]);
 
@@ -1364,7 +1467,8 @@ async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextF
       res.status(401).json({ error: 'Your account access was removed by the Administrator.' });
       return;
     }
-    if (userRecord.role !== 'admin' && userRecord.status !== 'active') {
+    const effectiveStatus = userRecord.status || 'active';
+    if (userRecord.role !== 'admin' && effectiveStatus !== 'active') {
       res.status(401).json({ error: 'Your account is deactivated. Contact the Administrator.' });
       return;
     }
@@ -1476,6 +1580,13 @@ async function resolveRosterForCourse(params: {
 
 export function createApiApp(): express.Express {
   const app = express();
+  app.use((req: Request, _res: Response, next: NextFunction) => {
+    const rawReq = req as Request & { _body?: boolean };
+    if (req.body !== undefined && rawReq._body === undefined) {
+      rawReq._body = true;
+    }
+    next();
+  });
   app.use(express.json({ limit: '5mb' }));
 
   // Ensure admin record and runtime HMAC secret exist
@@ -1513,7 +1624,7 @@ export function createApiApp(): express.Express {
 
       await ensureAdminUserExists();
       const usersObj = (await fbGet<Record<string, StoredAppUser>>('app_users')) || {};
-      const allUsers = Object.values(usersObj).filter((u) => u && u.id && u.username);
+      const allUsers = listStoredUsers(usersObj);
 
       const matched = allUsers.find(
         (u) =>
@@ -1533,7 +1644,8 @@ export function createApiApp(): express.Express {
       }
 
       const role: 'admin' | 'lecturer' = matched.username.toLowerCase() === 'admin' ? 'admin' : matched.role || 'lecturer';
-      if (matched.status === 'pending' && role !== 'admin') {
+      const effectiveStatus = matched.status || 'active';
+      if (effectiveStatus === 'pending' && role !== 'admin') {
         res.status(403).json({
           success: false,
           message:
@@ -1541,7 +1653,7 @@ export function createApiApp(): express.Express {
         });
         return;
       }
-      if (matched.status === 'approved_pending_pin' && role !== 'admin') {
+      if (effectiveStatus === 'approved_pending_pin' && role !== 'admin') {
         const challengeToken = await signPinChallengeToken(matched.id);
         res.status(403).json({
           success: false,
@@ -1550,6 +1662,13 @@ export function createApiApp(): express.Express {
           challengeToken,
           message:
             'Your account has been approved! Enter the 6-digit Activation PIN sent to your email to complete activation.',
+        });
+        return;
+      }
+      if (effectiveStatus !== 'active' && role !== 'admin') {
+        res.status(403).json({
+          success: false,
+          message: 'Your account is currently deactivated. Contact the Administrator.',
         });
         return;
       }
@@ -1571,7 +1690,11 @@ export function createApiApp(): express.Express {
 
       await Promise.all([
         fbPut(`admin_logins/${sessionId}`, newSession),
-        fbPatch(`app_users/${matched.id}`, { lastLoginAt: now }),
+        fbPatch(`app_users/${matched.dbKey}`, {
+          lastLoginAt: now,
+          ...(matched.status ? {} : { status: 'active' }),
+          ...(matched.id ? { id: matched.id } : {}),
+        }),
       ]);
 
       const token = await signSessionToken({
@@ -1589,8 +1712,9 @@ export function createApiApp(): express.Express {
         user: sanitizeUser({ ...matched, role }),
         session: newSession,
       });
-    } catch {
-      res.status(500).json({ success: false, message: 'Server error during sign in.' });
+    } catch (err: unknown) {
+      const formatted = formatAuthServerError(err, 'Server error during sign in.');
+      res.status(formatted.status).json({ success: false, message: formatted.message });
     }
   });
 
@@ -1611,7 +1735,7 @@ export function createApiApp(): express.Express {
       }
 
       const usersObj = (await fbGet<Record<string, StoredAppUser>>('app_users')) || {};
-      const latestUsers = Object.values(usersObj).filter((u) => u && u.id && u.username);
+      const latestUsers = listStoredUsers(usersObj);
 
       if (latestUsers.some((u) => u.username.toLowerCase() === cleanUser.toLowerCase())) {
         res.status(409).json({ success: false, message: 'Username already exists.' });
@@ -1674,8 +1798,9 @@ export function createApiApp(): express.Express {
         message:
           'Account created! Once Admin approves your request, a 6-digit Activation PIN will be emailed to you to complete activation.',
       });
-    } catch {
-      res.status(500).json({ success: false, message: 'Failed to save user registration to cloud.' });
+    } catch (err: unknown) {
+      const formatted = formatAuthServerError(err, 'Failed to save user registration to cloud.');
+      res.status(formatted.status).json({ success: false, message: formatted.message });
     }
   });
 
@@ -1694,11 +1819,8 @@ export function createApiApp(): express.Express {
       }
 
       const usersObj = (await fbGet<Record<string, StoredAppUser>>('app_users')) || {};
-      const userRecord = Object.values(usersObj).find(
-        (u) =>
-          u &&
-          u.id &&
-          (u.username?.toLowerCase() === lookup || (u.email && u.email.toLowerCase() === lookup))
+      const userRecord = listStoredUsers(usersObj).find(
+        (u) => u.username.toLowerCase() === lookup || (u.email && u.email.toLowerCase() === lookup)
       );
 
       if (!userRecord || !userRecord.id) {
@@ -1733,7 +1855,7 @@ export function createApiApp(): express.Express {
       if (!userRecord.activationPin || !timingSafeStringEqual(rawPin, userRecord.activationPin)) {
         const nextAttempts = (userRecord.pinFailedAttempts || 0) + 1;
         if (nextAttempts >= MAX_PIN_FAILED_ATTEMPTS) {
-          await fbPatch(`app_users/${userRecord.id}`, {
+          await fbPatch(`app_users/${userRecord.dbKey}`, {
             pinFailedAttempts: nextAttempts,
             activationPin: null,
             activationExpiresAt: null,
@@ -1744,7 +1866,7 @@ export function createApiApp(): express.Express {
           });
           return;
         }
-        await fbPatch(`app_users/${userRecord.id}`, {
+        await fbPatch(`app_users/${userRecord.dbKey}`, {
           pinFailedAttempts: nextAttempts,
         }).catch(() => { /* ignore */ });
         res.status(403).json({
@@ -1765,7 +1887,7 @@ export function createApiApp(): express.Express {
       const challenge = challengeToken ? await verifyPinChallengeToken(challengeToken) : null;
       const canAutoSignIn = Boolean(challenge && challenge.uid === userRecord.id);
 
-      await fbPatch(`app_users/${userRecord.id}`, {
+      await fbPatch(`app_users/${userRecord.dbKey}`, {
         status: 'active',
         activatedAt: now,
         activationPin: null,
@@ -1817,8 +1939,9 @@ export function createApiApp(): express.Express {
         success: true,
         message: `Account "${userRecord.username}" activated! You can now sign in.`,
       });
-    } catch {
-      res.status(500).json({ success: false, message: 'Server error while verifying activation PIN.' });
+    } catch (err: unknown) {
+      const formatted = formatAuthServerError(err, 'Server error while verifying activation PIN.');
+      res.status(formatted.status).json({ success: false, message: formatted.message });
     }
   });
 
@@ -2328,9 +2451,7 @@ export function createApiApp(): express.Express {
             )
       ).sort((a, b) => b.timestamp - a.timestamp);
 
-      const allUserRecords = usersObj && typeof usersObj === 'object'
-        ? Object.values(usersObj).filter((u) => u && u.id && u.username)
-        : [];
+      const allUserRecords = listStoredUsers(usersObj);
 
       const coLecturerOptions: CollaboratorOption[] = allUserRecords
         .filter((u) => (u.status || 'active') === 'active')
@@ -2382,7 +2503,7 @@ export function createApiApp(): express.Express {
         user: { id: auth.uid, username: auth.username, role: auth.role },
         config: {
           scriptUrl: auth.role === 'admin' ? cfg.scriptUrl : '',
-          databaseUrl: auth.role === 'admin' ? FIREBASE_DB_URL : '',
+          databaseUrl: auth.role === 'admin' ? getFirebaseDbUrl() : '',
           integrationType: cfg.integrationType,
           adminEmail: auth.role === 'admin' ? cfg.adminEmail : '',
           emailDelivery: auth.role === 'admin' ? getEmailDeliveryStatus(cfg.scriptUrl) : undefined,
@@ -4175,7 +4296,7 @@ export function createApiApp(): express.Express {
 
   app.post('/api/admin/users/:id/activate', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const userId = String(req.params.id || '').trim();
-    const userRecord = await fbGet<StoredAppUser>(`app_users/${userId}`);
+    const userRecord = await findStoredUserById(userId);
     if (!userRecord || !userRecord.id) {
       res.status(404).json({ success: false, error: 'User not found.' });
       return;
@@ -4194,7 +4315,7 @@ export function createApiApp(): express.Express {
     const pin = generateActivationPin();
     const activationExpiresAt = now + ACTIVATION_PIN_EXPIRY_MS;
 
-    await fbPatch(`app_users/${userId}`, {
+    await fbPatch(`app_users/${userRecord.dbKey}`, {
       status: 'approved_pending_pin',
       activationPin: pin,
       pinFailedAttempts: 0,
@@ -4248,14 +4369,55 @@ export function createApiApp(): express.Express {
     });
   });
 
+  app.post('/api/admin/users/:id/reset-password', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    const userId = String(req.params.id || '').trim();
+    const newPassword = String(req.body?.newPassword || '');
+    const activateAccount = Boolean(req.body?.activateAccount);
+    if (newPassword.trim().length < 4) {
+      res.status(400).json({ success: false, error: 'New password must be at least 4 characters.' });
+      return;
+    }
+    const target = await findStoredUserById(userId);
+    if (!target || !target.id) {
+      res.status(404).json({ success: false, error: 'User not found.' });
+      return;
+    }
+    if (target.role === 'admin' || target.username.toLowerCase() === 'admin') {
+      res.status(400).json({ success: false, error: 'Cannot reset protected admin account here.' });
+      return;
+    }
+    const now = Date.now();
+    const shouldActivate = activateAccount || !target.status;
+    await fbPatch(`app_users/${target.dbKey}`, {
+      id: target.id,
+      passwordHash: hashPassword(newPassword),
+      password: null,
+      pinFailedAttempts: null,
+      ...(shouldActivate
+        ? {
+            status: 'active',
+            activatedAt: target.activatedAt || now,
+            approvedAt: target.approvedAt || now,
+            activationPin: null,
+            activationExpiresAt: null,
+          }
+        : {}),
+    });
+    res.json({
+      success: true,
+      status: shouldActivate ? 'active' : target.status,
+      activatedAt: shouldActivate ? (target.activatedAt || now) : target.activatedAt,
+    });
+  });
+
   app.delete('/api/admin/users/:id', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const userId = String(req.params.id || '').trim();
-    const target = await fbGet<StoredAppUser>(`app_users/${userId}`);
+    const target = await findStoredUserById(userId);
     if (!target || target.role === 'admin' || target.username.toLowerCase() === 'admin') {
       res.status(400).json({ success: false, error: 'Cannot delete admin user.' });
       return;
     }
-    await fbDelete(`app_users/${userId}`);
+    await fbDelete(`app_users/${target.dbKey}`);
     const sessionsObj = (await fbGet<Record<string, AdminSessionActivity>>('admin_logins')) || {};
     const matching = Object.values(sessionsObj).filter(
       (s) => s && s.adminName?.toLowerCase() === target.username.toLowerCase() && s.status === 'active'
@@ -4274,7 +4436,7 @@ export function createApiApp(): express.Express {
 
   app.post('/api/admin/users/:id/resend-activation', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const userId = String(req.params.id || '').trim();
-    const userRecord = await fbGet<StoredAppUser>(`app_users/${userId}`);
+    const userRecord = await findStoredUserById(userId);
     if (!userRecord || !userRecord.id) {
       res.status(404).json({ sent: false, error: 'User not found.' });
       return;
@@ -4286,7 +4448,7 @@ export function createApiApp(): express.Express {
     const now = Date.now();
     const pin = generateActivationPin();
     const activationExpiresAt = now + ACTIVATION_PIN_EXPIRY_MS;
-    await fbPatch(`app_users/${userId}`, {
+    await fbPatch(`app_users/${userRecord.dbKey}`, {
       status: 'approved_pending_pin',
       activationPin: pin,
       pinFailedAttempts: 0,
