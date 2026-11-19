@@ -22,20 +22,18 @@ const ACTIVATION_PIN_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
 const FIREBASE_DB_URL = (
   process.env.FIREBASE_DATABASE_URL ||
-  'https://smart-attendance-system-c0a9b-default-rtdb.asia-southeast1.firebasedatabase.app'
+  'https://gen-lang-client-0701481146-default-rtdb.asia-southeast1.firebasedatabase.app'
 ).replace(/\/+$/, '');
 
-const FIREBASE_DB_SECRET =
-  process.env.FIREBASE_DATABASE_SECRET ||
-  'Ljz9cYejOtpU83Z6h1wdZdvK1kjpRLZ4haMlkYO1';
+const FIREBASE_DB_SECRET = (process.env.FIREBASE_DATABASE_SECRET || '').trim();
 
-const AUTH_SECRET =
-  process.env.AUTH_SECRET ||
-  crypto.createHash('sha256').update(`smart-attendance-hmac:${FIREBASE_DB_SECRET}`).digest('hex');
+let resolvedAuthSecret: string | null = (process.env.AUTH_SECRET || '').trim() || null;
+let authSecretPromise: Promise<string> | null = null;
 
 const DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || 'adminscm';
 const DEFAULT_SCRIPT_URL =
   'https://script.google.com/macros/s/AKfycbwbjXTrbFPRqVA0I-RGc1rV7K7eZ_CkgQujSBVtOtvjDCW1GJYAkxiVlXJzAB_-R_CaLA/exec';
+const MAX_PIN_FAILED_ATTEMPTS = 5;
 
 type IntegrationType = 'google_sheets' | 'airtable' | 'firebase';
 
@@ -43,6 +41,7 @@ interface StoredAppUser extends Omit<AppUser, 'password'> {
   password?: string;
   passwordHash?: string;
   activationPin?: string;
+  pinFailedAttempts?: number;
 }
 
 const generateActivationPin = (): string => crypto.randomInt(100000, 1000000).toString();
@@ -81,8 +80,38 @@ const getSessionDateId = (): string => new Date().toISOString().slice(0, 10);
 
 const buildDbUrl = (dbPath: string): string => {
   const cleanPath = dbPath.replace(/^\/+/, '');
-  return `${FIREBASE_DB_URL}/${cleanPath}.json?auth=${FIREBASE_DB_SECRET}&_ts=${Date.now()}`;
+  const params = new URLSearchParams();
+  if (FIREBASE_DB_SECRET) {
+    params.set('auth', FIREBASE_DB_SECRET);
+  }
+  params.set('_ts', String(Date.now()));
+  return `${FIREBASE_DB_URL}/${cleanPath}.json?${params.toString()}`;
 };
+
+async function getAuthSecret(): Promise<string> {
+  if (resolvedAuthSecret) return resolvedAuthSecret;
+  if (authSecretPromise) return authSecretPromise;
+  authSecretPromise = (async () => {
+    try {
+      const stored = await fbGet<string>('app_config/_auth_hmac_secret');
+      if (typeof stored === 'string' && stored.trim().length >= 32) {
+        resolvedAuthSecret = stored.trim();
+        return resolvedAuthSecret;
+      }
+    } catch {
+      // Fall through and generate a random runtime secret
+    }
+    const generated = crypto.randomBytes(32).toString('hex');
+    resolvedAuthSecret = generated;
+    await fbPut('app_config/_auth_hmac_secret', generated).catch(() => { /* ignore */ });
+    return generated;
+  })();
+  try {
+    return await authSecretPromise;
+  } finally {
+    authSecretPromise = null;
+  }
+}
 
 async function fbGet<T>(dbPath: string): Promise<T | null> {
   const res = await fetch(buildDbUrl(dbPath), { cache: 'no-store' });
@@ -163,17 +192,19 @@ async function verifyAndUpgradeUserPassword(user: StoredAppUser, plainPassword: 
   return false;
 }
 
-function signSessionToken(payload: AuthTokenPayload): string {
+async function signSessionToken(payload: AuthTokenPayload): Promise<string> {
+  const secret = await getAuthSecret();
   const encodedPayload = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-  const signature = crypto.createHmac('sha256', AUTH_SECRET).update(encodedPayload).digest('base64url');
+  const signature = crypto.createHmac('sha256', secret).update(encodedPayload).digest('base64url');
   return `${encodedPayload}.${signature}`;
 }
 
-function verifySessionToken(token: string): AuthTokenPayload | null {
+async function verifySessionToken(token: string): Promise<AuthTokenPayload | null> {
   const parts = token.split('.');
   if (parts.length !== 2) return null;
   const [encodedPayload, signature] = parts;
-  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(encodedPayload).digest('base64url');
+  const secret = await getAuthSecret();
+  const expectedSig = crypto.createHmac('sha256', secret).update(encodedPayload).digest('base64url');
   if (!timingSafeStringEqual(signature, expectedSig)) return null;
   try {
     const parsed = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8')) as AuthTokenPayload;
@@ -194,7 +225,7 @@ interface PinChallengePayload {
   exp: number;
 }
 
-function signPinChallengeToken(uid: string): string {
+async function signPinChallengeToken(uid: string): Promise<string> {
   const now = Date.now();
   const payload: PinChallengePayload = {
     purpose: 'pin_activation',
@@ -202,16 +233,18 @@ function signPinChallengeToken(uid: string): string {
     iat: now,
     exp: now + PIN_CHALLENGE_TTL_MS,
   };
+  const secret = await getAuthSecret();
   const encodedPayload = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-  const signature = crypto.createHmac('sha256', AUTH_SECRET).update(encodedPayload).digest('base64url');
+  const signature = crypto.createHmac('sha256', secret).update(encodedPayload).digest('base64url');
   return `${encodedPayload}.${signature}`;
 }
 
-function verifyPinChallengeToken(token: string): PinChallengePayload | null {
+async function verifyPinChallengeToken(token: string): Promise<PinChallengePayload | null> {
   const parts = token.split('.');
   if (parts.length !== 2) return null;
   const [encodedPayload, signature] = parts;
-  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(encodedPayload).digest('base64url');
+  const secret = await getAuthSecret();
+  const expectedSig = crypto.createHmac('sha256', secret).update(encodedPayload).digest('base64url');
   if (!timingSafeStringEqual(signature, expectedSig)) return null;
   try {
     const parsed = JSON.parse(Buffer.from(encodedPayload, 'base64url').toString('utf8')) as PinChallengePayload;
@@ -260,13 +293,53 @@ interface ClassroomPinConfig {
 
 const activePinCache = new Map<string, ClassroomPinConfig>();
 const usedScanNonces = new Map<string, number>();
+let lastDbMaintenanceAt = 0;
 
 function pruneUsedScanNonces(now: number): void {
-  if (usedScanNonces.size < 200) return;
-  for (const [nonce, exp] of usedScanNonces.entries()) {
-    if (now > exp) {
-      usedScanNonces.delete(nonce);
+  if (usedScanNonces.size >= 200) {
+    for (const [nonce, exp] of usedScanNonces.entries()) {
+      if (now > exp) {
+        usedScanNonces.delete(nonce);
+      }
     }
+  }
+
+  if (now - lastDbMaintenanceAt > 10 * 60 * 1000) {
+    lastDbMaintenanceAt = now;
+    const todayPrefix = `${getSessionDateId()}_`;
+    void (async () => {
+      try {
+        const [noncesObj, pinsObj] = await Promise.all([
+          fbGet<Record<string, number>>('used_qr_nonces'),
+          fbGet<Record<string, ClassroomPinConfig>>('classroom_pins'),
+        ]);
+        if (noncesObj && typeof noncesObj === 'object') {
+          const expiredPatch: Record<string, null> = {};
+          for (const [k, exp] of Object.entries(noncesObj)) {
+            if (typeof exp === 'number' && now > exp) {
+              expiredPatch[k] = null;
+            }
+          }
+          if (Object.keys(expiredPatch).length > 0) {
+            await fbPatch('used_qr_nonces', expiredPatch).catch(() => { /* ignore */ });
+          }
+        }
+        if (pinsObj && typeof pinsObj === 'object') {
+          const oldPinPatch: Record<string, null> = {};
+          for (const k of Object.keys(pinsObj)) {
+            if (/^\d{4}-\d{2}-\d{2}_/.test(k) && !k.startsWith(todayPrefix)) {
+              oldPinPatch[k] = null;
+              activePinCache.delete(k);
+            }
+          }
+          if (Object.keys(oldPinPatch).length > 0) {
+            await fbPatch('classroom_pins', oldPinPatch).catch(() => { /* ignore */ });
+          }
+        }
+      } catch {
+        // Ignore background cleanup errors
+      }
+    })();
   }
 }
 
@@ -274,9 +347,42 @@ function generateClassroomPin(): string {
   return String(crypto.randomInt(1000, 10000));
 }
 
-function buildPinSessionKey(courseName: string): string {
-  const clean = (courseName || 'General Session').trim() || 'General Session';
-  return toFirebaseKey(`${getSessionDateId()}_${sanitizeCoursePath(clean)}`);
+function buildCourseSessionSegment(params: {
+  courseName?: string;
+  courseId?: string;
+  matchedCourse?: CourseProfile | null;
+}): string {
+  const course = params.matchedCourse || null;
+  if (course) {
+    const baseKey = toCourseKey(course.courseName);
+    return course.id && course.id !== baseKey
+      ? sanitizeCoursePath(course.id)
+      : sanitizeCoursePath(course.courseName);
+  }
+  const cleanId = String(params.courseId || '').trim();
+  if (cleanId) {
+    return sanitizeCoursePath(cleanId);
+  }
+  const cleanName = String(params.courseName || '').trim();
+  return cleanName ? sanitizeCoursePath(cleanName) : '';
+}
+
+function buildPinSessionKey(params: {
+  courseName?: string;
+  courseId?: string;
+  matchedCourse?: CourseProfile | null;
+}): string {
+  const seg = buildCourseSessionSegment(params) || sanitizeCoursePath('General Session');
+  return toFirebaseKey(`${getSessionDateId()}_${seg}`);
+}
+
+function buildLiveSessionPath(params: {
+  courseName?: string;
+  courseId?: string;
+  matchedCourse?: CourseProfile | null;
+}): string {
+  const seg = buildCourseSessionSegment(params);
+  return seg ? `${getSessionDateId()}_${seg}` : getSessionDateId();
 }
 
 async function readPinConfig(sessionKey: string): Promise<ClassroomPinConfig | null> {
@@ -322,17 +428,19 @@ async function getOrUpdatePinConfig(params: {
   return existing;
 }
 
-function signQrToken(payload: QrTokenPayload): string {
+async function signQrToken(payload: QrTokenPayload): Promise<string> {
+  const secret = await getAuthSecret();
   const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(`qr:${encoded}`).digest('base64url');
+  const sig = crypto.createHmac('sha256', secret).update(`qr:${encoded}`).digest('base64url');
   return `${encoded}.${sig}`;
 }
 
-function verifyQrToken(token: string): QrTokenPayload | null {
+async function verifyQrToken(token: string): Promise<QrTokenPayload | null> {
   const parts = String(token || '').trim().split('.');
   if (parts.length !== 2) return null;
   const [encoded, sig] = parts;
-  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(`qr:${encoded}`).digest('base64url');
+  const secret = await getAuthSecret();
+  const expectedSig = crypto.createHmac('sha256', secret).update(`qr:${encoded}`).digest('base64url');
   if (!timingSafeStringEqual(sig, expectedSig)) return null;
   try {
     const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as QrTokenPayload;
@@ -343,17 +451,19 @@ function verifyQrToken(token: string): QrTokenPayload | null {
   }
 }
 
-function signCheckinGrant(payload: CheckinGrantPayload): string {
+async function signCheckinGrant(payload: CheckinGrantPayload): Promise<string> {
+  const secret = await getAuthSecret();
   const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-  const sig = crypto.createHmac('sha256', AUTH_SECRET).update(`grant:${encoded}`).digest('base64url');
+  const sig = crypto.createHmac('sha256', secret).update(`grant:${encoded}`).digest('base64url');
   return `${encoded}.${sig}`;
 }
 
-function verifyCheckinGrant(token: string): CheckinGrantPayload | null {
+async function verifyCheckinGrant(token: string): Promise<CheckinGrantPayload | null> {
   const parts = String(token || '').trim().split('.');
   if (parts.length !== 2) return null;
   const [encoded, sig] = parts;
-  const expectedSig = crypto.createHmac('sha256', AUTH_SECRET).update(`grant:${encoded}`).digest('base64url');
+  const secret = await getAuthSecret();
+  const expectedSig = crypto.createHmac('sha256', secret).update(`grant:${encoded}`).digest('base64url');
   if (!timingSafeStringEqual(sig, expectedSig)) return null;
   try {
     const parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as CheckinGrantPayload;
@@ -403,6 +513,46 @@ function canAccessCourse(course: CourseProfile, auth: AuthTokenPayload): boolean
     return true;
   }
   return false;
+}
+
+function findCoursesMatching(
+  coursesObj: Record<string, CourseProfile> | null | undefined,
+  params: { courseId?: string; courseName?: string }
+): CourseProfile[] {
+  if (!coursesObj || typeof coursesObj !== 'object') return [];
+  const allCourses = Object.values(coursesObj)
+    .filter((c): c is CourseProfile => Boolean(c && c.id && c.courseName))
+    .map(normalizeCourse);
+  const cleanId = String(params.courseId || '').trim();
+  if (cleanId) {
+    const byId = allCourses.find((c) => c.id === cleanId);
+    if (byId) return [byId];
+  }
+  const cleanName = String(params.courseName || '').trim();
+  if (cleanName) {
+    return allCourses.filter((c) => isSameCourse(c, cleanName));
+  }
+  return [];
+}
+
+function resolveCourseAccess(params: {
+  coursesObj: Record<string, CourseProfile> | null | undefined;
+  courseId?: string;
+  courseName?: string;
+  auth: AuthTokenPayload;
+}): { allowed: boolean; course: CourseProfile | null } {
+  const matches = findCoursesMatching(params.coursesObj, {
+    courseId: params.courseId,
+    courseName: params.courseName,
+  });
+  if (matches.length === 0) {
+    return { allowed: true, course: null };
+  }
+  const accessible = matches.find((c) => canAccessCourse(c, params.auth)) || null;
+  if (!accessible) {
+    return { allowed: false, course: matches[0] };
+  }
+  return { allowed: true, course: accessible };
 }
 
 function isDirectOwnerOrShared(course: CourseProfile, auth: AuthTokenPayload): boolean {
@@ -597,32 +747,44 @@ function formatCloudPayload(r: Student, fallbackWeek = 'W1') {
   };
 }
 
-async function upsertAttendanceHistory(incoming: Student[]): Promise<void> {
-  if (!Array.isArray(incoming) || incoming.length === 0) return;
-  const histRaw = await fbGet<Student[] | Record<string, Student>>('attendance_history');
-  const prevHist: Student[] = Array.isArray(histRaw)
-    ? histRaw.filter((h) => Boolean(h && h.studentId && h.timestamp))
-    : histRaw && typeof histRaw === 'object'
-      ? Object.values(histRaw).filter((h) => Boolean(h && h.studentId && h.timestamp))
-      : [];
-
-  const deduped = new Map<string, Student>();
-  for (const rec of [...incoming, ...prevHist]) {
-    if (!rec || !rec.studentId || !rec.timestamp) continue;
-    const key = `${rec.studentId.trim().toUpperCase()}__${rec.timestamp}`;
-    if (!deduped.has(key)) {
-      deduped.set(key, rec);
-    }
-  }
-
-  const nextHist = Array.from(deduped.values()).sort((a, b) => b.timestamp - a.timestamp);
-  await fbPut('attendance_history', nextHist).catch(() => { /* ignore */ });
+function toAttendanceHistoryKey(rec: Pick<Student, 'studentId' | 'timestamp'>): string {
+  return toFirebaseKey(`${normalizeStudentId(rec.studentId || '')}__${rec.timestamp}`);
 }
 
-async function postToGoogleScript(scriptUrl: string, bodyPayload: unknown): Promise<{ ok: boolean; json?: Record<string, unknown> }> {
+async function readAttendanceHistoryEntries(): Promise<Array<{ key: string; record: Student }>> {
+  const histRaw = await fbGet<Student[] | Record<string, Student>>('attendance_history');
+  if (!histRaw) return [];
+  const entries = Array.isArray(histRaw)
+    ? histRaw.map((record, idx) => [String(idx), record] as [string, Student])
+    : typeof histRaw === 'object'
+      ? Object.entries(histRaw)
+      : [];
+  return entries
+    .filter((entry): entry is [string, Student] => Boolean(entry[1] && entry[1].studentId && entry[1].timestamp))
+    .map(([key, record]) => ({ key, record }));
+}
+
+async function upsertAttendanceHistory(incoming: Student[]): Promise<void> {
+  if (!Array.isArray(incoming) || incoming.length === 0) return;
+  const patchMap: Record<string, Student> = {};
+  for (const rec of incoming) {
+    if (!rec || !rec.studentId || !rec.timestamp) continue;
+    patchMap[toAttendanceHistoryKey(rec)] = rec;
+  }
+  if (Object.keys(patchMap).length === 0) return;
+  await fbPatch('attendance_history', patchMap).catch(() => { /* ignore */ });
+}
+
+async function postToGoogleScript(
+  scriptUrl: string,
+  bodyPayload: unknown
+): Promise<{ ok: boolean; json?: Record<string, unknown>; error?: string }> {
   const cleanUrl = scriptUrl.trim();
-  if (!cleanUrl || !cleanUrl.startsWith('https://script.google.com/') || cleanUrl.endsWith('/dev')) {
-    return { ok: false };
+  if (!cleanUrl || cleanUrl === DEFAULT_SCRIPT_URL || !cleanUrl.startsWith('https://script.google.com/') || cleanUrl.endsWith('/dev')) {
+    return {
+      ok: false,
+      error: 'Google Apps Script /exec URL is not configured or points to a /dev test URL.',
+    };
   }
   try {
     const res = await fetch(cleanUrl, {
@@ -632,15 +794,23 @@ async function postToGoogleScript(scriptUrl: string, bodyPayload: unknown): Prom
       body: JSON.stringify(bodyPayload),
     });
     const text = await res.text();
-    if (!res.ok || text.trim().startsWith('<')) return { ok: false };
+    if (!res.ok || text.trim().startsWith('<')) {
+      return {
+        ok: false,
+        error: `Apps Script returned HTTP ${res.status} or HTML instead of JSON. Check Web App access = Anyone.`,
+      };
+    }
     try {
       const parsed = JSON.parse(text) as Record<string, unknown>;
       return { ok: true, json: parsed };
     } catch {
       return { ok: true };
     }
-  } catch {
-    return { ok: false };
+  } catch (err: unknown) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Failed to reach Google Apps Script URL.',
+    };
   }
 }
 
@@ -832,7 +1002,7 @@ async function dispatchSignupApprovalEmails(params: {
     return {
       emailSent: Boolean(userRes.ok || adminEmailSent),
       provider: status.provider,
-      error: userRes.error,
+      error: userRes.error || (!adminEmailSent ? 'Could not deliver signup approval emails.' : undefined),
     };
   }
 
@@ -844,10 +1014,13 @@ async function dispatchSignupApprovalEmails(params: {
     expiresAtText: '',
     adminEmail: params.cfg.adminEmail,
   });
+  const ok = Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false);
   return {
-    emailSent: Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false),
+    emailSent: ok,
     provider: status.provider,
-    error: typeof emailRes.json?.error === 'string' ? emailRes.json.error : undefined,
+    error: !ok
+      ? (typeof emailRes.json?.error === 'string' ? emailRes.json.error : emailRes.error || 'Apps Script email failed.')
+      : undefined,
   };
 }
 
@@ -856,12 +1029,12 @@ async function dispatchDeleteRequestEmail(params: {
   userEmail: string;
   reason: string;
   cfg: { scriptUrl: string; adminEmail: string };
-}): Promise<{ emailSent: boolean; provider: EmailProviderType }> {
+}): Promise<{ emailSent: boolean; provider: EmailProviderType; error?: string }> {
   const status = getEmailDeliveryStatus(params.cfg.scriptUrl);
   if (status.provider === 'resend' || status.provider === 'smtp') {
     const targetAdmin = params.cfg.adminEmail || (process.env.EMAIL_FROM || '').trim() || (process.env.SMTP_USER || '').trim();
     if (!targetAdmin) {
-      return { emailSent: false, provider: status.provider };
+      return { emailSent: false, provider: status.provider, error: 'Admin notification email address is not set.' };
     }
     const safeUser = escapeHtml(params.username);
     const safeEmail = escapeHtml(params.userEmail || 'N/A');
@@ -880,7 +1053,7 @@ async function dispatchDeleteRequestEmail(params: {
         `<p style="color:#6b7280;font-size:12px;">Open the Admin Control Center in the app to review and remove this account.</p>` +
         `</div>`,
     });
-    return { emailSent: res.ok, provider: res.provider };
+    return { emailSent: res.ok, provider: res.provider, error: res.error };
   }
 
   const emailRes = await postToGoogleScript(params.cfg.scriptUrl, {
@@ -890,9 +1063,13 @@ async function dispatchDeleteRequestEmail(params: {
     reason: params.reason,
     adminEmail: params.cfg.adminEmail,
   });
+  const ok = Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false);
   return {
-    emailSent: Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false),
+    emailSent: ok,
     provider: status.provider,
+    error: !ok
+      ? (typeof emailRes.json?.error === 'string' ? emailRes.json.error : emailRes.error || 'Apps Script delete request email failed.')
+      : undefined,
   };
 }
 
@@ -949,11 +1126,116 @@ async function dispatchApprovalPinEmail(params: {
     expiresAtText: params.expiresAtText,
     adminEmail: params.cfg.adminEmail,
   });
+  const ok = Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false);
   return {
-    emailSent: Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false),
+    emailSent: ok,
     provider: status.provider,
-    error: typeof emailRes.json?.error === 'string' ? emailRes.json.error : undefined,
+    error: !ok
+      ? (typeof emailRes.json?.error === 'string' ? emailRes.json.error : emailRes.error || 'Apps Script PIN email failed.')
+      : undefined,
   };
+}
+
+async function createUserSystemNotification(params: {
+  userId: string;
+  type: UserNotification['type'];
+  title: string;
+  message: string;
+  courseName?: string;
+}): Promise<UserNotification | null> {
+  const cleanUid = String(params.userId || '').trim();
+  if (!cleanUid) return null;
+  const now = Date.now();
+  const notifId = `unotif_${now}_${crypto.randomBytes(3).toString('hex')}`;
+  const notif: UserNotification = {
+    id: notifId,
+    userId: cleanUid,
+    type: params.type,
+    title: params.title,
+    message: params.message,
+    createdAt: now,
+    read: false,
+    ...(params.courseName ? { courseName: params.courseName } : {}),
+  };
+  await fbPut(`user_notifications/${cleanUid}/${notifId}`, notif).catch(() => { /* ignore */ });
+  return notif;
+}
+
+async function createAdminAlertNotification(params: {
+  type: AdminNotification['type'];
+  userId?: string;
+  username?: string;
+  email?: string;
+  emailSent?: boolean;
+  message: string;
+  reason?: string;
+  courseName?: string;
+}): Promise<AdminNotification> {
+  const now = Date.now();
+  const notifId = `admalert_${now}_${crypto.randomBytes(3).toString('hex')}`;
+  const notif: AdminNotification = {
+    id: notifId,
+    type: params.type,
+    userId: params.userId || 'system',
+    username: params.username || 'System',
+    email: params.email || '',
+    createdAt: now,
+    read: false,
+    emailSent: Boolean(params.emailSent),
+    message: params.message,
+    ...(params.reason ? { reason: params.reason } : {}),
+    ...(params.courseName ? { courseName: params.courseName } : {}),
+  };
+  await fbPut(`admin_notifications/${notifId}`, notif).catch(() => { /* ignore */ });
+  return notif;
+}
+
+async function createEmailDeliveryFailureAlert(params: {
+  context: string;
+  targetEmail?: string;
+  username?: string;
+  userId?: string;
+  provider?: EmailProviderType;
+  error?: string;
+}): Promise<AdminNotification> {
+  const providerLabel =
+    params.provider === 'resend'
+      ? 'Resend API'
+      : params.provider === 'smtp'
+        ? 'SMTP'
+        : params.provider === 'apps_script'
+          ? 'Google Apps Script'
+          : 'Unconfigured Provider';
+  const targetLabel = params.targetEmail ? ` to ${params.targetEmail}` : '';
+  const detail = params.error ? ` — ${params.error}` : '';
+  return createAdminAlertNotification({
+    type: 'email_delivery_failure',
+    userId: params.userId || 'system',
+    username: params.username || 'System',
+    email: params.targetEmail || '',
+    emailSent: false,
+    reason: params.error || `Failed via ${providerLabel}`,
+    message: `Email delivery failed (${params.context}${targetLabel}) via ${providerLabel}${detail}`,
+  });
+}
+
+function resolveCourseSharedUserIds(entries: unknown, allUsers: StoredAppUser[]): string[] {
+  if (!Array.isArray(entries)) return [];
+  const resolved: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of entries) {
+    const token = String(raw || '').trim();
+    if (!token) continue;
+    const matched = allUsers.find(
+      (u) => u && u.id && (u.id === token || u.username.toLowerCase() === token.toLowerCase())
+    );
+    const finalId = matched ? matched.id : token;
+    if (!seen.has(finalId)) {
+      seen.add(finalId);
+      resolved.push(finalId);
+    }
+  }
+  return resolved;
 }
 
 async function createActivationNotifications(
@@ -1003,11 +1285,28 @@ async function createActivationNotifications(
             `<p style="color:#374151;font-size:14px;">Your Smart Attendance lecturer account is now active and ready to use.</p>` +
             `</div>`,
         });
-        if (userEmailRes.ok) emailSent = true;
+        if (userEmailRes.ok) {
+          emailSent = true;
+        } else {
+          await createEmailDeliveryFailureAlert({
+            context: 'Account Activated Confirmation Email',
+            targetEmail: userRecord.email,
+            username: userRecord.username,
+            userId: userRecord.id,
+            provider: status.provider,
+            error: userEmailRes.error || 'Failed to send activation confirmation email.',
+          });
+        }
       }
     }
-  } catch {
-    // Email confirmation is best-effort; in-system notifications still proceed
+  } catch (err: unknown) {
+    await createEmailDeliveryFailureAlert({
+      context: 'Account Activated Confirmation Email',
+      targetEmail: userRecord.email,
+      username: userRecord.username,
+      userId: userRecord.id,
+      error: err instanceof Error ? err.message : 'Unexpected email transport error.',
+    }).catch(() => { /* ignore */ });
   }
 
   const adminNotification: AdminNotification = {
@@ -1050,7 +1349,7 @@ async function requireAuth(req: AuthenticatedRequest, res: Response, next: NextF
     res.status(401).json({ error: 'Authentication required.' });
     return;
   }
-  const payload = verifySessionToken(token);
+  const payload = await verifySessionToken(token);
   if (!payload) {
     res.status(401).json({ error: 'Session expired or invalid. Please sign in again.' });
     return;
@@ -1100,6 +1399,7 @@ async function resolveRosterForCourse(params: {
   const cfg = await getAppConfig();
 
   // 1. Check Google Sheets if configured
+  let sheetTabMatched = false;
   if (
     cfg.integrationType === 'google_sheets' &&
     cfg.scriptUrl &&
@@ -1120,12 +1420,13 @@ async function resolveRosterForCourse(params: {
         };
         if (data?.success) {
           const sheetsArr = Array.isArray(data.sheets) ? data.sheets : [];
-          const targetUpper = cleanCourse.toUpperCase();
-          const matchedTab = targetUpper
-            ? sheetsArr.find((s) => String(s?.courseName || '').trim().toUpperCase() === targetUpper)
+          const targetNorm = normalizeCourseNameKey(cleanCourse);
+          const matchedTab = targetNorm
+            ? sheetsArr.find((s) => normalizeCourseNameKey(String(s?.courseName || '')) === targetNorm)
             : undefined;
+          if (matchedTab) sheetTabMatched = true;
           const rawStudents =
-            targetUpper && sheetsArr.length > 0
+            targetNorm && sheetsArr.length > 0
               ? matchedTab && Array.isArray(matchedTab.students)
                 ? matchedTab.students
                 : []
@@ -1155,20 +1456,19 @@ async function resolveRosterForCourse(params: {
   // 2. Check Firebase /courses
   const coursesObj = await fbGet<Record<string, CourseProfile>>('courses');
   if (coursesObj && typeof coursesObj === 'object') {
-    const allCourses = Object.values(coursesObj).filter((c) => c && c.id);
-    if (cleanId) {
-      const byId = allCourses.find((c) => c.id === cleanId);
-      if (byId && Array.isArray(byId.students) && byId.students.length > 0) {
-        return byId.students;
-      }
+    const matches = findCoursesMatching(coursesObj, { courseId: cleanId, courseName: cleanCourse });
+    if (matches.length > 0) {
+      const preferred = matches.find((c) => Array.isArray(c.students) && c.students.length > 0) || matches[0];
+      return Array.isArray(preferred.students) ? preferred.students : [];
     }
-    if (cleanCourse) {
-      const targetUpper = cleanCourse.toUpperCase();
-      const byName = allCourses.find((c) => c.courseName?.trim().toUpperCase() === targetUpper);
-      if (byName && Array.isArray(byName.students) && byName.students.length > 0) {
-        return byName.students;
-      }
-    }
+  }
+
+  if (sheetTabMatched) {
+    return [];
+  }
+
+  if (cleanCourse && normalizeCourseNameKey(cleanCourse) !== normalizeCourseNameKey('General Session')) {
+    return [];
   }
 
   return cfg.knownStudentsV2;
@@ -1178,26 +1478,23 @@ export function createApiApp(): express.Express {
   const app = express();
   app.use(express.json({ limit: '5mb' }));
 
-  // Ensure admin record exists with hashed password
+  // Ensure admin record and runtime HMAC secret exist
+  void getAuthSecret().catch(() => { /* ignore */ });
   void ensureAdminUserExists().catch((err: unknown) => {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn('Could not initialize admin record on boot:', msg);
   });
 
-  // 1. Public Config (no secrets)
+  // 1. Public Config (strictly non-secret flags)
   app.get('/api/config/public', async (_req: Request, res: Response) => {
     try {
       const cfg = await getAppConfig();
       res.json({
-        databaseUrl: FIREBASE_DB_URL,
-        scriptUrl: cfg.scriptUrl,
         integrationType: cfg.integrationType,
         adminEmailConfigured: Boolean(cfg.adminEmail),
       });
     } catch {
       res.json({
-        databaseUrl: FIREBASE_DB_URL,
-        scriptUrl: DEFAULT_SCRIPT_URL,
         integrationType: 'google_sheets',
         adminEmailConfigured: false,
       });
@@ -1245,11 +1542,12 @@ export function createApiApp(): express.Express {
         return;
       }
       if (matched.status === 'approved_pending_pin' && role !== 'admin') {
+        const challengeToken = await signPinChallengeToken(matched.id);
         res.status(403).json({
           success: false,
           requiresActivationPin: true,
           username: matched.username,
-          challengeToken: signPinChallengeToken(matched.id),
+          challengeToken,
           message:
             'Your account has been approved! Enter the 6-digit Activation PIN sent to your email to complete activation.',
         });
@@ -1276,7 +1574,7 @@ export function createApiApp(): express.Express {
         fbPatch(`app_users/${matched.id}`, { lastLoginAt: now }),
       ]);
 
-      const token = signSessionToken({
+      const token = await signSessionToken({
         uid: matched.id,
         username: matched.username,
         role,
@@ -1340,7 +1638,7 @@ export function createApiApp(): express.Express {
       await fbPut(`app_users/${userId}`, newUser);
 
       const cfg = await getAppConfig();
-      const { emailSent } = await dispatchSignupApprovalEmails({
+      const signupEmailRes = await dispatchSignupApprovalEmails({
         toEmail: cleanEmail,
         username: cleanUser,
         cfg,
@@ -1355,10 +1653,21 @@ export function createApiApp(): express.Express {
         email: cleanEmail,
         createdAt: now,
         read: false,
-        emailSent,
+        emailSent: signupEmailRes.emailSent,
         message: `${cleanUser} (${cleanEmail}) signed up and is waiting for Admin approval.`,
       };
       await fbPut(`admin_notifications/${notifId}`, notif).catch(() => { /* ignore */ });
+
+      if (!signupEmailRes.emailSent) {
+        await createEmailDeliveryFailureAlert({
+          context: 'New Signup Notification Email',
+          targetEmail: cleanEmail,
+          username: cleanUser,
+          userId,
+          provider: signupEmailRes.provider,
+          error: signupEmailRes.error,
+        });
+      }
 
       res.json({
         success: true,
@@ -1414,7 +1723,30 @@ export function createApiApp(): express.Express {
         });
         return;
       }
+      if ((userRecord.pinFailedAttempts || 0) >= MAX_PIN_FAILED_ATTEMPTS) {
+        res.status(429).json({
+          success: false,
+          message: 'Too many invalid PIN attempts. Ask the Administrator to resend a new Activation PIN.',
+        });
+        return;
+      }
       if (!userRecord.activationPin || !timingSafeStringEqual(rawPin, userRecord.activationPin)) {
+        const nextAttempts = (userRecord.pinFailedAttempts || 0) + 1;
+        if (nextAttempts >= MAX_PIN_FAILED_ATTEMPTS) {
+          await fbPatch(`app_users/${userRecord.id}`, {
+            pinFailedAttempts: nextAttempts,
+            activationPin: null,
+            activationExpiresAt: null,
+          }).catch(() => { /* ignore */ });
+          res.status(429).json({
+            success: false,
+            message: 'Too many invalid PIN attempts. This PIN has been invalidated; ask Admin to resend a new PIN.',
+          });
+          return;
+        }
+        await fbPatch(`app_users/${userRecord.id}`, {
+          pinFailedAttempts: nextAttempts,
+        }).catch(() => { /* ignore */ });
         res.status(403).json({
           success: false,
           message: 'Invalid Activation PIN. Please check the 6-digit PIN sent to your email.',
@@ -1430,7 +1762,7 @@ export function createApiApp(): express.Express {
       }
 
       const now = Date.now();
-      const challenge = challengeToken ? verifyPinChallengeToken(challengeToken) : null;
+      const challenge = challengeToken ? await verifyPinChallengeToken(challengeToken) : null;
       const canAutoSignIn = Boolean(challenge && challenge.uid === userRecord.id);
 
       await fbPatch(`app_users/${userRecord.id}`, {
@@ -1438,6 +1770,7 @@ export function createApiApp(): express.Express {
         activatedAt: now,
         activationPin: null,
         activationExpiresAt: null,
+        pinFailedAttempts: null,
         ...(canAutoSignIn ? { lastLoginAt: now } : {}),
       });
 
@@ -1461,7 +1794,7 @@ export function createApiApp(): express.Express {
         };
         await fbPut(`admin_logins/${sessionId}`, newSession);
 
-        const token = signSessionToken({
+        const token = await signSessionToken({
           uid: userRecord.id,
           username: userRecord.username,
           role,
@@ -1489,28 +1822,29 @@ export function createApiApp(): express.Express {
     }
   });
 
-  // 5. Auth: Account Deletion Request (from Login screen)
-  app.post('/api/auth/delete-request', async (req: Request, res: Response) => {
+  // 5. Auth: Account Deletion Request (Authenticated user requesting deletion of their own account)
+  app.post('/api/auth/delete-request', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const lookup = String(req.body?.usernameOrEmail || '').trim().toLowerCase();
+      const auth = req.auth!;
       const reason = String(req.body?.reason || 'Requested via app').trim();
-      if (!lookup) {
-        res.status(400).json({ success: false, message: 'Please enter your User Name or Email Address.' });
+      const requestedLookup = String(req.body?.usernameOrEmail || '').trim().toLowerCase();
+
+      const matched = await fbGet<StoredAppUser>(`app_users/${auth.uid}`);
+      if (!matched || !matched.id || matched.role === 'admin' || matched.username.toLowerCase() === 'admin') {
+        res.status(403).json({
+          success: false,
+          message: 'Only lecturer accounts can submit a deletion request.',
+        });
         return;
       }
-
-      const usersObj = (await fbGet<Record<string, StoredAppUser>>('app_users')) || {};
-      const matched = Object.values(usersObj).find(
-        (u) =>
-          u &&
-          u.id &&
-          (u.username?.toLowerCase() === lookup || (u.email && u.email.toLowerCase() === lookup))
-      );
-
-      if (!matched || matched.role === 'admin' || matched.username.toLowerCase() === 'admin') {
-        res.status(404).json({
+      if (
+        requestedLookup &&
+        requestedLookup !== matched.username.toLowerCase() &&
+        (!matched.email || requestedLookup !== matched.email.toLowerCase())
+      ) {
+        res.status(403).json({
           success: false,
-          message: 'No matching lecturer account found for that username or email.',
+          message: 'You can only request deletion for your own account.',
         });
         return;
       }
@@ -1522,7 +1856,7 @@ export function createApiApp(): express.Express {
       });
 
       const cfg = await getAppConfig();
-      const { emailSent } = await dispatchDeleteRequestEmail({
+      const delEmailRes = await dispatchDeleteRequestEmail({
         username: matched.username,
         userEmail: matched.email || '',
         reason,
@@ -1538,11 +1872,22 @@ export function createApiApp(): express.Express {
         email: matched.email || '',
         createdAt: now,
         read: false,
-        emailSent,
+        emailSent: delEmailRes.emailSent,
         reason,
         message: `${matched.username} (${matched.email || 'no email'}) requested account deletion: ${reason}`,
       };
       await fbPut(`admin_notifications/${notifId}`, notif);
+
+      if (!delEmailRes.emailSent) {
+        await createEmailDeliveryFailureAlert({
+          context: 'Account Deletion Request Email',
+          targetEmail: cfg.adminEmail || matched.email || '',
+          username: matched.username,
+          userId: matched.id,
+          provider: delEmailRes.provider,
+          error: delEmailRes.error,
+        });
+      }
 
       res.json({
         success: true,
@@ -1586,15 +1931,61 @@ export function createApiApp(): express.Express {
     res.json({ success: true });
   });
 
-  // 7. Public Student QR Check-in Endpoints
+  // 7. Scoped Student QR Check-in Endpoints (Requires Bearer Session OR Valid Signed Check-in Grant)
   app.get('/api/student/roster', async (req: Request, res: Response) => {
     try {
-      const courseName = String(req.query.course || '').trim();
-      const courseId = String(req.query.courseId || '').trim();
+      const authHeader = String(req.headers.authorization || '');
+      const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : '';
+      let authedUser: AuthTokenPayload | null = null;
+      if (bearerToken) {
+        const verified = await verifySessionToken(bearerToken);
+        if (verified) {
+          const userRecord = await fbGet<StoredAppUser>(`app_users/${verified.uid}`).catch(() => null);
+          if (userRecord && userRecord.id && (userRecord.role === 'admin' || userRecord.status === 'active')) {
+            authedUser = {
+              ...verified,
+              role: userRecord.username.toLowerCase() === 'admin' ? 'admin' : userRecord.role || verified.role,
+            };
+          }
+        }
+      }
+
+      const rawGrant = String(req.headers['x-checkin-token'] || req.query.checkinToken || '').trim();
+      const grant = rawGrant ? await verifyCheckinGrant(rawGrant) : null;
+
+      if (!authedUser && !grant) {
+        res.status(401).json({ success: false, error: 'Authentication or valid QR check-in token required.' });
+        return;
+      }
+
+      let courseName = String(req.query.course || '').trim();
+      let courseId = String(req.query.courseId || '').trim();
+
+      if (grant && !authedUser) {
+        if (
+          (courseName &&
+            grant.courseName &&
+            normalizeCourseNameKey(courseName) !== normalizeCourseNameKey(grant.courseName)) ||
+          (courseId && grant.courseId && courseId !== grant.courseId)
+        ) {
+          res.status(403).json({ success: false, error: 'Check-in token is not valid for this subject.' });
+          return;
+        }
+        courseName = grant.courseName || courseName;
+        courseId = grant.courseId || courseId;
+      } else if (authedUser && authedUser.role !== 'admin') {
+        const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
+        const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth: authedUser });
+        if (!access.allowed) {
+          res.status(403).json({ success: false, error: 'Access denied for this subject roster.' });
+          return;
+        }
+      }
+
       const students = await resolveRosterForCourse({ courseName, courseId });
       res.json({ success: true, students });
     } catch {
-      res.json({ success: true, students: PRE_REGISTERED_STUDENTS });
+      res.status(500).json({ success: false, error: 'Failed to load student roster.' });
     }
   });
 
@@ -1607,11 +1998,25 @@ export function createApiApp(): express.Express {
       const week = String(req.body?.week || 'W1').trim().toUpperCase() || 'W1';
       const requirePin = typeof req.body?.requirePin === 'boolean' ? req.body.requirePin : undefined;
       const rotatePin = Boolean(req.body?.rotatePin);
-      const sessionKey = buildPinSessionKey(courseName);
+
+      const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
+      const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, error: 'You do not have permission to generate a QR for this subject.' });
+        return;
+      }
+
+      const resolvedCourseName = access.course?.courseName || courseName;
+      const resolvedCourseId = access.course?.id || courseId;
+      const sessionKey = buildPinSessionKey({
+        courseName: resolvedCourseName,
+        courseId: resolvedCourseId,
+        matchedCourse: access.course,
+      });
 
       const pinConfig = await getOrUpdatePinConfig({
         sessionKey,
-        courseName,
+        courseName: resolvedCourseName,
         week,
         requirePin,
         rotatePin,
@@ -1619,13 +2024,14 @@ export function createApiApp(): express.Express {
       });
 
       const iat = Date.now();
+      pruneUsedScanNonces(iat);
       const exp = iat + QR_TOKEN_VALIDITY_MS;
-      const qrToken = signQrToken({
+      const qrToken = await signQrToken({
         v: 1,
         iat,
         exp,
-        courseName,
-        courseId,
+        courseName: resolvedCourseName,
+        courseId: resolvedCourseId,
         week,
         sessionKey,
         pinRequired: pinConfig.enabled,
@@ -1657,7 +2063,7 @@ export function createApiApp(): express.Express {
         return;
       }
 
-      const payload = verifyQrToken(sig);
+      const payload = await verifyQrToken(sig);
       if (!payload) {
         res.status(403).json({
           success: false,
@@ -1681,7 +2087,7 @@ export function createApiApp(): express.Express {
       const pinRequired = latestPinConfig ? latestPinConfig.enabled : payload.pinRequired;
 
       const grantExp = now + CHECKIN_GRANT_VALIDITY_MS;
-      const checkinToken = signCheckinGrant({
+      const checkinToken = await signCheckinGrant({
         v: 1,
         nonce: crypto.randomBytes(12).toString('hex'),
         iat: now,
@@ -1722,23 +2128,27 @@ export function createApiApp(): express.Express {
       }
 
       // Check if an authenticated lecturer/admin is submitting via Tablet / Kiosk Mode
-      let isLecturerKiosk = false;
+      let kioskAuth: AuthTokenPayload | null = null;
       const authHeader = String(req.headers.authorization || '');
       if (authHeader.startsWith('Bearer ')) {
         const bearerToken = authHeader.slice(7).trim();
-        const authPayload = bearerToken ? verifySessionToken(bearerToken) : null;
+        const authPayload = bearerToken ? await verifySessionToken(bearerToken) : null;
         if (authPayload) {
           const userRecord = await fbGet<StoredAppUser>(`app_users/${authPayload.uid}`).catch(() => null);
           if (userRecord && userRecord.id && (userRecord.role === 'admin' || userRecord.status === 'active')) {
-            isLecturerKiosk = true;
+            kioskAuth = {
+              ...authPayload,
+              role: userRecord.username.toLowerCase() === 'admin' ? 'admin' : userRecord.role || authPayload.role,
+            };
           }
         }
       }
 
+      const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
       let verifiedGrant: CheckinGrantPayload | null = null;
-      if (!isLecturerKiosk) {
+      if (!kioskAuth) {
         const checkinToken = String(req.body?.checkinToken || '').trim();
-        verifiedGrant = verifyCheckinGrant(checkinToken);
+        verifiedGrant = await verifyCheckinGrant(checkinToken);
         if (!verifiedGrant) {
           res.status(401).json({
             success: false,
@@ -1781,9 +2191,21 @@ export function createApiApp(): express.Express {
             return;
           }
         }
+      } else if (kioskAuth.role !== 'admin') {
+        const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth: kioskAuth });
+        if (!access.allowed) {
+          res.status(403).json({ success: false, message: 'Access denied for this subject.' });
+          return;
+        }
       }
 
-      const roster = await resolveRosterForCourse({ courseName, courseId });
+      const matchedCourses = findCoursesMatching(coursesObj, { courseId, courseName });
+      const resolvedCourse =
+        (kioskAuth
+          ? matchedCourses.find((c) => canAccessCourse(c, kioskAuth!))
+          : null) || matchedCourses[0] || null;
+
+      const roster = await resolveRosterForCourse({ courseName, courseId: resolvedCourse?.id || courseId });
       const normalizeRegName = (val: string) => val.trim().replace(/\s+/g, ' ').toUpperCase();
       const normalizeRegId = (val: string) => val.trim().replace(/\s+/g, '').toUpperCase();
 
@@ -1806,7 +2228,9 @@ export function createApiApp(): express.Express {
         return;
       }
 
-      const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+      const sessionPath = verifiedGrant?.sessionKey
+        ? verifiedGrant.sessionKey
+        : buildLiveSessionPath({ courseName, courseId, matchedCourse: resolvedCourse });
       const studentKey = toStudentFirebaseKey(cleanSubmittedId);
       const liveSessionMap = await fbGet<Record<string, Student>>(`live_sessions/${sessionPath}`);
       const existingData = liveSessionMap && typeof liveSessionMap === 'object'
@@ -1820,6 +2244,7 @@ export function createApiApp(): express.Express {
         return;
       }
 
+      const resolvedCourseId = resolvedCourse?.id || courseId || undefined;
       const timestamp = Date.now();
       const normalizedEmail = req.body?.email ? String(req.body.email).trim() : `${cleanSubmittedId}@student.edu.my`;
       const studentData: Student = {
@@ -1829,11 +2254,13 @@ export function createApiApp(): express.Express {
         status,
         timestamp,
         courseName,
+        ...(resolvedCourseId ? { courseId: resolvedCourseId } : {}),
         week,
       };
+      const pendingKey = toFirebaseKey(`${resolvedCourseId || toCourseKey(courseName)}__${studentKey}`);
 
       await Promise.all([
-        fbPut(`pending/${studentKey}`, studentData),
+        fbPut(`pending/${pendingKey}`, studentData),
         fbPut(`live_sessions/${sessionPath}/${studentKey}`, studentData),
         upsertAttendanceHistory([studentData]),
       ]);
@@ -1845,7 +2272,11 @@ export function createApiApp(): express.Express {
 
       const cfg = await getAppConfig();
       if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl) {
-        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(studentData, week));
+        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(studentData, week)).then((r) => {
+          if (r.ok && !r.json?.error && r.json?.success !== false) {
+            return fbDelete(`pending/${pendingKey}`).catch(() => { /* ignore */ });
+          }
+        }).catch(() => { /* ignore */ });
       }
 
       res.json({ success: true, message: 'Record submitted successfully.', record: studentData });
@@ -1879,7 +2310,8 @@ export function createApiApp(): express.Express {
         .filter((c) => canAccessCourse(c, auth))
         .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
 
-      const ownedCourseNames = new Set(scopedCourses.map((c) => c.courseName.trim().toUpperCase()));
+      const ownedCourseIds = new Set(scopedCourses.map((c) => c.id));
+      const ownedCourseNames = new Set(scopedCourses.map((c) => normalizeCourseNameKey(c.courseName)));
       const allHistory: Student[] = Array.isArray(historyRaw)
         ? historyRaw.filter((h) => h && h.studentId && h.timestamp)
         : historyRaw && typeof historyRaw === 'object'
@@ -1889,7 +2321,11 @@ export function createApiApp(): express.Express {
       const scopedHistory = (
         auth.role === 'admin'
           ? allHistory
-          : allHistory.filter((h) => ownedCourseNames.has((h.courseName || '').trim().toUpperCase()))
+          : allHistory.filter((h) =>
+              h.courseId
+                ? ownedCourseIds.has(h.courseId)
+                : ownedCourseNames.has(normalizeCourseNameKey(h.courseName || ''))
+            )
       ).sort((a, b) => b.timestamp - a.timestamp);
 
       const allUserRecords = usersObj && typeof usersObj === 'object'
@@ -1945,7 +2381,8 @@ export function createApiApp(): express.Express {
         success: true,
         user: { id: auth.uid, username: auth.username, role: auth.role },
         config: {
-          scriptUrl: cfg.scriptUrl,
+          scriptUrl: auth.role === 'admin' ? cfg.scriptUrl : '',
+          databaseUrl: auth.role === 'admin' ? FIREBASE_DB_URL : '',
           integrationType: cfg.integrationType,
           adminEmail: auth.role === 'admin' ? cfg.adminEmail : '',
           emailDelivery: auth.role === 'admin' ? getEmailDeliveryStatus(cfg.scriptUrl) : undefined,
@@ -1961,6 +2398,166 @@ export function createApiApp(): express.Express {
       });
     } catch {
       res.status(500).json({ success: false, error: 'Failed to sync dashboard state.' });
+    }
+  });
+
+  // 8.5. Authenticated Server-Side Google Sheet Tabs Proxy (Prevents leaking scriptUrl & other lecturers' rosters/emails)
+  app.get('/api/courses/sheet-tabs', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const auth = req.auth!;
+      const courseQuery = String(req.query.course || '').trim();
+      const cfg = await getAppConfig();
+
+      if (cfg.integrationType !== 'google_sheets') {
+        res.status(400).json({ success: false, error: 'Google Sheets integration is not active.' });
+        return;
+      }
+      if (!cfg.scriptUrl || cfg.scriptUrl === DEFAULT_SCRIPT_URL) {
+        res.status(400).json({ success: false, error: 'Configure Google Sheets Apps Script URL in Settings first.' });
+        return;
+      }
+      if (cfg.scriptUrl.trim().endsWith('/dev')) {
+        res.status(400).json({ success: false, error: 'Apps Script URL uses /dev. Deploy as Web App and paste the /exec URL in Settings.' });
+        return;
+      }
+
+      const sheetUrl = `${cfg.scriptUrl}${cfg.scriptUrl.includes('?') ? '&' : '?'}action=getCourse${
+        courseQuery ? `&course=${encodeURIComponent(courseQuery)}` : ''
+      }&t=${Date.now()}`;
+      const sheetRes = await fetch(sheetUrl, { method: 'GET', redirect: 'follow' });
+      const rawText = await sheetRes.text();
+      if (sheetRes.status === 404 || rawText.trim().startsWith('<')) {
+        res.status(502).json({
+          success: false,
+          error:
+            sheetRes.status === 404
+              ? 'Apps Script URL returned 404. Paste your deployed /exec URL in Settings.'
+              : 'Apps Script returned HTML instead of JSON. Set Web App access to "Anyone" and use the /exec URL.',
+        });
+        return;
+      }
+
+      let data: {
+        success?: boolean;
+        error?: string;
+        sheets?: Array<{
+          sheetName?: unknown;
+          courseName?: unknown;
+          owner?: unknown;
+          ownerExplicit?: unknown;
+          students?: Array<{ id?: unknown; name?: unknown }>;
+        }>;
+      };
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        res.status(502).json({ success: false, error: 'Apps Script returned invalid JSON.' });
+        return;
+      }
+      if (!data || !data.success) {
+        res.status(502).json({
+          success: false,
+          error: data?.error ? `Sheet error: ${data.error}` : 'Could not read Course Name from Google Sheet.',
+        });
+        return;
+      }
+
+      const [coursesObj, usersObj] = await Promise.all([
+        fbGet<Record<string, CourseProfile>>('courses'),
+        fbGet<Record<string, StoredAppUser>>('app_users'),
+      ]);
+      const allCourses = coursesObj && typeof coursesObj === 'object'
+        ? Object.values(coursesObj).filter((c) => c && c.id).map(normalizeCourse)
+        : [];
+      const allUsers = usersObj && typeof usersObj === 'object'
+        ? Object.values(usersObj).filter((u) => u && u.id)
+        : [];
+      const authUser = allUsers.find((u) => u.id === auth.uid) || null;
+
+      const rawSheets = Array.isArray(data.sheets) ? data.sheets : [];
+      const seenCourses = new Set<string>();
+      const sanitizedSheets: Array<{
+        sheetName: string;
+        courseName: string;
+        owner: string;
+        ownerExplicit: boolean;
+        students: PreRegisteredStudent[];
+      }> = [];
+
+      for (const tab of rawSheets) {
+        if (!tab) continue;
+        const cleanCourse = String(tab.courseName || '').trim();
+        if (!cleanCourse) continue;
+        const key = normalizeCourseNameKey(cleanCourse);
+        if (seenCourses.has(key)) continue;
+        seenCourses.add(key);
+
+        const seenStudents = new Set<string>();
+        const normalizedStudents: PreRegisteredStudent[] = [];
+        if (Array.isArray(tab.students)) {
+          for (const item of tab.students) {
+            const id = String(item?.id || '').trim().toUpperCase();
+            const name = String(item?.name || '').trim().toUpperCase();
+            if (id && name && !seenStudents.has(id)) {
+              seenStudents.add(id);
+              normalizedStudents.push({ id, name });
+            }
+          }
+        }
+
+        const rawOwnerStr = typeof tab.owner === 'string' ? tab.owner.trim() : '';
+        const ownerExplicit = Boolean(tab.ownerExplicit);
+
+        if (auth.role === 'admin') {
+          sanitizedSheets.push({
+            sheetName: String(tab.sheetName || ''),
+            courseName: cleanCourse,
+            owner: rawOwnerStr,
+            ownerExplicit,
+            students: normalizedStudents,
+          });
+          continue;
+        }
+
+        const matchingCourses = allCourses.filter((c) => isSameCourse(c, cleanCourse));
+        const directMine = matchingCourses.find((c) => isDirectOwnerOrShared(c, auth));
+        const otherCourse = matchingCourses.find((c) => !isDirectOwnerOrShared(c, auth));
+        const sheetOwner = resolveSheetTabOwner(rawOwnerStr, ownerExplicit, allUsers);
+
+        const ownedByOtherInSheet =
+          !directMine &&
+          (Boolean(otherCourse) ||
+            (sheetOwner.recognized && !doesAuthMatchSheetOwner(sheetOwner.tokens, auth, authUser)));
+
+        if (ownedByOtherInSheet) {
+          const safeOwnerDisplay =
+            sheetOwner.matchedUsers.length > 0
+              ? sheetOwner.matchedUsers.map((u) => u.username).join(', ')
+              : otherCourse?.createdBy || 'Another Lecturer';
+          sanitizedSheets.push({
+            sheetName: String(tab.sheetName || ''),
+            courseName: cleanCourse,
+            owner: safeOwnerDisplay,
+            ownerExplicit: true,
+            students: [],
+          });
+        } else {
+          sanitizedSheets.push({
+            sheetName: String(tab.sheetName || ''),
+            courseName: cleanCourse,
+            owner: rawOwnerStr,
+            ownerExplicit,
+            students: normalizedStudents,
+          });
+        }
+      }
+
+      res.json({ success: true, sheets: sanitizedSheets });
+    } catch {
+      res.status(502).json({
+        success: false,
+        error: 'Could not read Google Sheet. Check Settings → Apps Script URL.',
+      });
     }
   });
 
@@ -2077,6 +2674,55 @@ export function createApiApp(): express.Express {
         selectedWeek: newCourse.selectedWeek,
         updatedAt: now,
       });
+
+      const notifTasks: Promise<unknown>[] = [];
+      const assignedToLecturer = auth.role === 'admin' && Boolean(requestedOwnerUser) && targetOwnerId !== auth.uid;
+      if (assignedToLecturer) {
+        notifTasks.push(
+          createUserSystemNotification({
+            userId: targetOwnerId,
+            type: 'course_assigned',
+            title: 'Subject Assigned',
+            courseName: newCourse.courseName,
+            message: `Administrator (${auth.username}) assigned the subject "${newCourse.courseName}" to you.`,
+          })
+        );
+      }
+
+      const addedCoNames: string[] = [];
+      for (const coId of targetSharedWith) {
+        const coUser = allUsers.find((u) => u.id === coId);
+        if (coUser) addedCoNames.push(coUser.username);
+        if (coId !== auth.uid) {
+          notifTasks.push(
+            createUserSystemNotification({
+              userId: coId,
+              type: 'co_lecturer_added',
+              title: 'Co-Lecturer Added',
+              courseName: newCourse.courseName,
+              message: `${auth.username} added you as a co-lecturer for "${newCourse.courseName}".`,
+            })
+          );
+        }
+      }
+
+      if (assignedToLecturer || addedCoNames.length > 0) {
+        const parts: string[] = [];
+        if (assignedToLecturer) parts.push(`owner assigned to ${targetCreatedBy}`);
+        if (addedCoNames.length > 0) parts.push(`co-lecturers: ${addedCoNames.join(', ')}`);
+        notifTasks.push(
+          createAdminAlertNotification({
+            type: 'course_ownership_changed',
+            userId: auth.uid,
+            username: auth.username,
+            courseName: newCourse.courseName,
+            message: `Subject "${newCourse.courseName}" created by ${auth.username} (${parts.join('; ')}).`,
+          })
+        );
+      }
+      if (notifTasks.length > 0) {
+        await Promise.all(notifTasks).catch(() => { /* ignore */ });
+      }
 
       res.json({ success: true, course: newCourse });
     } catch {
@@ -2434,6 +3080,68 @@ export function createApiApp(): express.Express {
         mutableCoursesMap[finalId] = created;
         allCourses.push(created);
         synced.push(created);
+
+        const syncCourseNotifs: Promise<unknown>[] = [];
+        const assignedToOtherOwner = auth.role === 'admin' && targetOwnerId !== auth.uid;
+        if (assignedToOtherOwner) {
+          syncCourseNotifs.push(
+            createUserSystemNotification({
+              userId: targetOwnerId,
+              type: 'course_assigned',
+              title: 'Subject Assigned',
+              courseName: created.courseName,
+              message: `Administrator (${auth.username}) synced and assigned "${created.courseName}" to you.`,
+            })
+          );
+        }
+        const syncedCoNames: string[] = [];
+        for (const coId of targetSharedWith) {
+          const coUser = allUsers.find((u) => u.id === coId);
+          if (coUser) syncedCoNames.push(coUser.username);
+          if (coId !== auth.uid) {
+            syncCourseNotifs.push(
+              createUserSystemNotification({
+                userId: coId,
+                type: 'co_lecturer_added',
+                title: 'Co-Lecturer Added',
+                courseName: created.courseName,
+                message: `${auth.username} added you as a co-lecturer for "${created.courseName}" during Google Sheet sync.`,
+              })
+            );
+          }
+        }
+        if (assignedToOtherOwner || syncedCoNames.length > 0 || sheetOwner.recognized) {
+          const detailParts: string[] = [`owner: ${targetCreatedBy}`];
+          if (syncedCoNames.length > 0) detailParts.push(`co-lecturers: ${syncedCoNames.join(', ')}`);
+          syncCourseNotifs.push(
+            createAdminAlertNotification({
+              type: 'course_ownership_changed',
+              userId: auth.uid,
+              username: auth.username,
+              courseName: created.courseName,
+              message: `Google Sheet tab "${created.courseName}" synced by ${auth.username} (${detailParts.join('; ')}).`,
+            })
+          );
+        }
+        if (syncCourseNotifs.length > 0) {
+          await Promise.all(syncCourseNotifs).catch(() => { /* ignore */ });
+        }
+      }
+
+      if (skippedCourses.length > 0) {
+        const preview = skippedCourses
+          .slice(0, 4)
+          .map((item) => `${item.courseName} (${item.reason})`)
+          .join('; ');
+        const extra = skippedCourses.length > 4 ? ` +${skippedCourses.length - 4} more` : '';
+        await createAdminAlertNotification({
+          type: 'sheet_sync_skipped',
+          userId: auth.uid,
+          username: auth.username,
+          courseName: skippedCourses.map((s) => s.courseName).join(', '),
+          reason: preview,
+          message: `Google Sheet sync by ${auth.username} skipped ${skippedCourses.length} tab${skippedCourses.length === 1 ? '' : 's'}: ${preview}${extra}.`,
+        }).catch(() => { /* ignore */ });
       }
 
       res.json({ success: true, courses: synced, skippedCourses });
@@ -2444,18 +3152,20 @@ export function createApiApp(): express.Express {
 
   app.patch('/api/courses/:id/owner', requireAuth, requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
     try {
+      const auth = req.auth!;
       const courseId = String(req.params.id || '').trim();
       const newOwnerId = String(req.body?.ownerId || '').trim();
       const sharedWith = Array.isArray(req.body?.sharedWith) ? req.body.sharedWith.map(String) : undefined;
 
-      const [existing, usersObj] = await Promise.all([
+      const [existingRaw, usersObj] = await Promise.all([
         fbGet<CourseProfile>(`courses/${courseId}`),
         fbGet<Record<string, StoredAppUser>>('app_users'),
       ]);
-      if (!existing) {
+      if (!existingRaw) {
         res.status(404).json({ success: false, error: 'Course not found.' });
         return;
       }
+      const existing = normalizeCourse(existingRaw);
       const allUsers = usersObj && typeof usersObj === 'object' ? Object.values(usersObj) : [];
 
       let nextCreatedBy = existing.createdBy || 'admin';
@@ -2467,6 +3177,10 @@ export function createApiApp(): express.Express {
         }
         nextCreatedBy = ownerUser.username;
       }
+
+      const prevOwnerId = existing.ownerId || '';
+      const prevOwnerLabel = existing.createdBy || 'Unassigned';
+      const prevSharedIds = resolveCourseSharedUserIds(existing.sharedWith, allUsers);
 
       const effectiveOwnerId = newOwnerId || existing.ownerId;
       const patchPayload: Partial<CourseProfile> = {
@@ -2484,6 +3198,96 @@ export function createApiApp(): express.Express {
 
       await fbPatch(`courses/${courseId}`, patchPayload);
       const updated = normalizeCourse({ ...existing, ...patchPayload });
+      const nextSharedIds = resolveCourseSharedUserIds(updated.sharedWith, allUsers);
+
+      const notifTasks: Promise<unknown>[] = [];
+      const ownerChanged = Boolean(newOwnerId && newOwnerId !== prevOwnerId);
+
+      if (ownerChanged) {
+        if (newOwnerId !== auth.uid) {
+          notifTasks.push(
+            createUserSystemNotification({
+              userId: newOwnerId,
+              type: 'course_assigned',
+              title: 'Subject Assigned',
+              courseName: updated.courseName,
+              message: `Administrator (${auth.username}) assigned the subject "${updated.courseName}" to you.`,
+            })
+          );
+        }
+        if (prevOwnerId && prevOwnerId !== auth.uid) {
+          notifTasks.push(
+            createUserSystemNotification({
+              userId: prevOwnerId,
+              type: 'system_update',
+              title: 'Subject Reassigned',
+              courseName: updated.courseName,
+              message: `Administrator (${auth.username}) reassigned "${updated.courseName}" to ${nextCreatedBy}.`,
+            })
+          );
+        }
+        notifTasks.push(
+          createAdminAlertNotification({
+            type: 'course_ownership_changed',
+            userId: auth.uid,
+            username: auth.username,
+            courseName: updated.courseName,
+            message: `Subject "${updated.courseName}" ownership changed from ${prevOwnerLabel} to ${nextCreatedBy} (by ${auth.username}).`,
+          })
+        );
+      }
+
+      if (sharedWith !== undefined) {
+        const addedIds = nextSharedIds.filter((id) => !prevSharedIds.includes(id));
+        const removedIds = prevSharedIds.filter((id) => !nextSharedIds.includes(id) && id !== effectiveOwnerId);
+        for (const coId of addedIds) {
+          if (coId !== auth.uid) {
+            notifTasks.push(
+              createUserSystemNotification({
+                userId: coId,
+                type: 'co_lecturer_added',
+                title: 'Co-Lecturer Added',
+                courseName: updated.courseName,
+                message: `Administrator (${auth.username}) added you as a co-lecturer for "${updated.courseName}".`,
+              })
+            );
+          }
+        }
+        for (const coId of removedIds) {
+          if (coId !== auth.uid) {
+            notifTasks.push(
+              createUserSystemNotification({
+                userId: coId,
+                type: 'co_lecturer_removed',
+                title: 'Co-Lecturer Removed',
+                courseName: updated.courseName,
+                message: `Administrator (${auth.username}) removed your co-lecturer access for "${updated.courseName}".`,
+              })
+            );
+          }
+        }
+        if (!ownerChanged && (addedIds.length > 0 || removedIds.length > 0)) {
+          const resolveNames = (ids: string[]) =>
+            ids.map((id) => allUsers.find((u) => u.id === id)?.username || id).join(', ');
+          const changes: string[] = [];
+          if (addedIds.length > 0) changes.push(`added ${resolveNames(addedIds)}`);
+          if (removedIds.length > 0) changes.push(`removed ${resolveNames(removedIds)}`);
+          notifTasks.push(
+            createAdminAlertNotification({
+              type: 'course_ownership_changed',
+              userId: auth.uid,
+              username: auth.username,
+              courseName: updated.courseName,
+              message: `Co-lecturer sharing updated for "${updated.courseName}" by ${auth.username}: ${changes.join('; ')}.`,
+            })
+          );
+        }
+      }
+
+      if (notifTasks.length > 0) {
+        await Promise.all(notifTasks).catch(() => { /* ignore */ });
+      }
+
       res.json({ success: true, course: updated });
     } catch {
       res.status(500).json({ success: false, error: 'Failed to update course ownership.' });
@@ -2519,6 +3323,7 @@ export function createApiApp(): express.Express {
       }
 
       const allUsers = usersObj && typeof usersObj === 'object' ? Object.values(usersObj) : [];
+      const prevSharedIds = resolveCourseSharedUserIds(existing.sharedWith, allUsers);
       const cleanedSharedWith = sanitizeSharedWithIds(req.body?.sharedWith, allUsers, existing.ownerId);
 
       const patchPayload: Partial<CourseProfile> = {
@@ -2527,6 +3332,59 @@ export function createApiApp(): express.Express {
       };
       await fbPatch(`courses/${courseId}`, patchPayload);
       const updated = normalizeCourse({ ...existing, ...patchPayload });
+
+      const addedIds = cleanedSharedWith.filter((id) => !prevSharedIds.includes(id));
+      const removedIds = prevSharedIds.filter(
+        (id) => !cleanedSharedWith.includes(id) && id !== existing.ownerId
+      );
+
+      const notifTasks: Promise<unknown>[] = [];
+      for (const coId of addedIds) {
+        if (coId !== auth.uid) {
+          notifTasks.push(
+            createUserSystemNotification({
+              userId: coId,
+              type: 'co_lecturer_added',
+              title: 'Co-Lecturer Added',
+              courseName: updated.courseName,
+              message: `${auth.username} added you as a co-lecturer for "${updated.courseName}".`,
+            })
+          );
+        }
+      }
+      for (const coId of removedIds) {
+        if (coId !== auth.uid) {
+          notifTasks.push(
+            createUserSystemNotification({
+              userId: coId,
+              type: 'co_lecturer_removed',
+              title: 'Co-Lecturer Removed',
+              courseName: updated.courseName,
+              message: `${auth.username} removed your co-lecturer access for "${updated.courseName}".`,
+            })
+          );
+        }
+      }
+      if (addedIds.length > 0 || removedIds.length > 0) {
+        const resolveNames = (ids: string[]) =>
+          ids.map((id) => allUsers.find((u) => u.id === id)?.username || id).join(', ');
+        const changes: string[] = [];
+        if (addedIds.length > 0) changes.push(`added ${resolveNames(addedIds)}`);
+        if (removedIds.length > 0) changes.push(`removed ${resolveNames(removedIds)}`);
+        notifTasks.push(
+          createAdminAlertNotification({
+            type: 'course_ownership_changed',
+            userId: auth.uid,
+            username: auth.username,
+            courseName: updated.courseName,
+            message: `Co-lecturer sharing updated for "${updated.courseName}" by ${auth.username}: ${changes.join('; ')}.`,
+          })
+        );
+      }
+      if (notifTasks.length > 0) {
+        await Promise.all(notifTasks).catch(() => { /* ignore */ });
+      }
+
       res.json({ success: true, course: updated });
     } catch {
       res.status(500).json({ success: false, error: 'Failed to update co-lecturers.' });
@@ -2538,17 +3396,22 @@ export function createApiApp(): express.Express {
     try {
       const auth = req.auth!;
       const courseName = String(req.query.course || '').trim();
-      if (courseName && auth.role !== 'admin') {
-        const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
-        const matched = Object.values(coursesObj)
-          .filter((c) => c && c.courseName)
-          .find((c) => c.courseName.trim().toUpperCase() === courseName.toUpperCase());
-        if (matched && !canAccessCourse(normalizeCourse(matched), auth)) {
-          res.status(403).json({ success: false, error: 'Access denied for this subject.' });
-          return;
-        }
+      const courseId = String(req.query.courseId || '').trim();
+      if (!courseName && !courseId && auth.role !== 'admin') {
+        res.status(400).json({ success: false, error: 'Subject is required.' });
+        return;
       }
-      const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+      const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
+      const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, error: 'Access denied for this subject.' });
+        return;
+      }
+      const sessionPath = buildLiveSessionPath({
+        courseName: access.course?.courseName || courseName,
+        courseId: access.course?.id || courseId,
+        matchedCourse: access.course,
+      });
       const data = await fbGet<Record<string, Student>>(`live_sessions/${sessionPath}`);
       const students = data && typeof data === 'object'
         ? Object.values(data).sort((a, b) => b.timestamp - a.timestamp)
@@ -2561,10 +3424,12 @@ export function createApiApp(): express.Express {
 
   app.post('/api/attendance/manual', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
+      const auth = req.auth!;
       const name = String(req.body?.name || '').trim();
       const studentId = String(req.body?.studentId || '').trim();
       const status = String(req.body?.status || 'P').trim().toUpperCase();
       const courseName = String(req.body?.courseName || 'General Session').trim();
+      const courseId = String(req.body?.courseId || '').trim();
       const absenceReason = typeof req.body?.absenceReason === 'string' ? req.body.absenceReason : undefined;
       const week = String(req.body?.week || 'W1').trim().toUpperCase();
       const overrideTimestamp = typeof req.body?.overrideTimestamp === 'number' ? req.body.overrideTimestamp : undefined;
@@ -2574,9 +3439,20 @@ export function createApiApp(): express.Express {
         return;
       }
 
+      const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
+      const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, message: 'You do not have permission to edit attendance for this subject.' });
+        return;
+      }
+
       const cleanStudentId = normalizeStudentId(studentId);
       const studentKey = toStudentFirebaseKey(cleanStudentId);
-      const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+      const sessionPath = buildLiveSessionPath({
+        courseName: access.course?.courseName || courseName,
+        courseId: access.course?.id || courseId,
+        matchedCourse: access.course,
+      });
       if (status === 'P') {
         const liveSessionMap = await fbGet<Record<string, Student>>(`live_sessions/${sessionPath}`);
         const existingData = liveSessionMap && typeof liveSessionMap === 'object'
@@ -2591,6 +3467,7 @@ export function createApiApp(): express.Express {
         }
       }
 
+      const resolvedCourseId = access.course?.id || courseId || undefined;
       const timestamp = overrideTimestamp || Date.now();
       const studentData: Student = {
         name,
@@ -2598,20 +3475,26 @@ export function createApiApp(): express.Express {
         email: req.body?.email ? String(req.body.email).trim() : `${cleanStudentId}@student.edu.my`,
         status,
         timestamp,
-        courseName,
+        courseName: access.course?.courseName || courseName,
+        ...(resolvedCourseId ? { courseId: resolvedCourseId } : {}),
         absenceReason,
         week,
       };
+      const pendingKey = toFirebaseKey(`${resolvedCourseId || toCourseKey(studentData.courseName)}__${studentKey}`);
 
       await Promise.all([
-        fbPut(`pending/${studentKey}`, studentData),
+        fbPut(`pending/${pendingKey}`, studentData),
         fbPut(`live_sessions/${sessionPath}/${studentKey}`, studentData),
         upsertAttendanceHistory([studentData]),
       ]);
 
       const cfg = await getAppConfig();
       if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl) {
-        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(studentData, week));
+        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(studentData, week)).then((r) => {
+          if (r.ok && !r.json?.error && r.json?.success !== false) {
+            return fbDelete(`pending/${pendingKey}`).catch(() => { /* ignore */ });
+          }
+        }).catch(() => { /* ignore */ });
       }
 
       res.json({ success: true, message: 'Record submitted successfully.', record: studentData });
@@ -2622,32 +3505,77 @@ export function createApiApp(): express.Express {
 
   app.post('/api/attendance/bulk', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
+      const auth = req.auth!;
       const records = Array.isArray(req.body?.records) ? (req.body.records as Student[]) : [];
       const courseName = String(req.body?.courseName || '').trim();
+      const courseId = String(req.body?.courseId || '').trim();
       const week = String(req.body?.week || 'W1').trim().toUpperCase();
       if (records.length === 0) {
         res.json({ success: true });
         return;
       }
 
-      const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+      const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
+      const access = resolveCourseAccess({
+        coursesObj,
+        courseId,
+        courseName: courseName || String(records[0]?.courseName || ''),
+        auth,
+      });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, error: 'You do not have permission to update attendance for this subject.' });
+        return;
+      }
+      if (auth.role !== 'admin') {
+        for (const rec of records) {
+          if (rec?.courseName) {
+            const recAccess = resolveCourseAccess({ coursesObj, courseName: rec.courseName, auth });
+            if (!recAccess.allowed) {
+              res.status(403).json({ success: false, error: 'You do not have permission to update attendance for one or more subjects.' });
+              return;
+            }
+          }
+        }
+      }
+
+      const sessionPath = buildLiveSessionPath({
+        courseName: access.course?.courseName || courseName,
+        courseId: access.course?.id || courseId,
+        matchedCourse: access.course,
+      });
+      const resolvedBulkCourseId = access.course?.id || courseId || undefined;
+      const enrichedRecords: Student[] = records.map((r) => ({
+        ...r,
+        ...(r.courseId || resolvedBulkCourseId ? { courseId: r.courseId || resolvedBulkCourseId } : {}),
+      }));
+      const pendingKeys = enrichedRecords
+        .map((r) => {
+          const sk = toStudentFirebaseKey(r.studentId || '');
+          return sk ? toFirebaseKey(`${r.courseId || toCourseKey(r.courseName || courseName)}__${sk}`) : '';
+        })
+        .filter(Boolean);
       await Promise.all([
-        ...records.flatMap((r) => {
+        ...enrichedRecords.flatMap((r) => {
           const key = toStudentFirebaseKey(r.studentId || '');
+          const pKey = toFirebaseKey(`${r.courseId || toCourseKey(r.courseName || courseName)}__${key}`);
           return [
-            fbPut(`pending/${key}`, r),
+            fbPut(`pending/${pKey}`, r),
             fbPut(`live_sessions/${sessionPath}/${key}`, r),
           ];
         }),
-        upsertAttendanceHistory(records),
+        upsertAttendanceHistory(enrichedRecords),
       ]);
 
       const cfg = await getAppConfig();
       if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl) {
         void postToGoogleScript(
           cfg.scriptUrl,
-          records.map((r) => formatCloudPayload(r, week))
-        );
+          enrichedRecords.map((r) => formatCloudPayload(r, week))
+        ).then((r) => {
+          if (r.ok && !r.json?.error && r.json?.success !== false) {
+            return Promise.all(pendingKeys.map((k) => fbDelete(`pending/${k}`).catch(() => { /* ignore */ })));
+          }
+        }).catch(() => { /* ignore */ });
       }
 
       res.json({ success: true });
@@ -2658,16 +3586,58 @@ export function createApiApp(): express.Express {
 
   app.post('/api/attendance/remove', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
+      const auth = req.auth!;
       const removals = Array.isArray(req.body?.removals) ? (req.body.removals as Student[]) : [];
       const courseName = String(req.body?.courseName || '').trim();
-      const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+      const courseId = String(req.body?.courseId || '').trim();
+
+      const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
+      const access = resolveCourseAccess({
+        coursesObj,
+        courseId,
+        courseName: courseName || String(removals[0]?.courseName || ''),
+        auth,
+      });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, error: 'You do not have permission to remove students from this subject.' });
+        return;
+      }
+      if (auth.role !== 'admin') {
+        for (const rem of removals) {
+          if (rem?.courseName) {
+            const recAccess = resolveCourseAccess({ coursesObj, courseId: rem.courseId || courseId, courseName: rem.courseName, auth });
+            if (!recAccess.allowed) {
+              res.status(403).json({ success: false, error: 'You do not have permission to modify one or more subjects.' });
+              return;
+            }
+          }
+        }
+      }
+
+      const sessionPath = buildLiveSessionPath({
+        courseName: access.course?.courseName || courseName,
+        courseId: access.course?.id || courseId,
+        matchedCourse: access.course,
+      });
+      const resolvedRemoveCourseId = access.course?.id || courseId || undefined;
+      const enrichedRemovals: Student[] = removals.map((r) => ({
+        ...r,
+        ...(r.courseId || resolvedRemoveCourseId ? { courseId: r.courseId || resolvedRemoveCourseId } : {}),
+      }));
+      const pendingKeys = enrichedRemovals
+        .map((r) => {
+          const sk = toStudentFirebaseKey(r.studentId || '');
+          return sk ? toFirebaseKey(`${r.courseId || toCourseKey(r.courseName || courseName)}__${sk}`) : '';
+        })
+        .filter(Boolean);
 
       await Promise.all([
-        ...removals.flatMap((r) => {
+        ...enrichedRemovals.flatMap((r) => {
           const rawId = String(r.studentId || '').trim();
           const key = toStudentFirebaseKey(rawId);
+          const pKey = toFirebaseKey(`${r.courseId || toCourseKey(r.courseName || courseName)}__${key}`);
           const tasks: Promise<void>[] = [
-            fbPut(`pending/${key}`, r),
+            fbPut(`pending/${pKey}`, r),
             fbDelete(`live_sessions/${sessionPath}/${key}`),
           ];
           if (rawId && rawId !== key) {
@@ -2675,15 +3645,19 @@ export function createApiApp(): express.Express {
           }
           return tasks;
         }),
-        upsertAttendanceHistory(removals),
+        upsertAttendanceHistory(enrichedRemovals),
       ]);
 
       const cfg = await getAppConfig();
-      if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl && removals.length > 0) {
+      if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl && enrichedRemovals.length > 0) {
         void postToGoogleScript(
           cfg.scriptUrl,
-          removals.map((r) => formatCloudPayload(r, r.week || 'W1'))
-        );
+          enrichedRemovals.map((r) => formatCloudPayload(r, r.week || 'W1'))
+        ).then((r) => {
+          if (r.ok && !r.json?.error && r.json?.success !== false) {
+            return Promise.all(pendingKeys.map((k) => fbDelete(`pending/${k}`).catch(() => { /* ignore */ })));
+          }
+        }).catch(() => { /* ignore */ });
       }
 
       res.json({ success: true });
@@ -2700,6 +3674,7 @@ export function createApiApp(): express.Express {
       const studentKey = toStudentFirebaseKey(studentId);
       const name = String(req.body?.name || '').trim();
       const courseName = String(req.body?.courseName || 'General Session').trim();
+      const courseId = String(req.body?.courseId || '').trim();
       const week = String(req.body?.week || 'W1').trim().toUpperCase();
       const status = String(req.body?.status || 'P').trim().toUpperCase();
       const absenceReason = typeof req.body?.absenceReason === 'string' ? req.body.absenceReason.trim() : '';
@@ -2710,17 +3685,14 @@ export function createApiApp(): express.Express {
         return;
       }
 
-      if (auth.role !== 'admin' && courseName) {
-        const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
-        const matched = Object.values(coursesObj)
-          .filter((c) => c && c.courseName)
-          .find((c) => c.courseName.trim().toUpperCase() === courseName.toUpperCase());
-        if (matched && !canAccessCourse(normalizeCourse(matched), auth)) {
-          res.status(403).json({ success: false, error: 'You do not have permission to edit this subject.' });
-          return;
-        }
+      const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
+      const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, error: 'You do not have permission to edit this subject.' });
+        return;
       }
 
+      const resolvedMatrixCourseId = access.course?.id || courseId || undefined;
       const timestamp = Date.now();
       const record: Student = {
         studentId,
@@ -2728,18 +3700,24 @@ export function createApiApp(): express.Express {
         email: `${studentId}@student.edu.my`,
         status,
         timestamp,
-        courseName,
+        courseName: access.course?.courseName || courseName,
+        ...(resolvedMatrixCourseId ? { courseId: resolvedMatrixCourseId } : {}),
         absenceReason: status === 'P' ? '' : (absenceReason || undefined),
         week,
       };
+      const pendingKey = toFirebaseKey(`${resolvedMatrixCourseId || toCourseKey(record.courseName)}__${studentKey}`);
 
       const writes: Promise<void>[] = [
-        fbPut(`pending/${studentKey}`, record),
+        fbPut(`pending/${pendingKey}`, record),
         upsertAttendanceHistory([record]),
       ];
 
       if (updateLiveSession) {
-        const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+        const sessionPath = buildLiveSessionPath({
+          courseName: access.course?.courseName || courseName,
+          courseId: access.course?.id || courseId,
+          matchedCourse: access.course,
+        });
         writes.push(fbPut(`live_sessions/${sessionPath}/${studentKey}`, record));
       }
 
@@ -2747,7 +3725,11 @@ export function createApiApp(): express.Express {
 
       const cfg = await getAppConfig();
       if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl) {
-        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(record, week));
+        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(record, week)).then((r) => {
+          if (r.ok && !r.json?.error && r.json?.success !== false) {
+            return fbDelete(`pending/${pendingKey}`).catch(() => { /* ignore */ });
+          }
+        }).catch(() => { /* ignore */ });
       }
 
       res.json({ success: true, record });
@@ -2758,8 +3740,20 @@ export function createApiApp(): express.Express {
 
   app.delete('/api/attendance/session', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
+      const auth = req.auth!;
       const courseName = String(req.query.course || '').trim();
-      const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+      const courseId = String(req.query.courseId || '').trim();
+      const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
+      const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, error: 'You do not have permission to clear this subject session.' });
+        return;
+      }
+      const sessionPath = buildLiveSessionPath({
+        courseName: access.course?.courseName || courseName,
+        courseId: access.course?.id || courseId,
+        matchedCourse: access.course,
+      });
       await fbDelete(`live_sessions/${sessionPath}`);
       res.json({ success: true });
     } catch {
@@ -2767,40 +3761,42 @@ export function createApiApp(): express.Express {
     }
   });
 
-  // 12. Scoped History Delete
+  // 12. Scoped History Delete (Atomic keyed deletion via PATCH/DELETE)
   app.delete('/api/history/item', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
       const auth = req.auth!;
       const timestamp = Number(req.query.timestamp);
       const studentId = String(req.query.studentId || '').trim();
-      const histRaw = await fbGet<Student[] | Record<string, Student>>('attendance_history');
-      const prevHist: Student[] = Array.isArray(histRaw)
-        ? histRaw
-        : histRaw && typeof histRaw === 'object'
-          ? Object.values(histRaw)
-          : [];
+      const normId = normalizeStudentId(studentId);
+      const entries = await readAttendanceHistoryEntries();
 
+      let allowedCourseIds: Set<string> | null = null;
       let allowedCourses: Set<string> | null = null;
       if (auth.role !== 'admin') {
         const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
-        allowedCourses = new Set(
-          Object.values(coursesObj)
-            .filter((c) => c && c.courseName && canAccessCourse(normalizeCourse(c), auth))
-            .map((c) => c.courseName.trim().toUpperCase())
+        const accessible = Object.values(coursesObj).filter(
+          (c) => c && c.courseName && canAccessCourse(normalizeCourse(c), auth)
         );
+        allowedCourseIds = new Set(accessible.map((c) => c.id));
+        allowedCourses = new Set(accessible.map((c) => normalizeCourseNameKey(c.courseName)));
       }
 
-      const nextHist = prevHist.filter((h) => {
-        if (!h) return false;
-        if (h.timestamp === timestamp && h.studentId === studentId) {
-          if (allowedCourses && !allowedCourses.has((h.courseName || '').trim().toUpperCase())) {
-            return true; // cannot delete another lecturer's history
+      const deletePatch: Record<string, null> = {};
+      for (const { key, record } of entries) {
+        if (record.timestamp === timestamp && (record.studentId === studentId || normalizeStudentId(record.studentId) === normId)) {
+          const hasPermission = record.courseId
+            ? Boolean(allowedCourseIds?.has(record.courseId))
+            : Boolean(allowedCourses?.has(normalizeCourseNameKey(record.courseName || '')));
+          if (allowedCourses && !hasPermission) {
+            res.status(403).json({ success: false, error: 'You do not have permission to delete this history record.' });
+            return;
           }
-          return false;
+          deletePatch[key] = null;
         }
-        return true;
-      });
-      await fbPut('attendance_history', nextHist);
+      }
+      if (Object.keys(deletePatch).length > 0) {
+        await fbPatch('attendance_history', deletePatch);
+      }
       res.json({ success: true });
     } catch {
       res.status(500).json({ success: false, error: 'Failed to delete history item.' });
@@ -2811,35 +3807,49 @@ export function createApiApp(): express.Express {
     try {
       const auth = req.auth!;
       if (auth.role === 'admin') {
-        await fbPut('attendance_history', []);
+        await fbDelete('attendance_history');
         res.json({ success: true });
         return;
       }
       const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
-      const ownedNames = new Set(
-        Object.values(coursesObj)
-          .filter((c) => c && c.courseName && canAccessCourse(normalizeCourse(c), auth))
-          .map((c) => c.courseName.trim().toUpperCase())
+      const accessible = Object.values(coursesObj).filter(
+        (c) => c && c.courseName && canAccessCourse(normalizeCourse(c), auth)
       );
-      const histRaw = await fbGet<Student[] | Record<string, Student>>('attendance_history');
-      const prevHist: Student[] = Array.isArray(histRaw)
-        ? histRaw
-        : histRaw && typeof histRaw === 'object'
-          ? Object.values(histRaw)
-          : [];
-      const remaining = prevHist.filter((h) => h && !ownedNames.has((h.courseName || '').trim().toUpperCase()));
-      await fbPut('attendance_history', remaining);
+      const ownedCourseIds = new Set(accessible.map((c) => c.id));
+      const ownedNames = new Set(accessible.map((c) => normalizeCourseNameKey(c.courseName)));
+      const entries = await readAttendanceHistoryEntries();
+      const deletePatch: Record<string, null> = {};
+      for (const { key, record } of entries) {
+        const hasPermission = record.courseId
+          ? ownedCourseIds.has(record.courseId)
+          : ownedNames.has(normalizeCourseNameKey(record.courseName || ''));
+        if (hasPermission) {
+          deletePatch[key] = null;
+        }
+      }
+      if (Object.keys(deletePatch).length > 0) {
+        await fbPatch('attendance_history', deletePatch);
+      }
       res.json({ success: true });
     } catch {
       res.status(500).json({ success: false, error: 'Failed to clear history.' });
     }
   });
 
-  // 13. Queue / Sync Test Endpoints (Authenticated)
+  // 13. Queue / Sync Test Endpoints (Authenticated & Scoped)
   app.post('/api/queue/test', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
+      const auth = req.auth!;
       const courseName = String(req.body?.courseName || 'Connectivity Test').trim();
       const week = String(req.body?.week || 'W1').trim().toUpperCase();
+
+      const coursesObj = (await fbGet<Record<string, CourseProfile>>('courses')) || {};
+      const access = resolveCourseAccess({ coursesObj, courseName, auth });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, message: 'Access denied for this subject.' });
+        return;
+      }
+
       const testRecord: Student = {
         name: 'CONNECTION TEST',
         studentId: 'TEST999',
@@ -2850,26 +3860,63 @@ export function createApiApp(): express.Express {
         absenceReason: '',
         week,
       };
-      await fbPut('pending/TEST999', testRecord);
       const cfg = await getAppConfig();
-      if (cfg.integrationType === 'google_sheets' && cfg.scriptUrl) {
-        await postToGoogleScript(cfg.scriptUrl, formatCloudPayload(testRecord, week));
+      if (cfg.integrationType === 'google_sheets') {
+        if (!cfg.scriptUrl || cfg.scriptUrl === DEFAULT_SCRIPT_URL) {
+          res.status(400).json({ success: false, message: 'Google Apps Script URL is not configured.' });
+          return;
+        }
+        const scriptRes = await postToGoogleScript(cfg.scriptUrl, formatCloudPayload(testRecord, week));
+        await fbDelete('pending/TEST999').catch(() => { /* ignore */ });
+        if (!scriptRes.ok || scriptRes.json?.success === false || scriptRes.json?.error) {
+          const errMsg =
+            (typeof scriptRes.json?.error === 'string' && scriptRes.json.error) ||
+            scriptRes.error ||
+            'Google Apps Script test failed.';
+          res.status(502).json({ success: false, message: errMsg });
+          return;
+        }
+        res.json({ success: true, message: `Test signal delivered to Google Sheets (${week}).` });
+        return;
       }
-      res.json({ success: true, message: `Test signal sent to Cloud (${week}).` });
+      res.json({ success: true, message: `Test signal verified (${week}).` });
     } catch {
       res.status(500).json({ success: false, message: 'Cloud test failed.' });
     }
   });
 
-  app.get('/api/queue', requireAuth, async (_req: AuthenticatedRequest, res: Response) => {
+  app.get('/api/queue', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
-      const data = await fbGet<Record<string, Student>>('pending');
-      const count = data && typeof data === 'object' ? Object.keys(data).length : 0;
+      const auth = req.auth!;
+      const [data, coursesObj] = await Promise.all([
+        fbGet<Record<string, Student>>('pending'),
+        auth.role === 'admin' ? Promise.resolve(null) : fbGet<Record<string, CourseProfile>>('courses'),
+      ]);
+      const scoped: Record<string, Student> = {};
+      if (data && typeof data === 'object') {
+        for (const [key, rec] of Object.entries(data)) {
+          if (!rec || key === 'TEST999' || normalizeStudentId(rec.studentId || '') === 'TEST999') continue;
+          if (auth.role === 'admin') {
+            scoped[key] = rec;
+          } else {
+            const access = resolveCourseAccess({
+              coursesObj,
+              courseId: rec.courseId || '',
+              courseName: rec.courseName || '',
+              auth,
+            });
+            if (access.allowed && access.course) {
+              scoped[key] = rec;
+            }
+          }
+        }
+      }
+      const count = Object.keys(scoped).length;
       res.json({
         success: true,
         message: count > 0 ? `Queue length: ${count}` : 'Synchronization queue is empty.',
         count,
-        data: data || {},
+        data: scoped,
       });
     } catch {
       res.status(500).json({ success: false, message: 'Status check failed.', count: 0 });
@@ -2887,14 +3934,38 @@ export function createApiApp(): express.Express {
 
   app.post('/api/queue/sync', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
     try {
+      const auth = req.auth!;
       const selectedWeek = String(req.body?.week || 'W1').trim().toUpperCase();
       const cfg = await getAppConfig();
       if (cfg.integrationType === 'firebase') {
         res.json({ success: true, message: 'Firebase syncs automatically.', syncedCount: 0, errorCount: 0, total: 0 });
         return;
       }
-      const pendingData = await fbGet<Record<string, Student>>('pending');
-      const records = pendingData && typeof pendingData === 'object' ? Object.values(pendingData) : [];
+      const [pendingData, coursesObj] = await Promise.all([
+        fbGet<Record<string, Student>>('pending'),
+        auth.role === 'admin' ? Promise.resolve(null) : fbGet<Record<string, CourseProfile>>('courses'),
+      ]);
+      const scopedEntries: Array<[string, Student]> = [];
+      if (pendingData && typeof pendingData === 'object') {
+        for (const [key, rec] of Object.entries(pendingData)) {
+          if (!rec || key === 'TEST999' || normalizeStudentId(rec.studentId || '') === 'TEST999') continue;
+          if (auth.role === 'admin') {
+            scopedEntries.push([key, rec]);
+          } else {
+            const access = resolveCourseAccess({
+              coursesObj,
+              courseId: rec.courseId || '',
+              courseName: rec.courseName || '',
+              auth,
+            });
+            if (access.allowed && access.course) {
+              scopedEntries.push([key, rec]);
+            }
+          }
+        }
+      }
+      const records = scopedEntries.map(([, rec]) => rec);
+
       if (cfg.integrationType === 'airtable') {
         res.json({
           success: true,
@@ -2906,13 +3977,28 @@ export function createApiApp(): express.Express {
         });
         return;
       }
-      if (!cfg.scriptUrl) {
-        res.status(400).json({ success: false, message: 'Script Endpoint missing.', syncedCount: 0, errorCount: 0, total: 0 });
+      if (!cfg.scriptUrl || cfg.scriptUrl === DEFAULT_SCRIPT_URL) {
+        res.status(400).json({ success: false, message: 'Google Apps Script URL is not configured.', syncedCount: 0, errorCount: 0, total: 0 });
         return;
       }
       if (records.length > 0) {
         const bulkPayload = records.map((r) => formatCloudPayload({ ...r, week: r.week || selectedWeek }, selectedWeek));
-        await postToGoogleScript(cfg.scriptUrl, bulkPayload);
+        const scriptRes = await postToGoogleScript(cfg.scriptUrl, bulkPayload);
+        if (!scriptRes.ok || scriptRes.json?.success === false || scriptRes.json?.error) {
+          const errMsg =
+            (typeof scriptRes.json?.error === 'string' && scriptRes.json.error) ||
+            scriptRes.error ||
+            'Google Apps Script sync failed.';
+          res.status(502).json({
+            success: false,
+            message: errMsg,
+            syncedCount: 0,
+            errorCount: records.length,
+            total: records.length,
+          });
+          return;
+        }
+        await Promise.all(scopedEntries.map(([key]) => fbDelete(`pending/${key}`).catch(() => { /* ignore */ })));
         res.json({
           success: true,
           message: `Synced ${records.length} record(s) to ${selectedWeek}.`,
@@ -2922,7 +4008,15 @@ export function createApiApp(): express.Express {
         });
         return;
       }
-      await postToGoogleScript(cfg.scriptUrl, { action: 'SYNC_QUEUE', week: selectedWeek });
+      const pingRes = await postToGoogleScript(cfg.scriptUrl, { action: 'SYNC_QUEUE', week: selectedWeek });
+      if (!pingRes.ok || pingRes.json?.success === false || pingRes.json?.error) {
+        const errMsg =
+          (typeof pingRes.json?.error === 'string' && pingRes.json.error) ||
+          pingRes.error ||
+          'Google Apps Script sync trigger failed.';
+        res.status(502).json({ success: false, message: errMsg, syncedCount: 0, errorCount: 1, total: 0 });
+        return;
+      }
       res.json({ success: true, message: `Cloud sync triggered (${selectedWeek}).`, syncedCount: 0, errorCount: 0, total: 0 });
     } catch {
       res.status(500).json({ success: false, message: 'Trigger failed.', syncedCount: 0, errorCount: 0, total: 0 });
@@ -2993,20 +4087,34 @@ export function createApiApp(): express.Express {
           });
           return;
         }
+        const failMsg = directRes.error || `Failed to send via ${deliveryStatus.label}.`;
+        await createEmailDeliveryFailureAlert({
+          context: 'Test Email Delivery',
+          targetEmail: recipient,
+          provider: deliveryStatus.provider,
+          error: failMsg,
+        });
         res.json({
           success: false,
           provider: deliveryStatus.provider,
-          message: directRes.error || `Failed to send via ${deliveryStatus.label}.`,
+          message: failMsg,
         });
         return;
       }
 
       if (!cfg.scriptUrl || cfg.scriptUrl === DEFAULT_SCRIPT_URL || cfg.scriptUrl.endsWith('/dev')) {
+        const failMsg =
+          'No email service configured yet. Deploy your Google Apps Script /exec URL in Settings, or use the Copy Link button for pending accounts.';
+        await createEmailDeliveryFailureAlert({
+          context: 'Test Email Delivery',
+          targetEmail: recipient,
+          provider: 'none',
+          error: failMsg,
+        });
         res.json({
           success: false,
           provider: 'none',
-          message:
-            'No email service configured yet. Deploy your Google Apps Script /exec URL in Settings, or use the Copy Link button for pending accounts.',
+          message: failMsg,
         });
         return;
       }
@@ -3019,6 +4127,13 @@ export function createApiApp(): express.Express {
         adminEmail: recipient,
       });
       if (!emailRes.ok) {
+        const failMsg = emailRes.error || 'Apps Script returned HTML or failed. Check Web App access = Anyone.';
+        await createEmailDeliveryFailureAlert({
+          context: 'Test Email Delivery',
+          targetEmail: recipient,
+          provider: 'apps_script',
+          error: failMsg,
+        });
         res.json({ success: false, message: 'Apps Script returned HTML or failed. Check Web App access = Anyone.' });
         return;
       }
@@ -3032,13 +4147,26 @@ export function createApiApp(): express.Express {
       }
       const errText = String(emailRes.json?.error || 'Email could not be sent.');
       if (errText.includes('script.send_mail') || errText.includes('MailApp')) {
+        const failMsg =
+          'Apps Script lacks email permission (script.send_mail). Please re-authorize Apps Script MailApp in your deployment.';
+        await createEmailDeliveryFailureAlert({
+          context: 'Test Email Delivery',
+          targetEmail: recipient,
+          provider: 'apps_script',
+          error: failMsg,
+        });
         res.json({
           success: false,
-          message:
-            'Apps Script lacks email permission (script.send_mail). Please re-authorize Apps Script MailApp in your deployment.',
+          message: failMsg,
         });
         return;
       }
+      await createEmailDeliveryFailureAlert({
+        context: 'Test Email Delivery',
+        targetEmail: recipient,
+        provider: 'apps_script',
+        error: errText,
+      });
       res.json({ success: false, message: errText });
     } catch {
       res.json({ success: false, message: 'Server error while sending test email.' });
@@ -3069,6 +4197,7 @@ export function createApiApp(): express.Express {
     await fbPatch(`app_users/${userId}`, {
       status: 'approved_pending_pin',
       activationPin: pin,
+      pinFailedAttempts: 0,
       approvedAt: userRecord.approvedAt || now,
       activationSentAt: now,
       activationExpiresAt,
@@ -3096,6 +4225,16 @@ export function createApiApp(): express.Express {
       });
       emailSent = emailRes.emailSent;
       provider = emailRes.provider;
+      if (!emailSent) {
+        await createEmailDeliveryFailureAlert({
+          context: 'Account Approval PIN Email',
+          targetEmail: userRecord.email,
+          username: userRecord.username,
+          userId: userRecord.id,
+          provider,
+          error: emailRes.error,
+        });
+      }
     }
 
     res.json({
@@ -3150,6 +4289,7 @@ export function createApiApp(): express.Express {
     await fbPatch(`app_users/${userId}`, {
       status: 'approved_pending_pin',
       activationPin: pin,
+      pinFailedAttempts: 0,
       approvedAt: userRecord.approvedAt || now,
       activationSentAt: now,
       activationExpiresAt,
@@ -3159,13 +4299,23 @@ export function createApiApp(): express.Express {
       return;
     }
     const cfg = await getAppConfig();
-    const { emailSent, provider } = await dispatchApprovalPinEmail({
+    const { emailSent, provider, error } = await dispatchApprovalPinEmail({
       toEmail: userRecord.email,
       username: userRecord.username,
       pin,
       expiresAtText: new Date(activationExpiresAt).toLocaleString(),
       cfg,
     });
+    if (!emailSent) {
+      await createEmailDeliveryFailureAlert({
+        context: 'Resend Activation PIN Email',
+        targetEmail: userRecord.email,
+        username: userRecord.username,
+        userId: userRecord.id,
+        provider,
+        error,
+      });
+    }
     res.json({ sent: emailSent, provider, email: userRecord.email, pin: emailSent ? undefined : pin });
   });
 

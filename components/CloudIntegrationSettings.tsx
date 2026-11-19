@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import { FIREBASE_CONFIG } from '../firebaseConfig';
 
 interface CloudIntegrationSettingsProps {
   scriptUrl: string;
@@ -430,12 +429,13 @@ function authorizeMail() {
                   <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Apps Script URL</label>
                   <input 
                       type="text" 
-                      value={scriptUrl} 
-                      onChange={(e) => onScriptUrlChange(e.target.value)} 
+                      value={isAdmin ? scriptUrl : 'Managed by Administrator'} 
+                      disabled={!isAdmin}
+                      onChange={(e) => { if (isAdmin) onScriptUrlChange(e.target.value); }} 
                       placeholder="https://script.google.com/macros/s/.../exec" 
-                      className="w-full border-2 border-gray-50 bg-gray-50/50 rounded-2xl p-4 text-xs font-bold outline-none focus:bg-white focus:border-brand-primary transition-all" 
+                      className={`w-full border-2 border-gray-50 rounded-2xl p-4 text-xs font-bold outline-none transition-all ${isAdmin ? 'bg-gray-50/50 focus:bg-white focus:border-brand-primary' : 'bg-gray-100 text-gray-500 cursor-not-allowed'}`} 
                   />
-                  {scriptUrl.trim().endsWith('/dev') && (
+                  {isAdmin && scriptUrl.trim().endsWith('/dev') && (
                     <p className="mt-2 text-[10px] font-bold text-red-600 uppercase">
                       Warning: URL ends in /dev. Use the deployed /exec URL with "Who has access: Anyone" so it works after deployment.
                     </p>
@@ -499,7 +499,7 @@ function authorizeMail() {
                   <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-1 ml-1">Database URL</label>
                   <input 
                       type="text" 
-                      value={firebaseDatabaseUrl || FIREBASE_CONFIG.DATABASE_URL} 
+                      value={isAdmin ? (firebaseDatabaseUrl || 'Configured server-side') : 'Managed by Administrator'} 
                       disabled
                       className="w-full border-2 border-gray-50 bg-gray-100 rounded-2xl p-4 text-xs font-bold text-gray-500 outline-none cursor-not-allowed" 
                   />

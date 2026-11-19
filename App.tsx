@@ -15,8 +15,7 @@ import type {
   SyncSheetCoursesResult,
   UserNotification,
 } from './types';
-import { PRE_REGISTERED_STUDENTS, PreRegisteredStudent } from './studentList';
-import { FIREBASE_CONFIG } from './firebaseConfig';
+import type { PreRegisteredStudent } from './studentList';
 
 type View = 'teacher' | 'student';
 type IntegrationType = 'google_sheets' | 'airtable' | 'firebase';
@@ -39,7 +38,7 @@ const ADMIN_EMAIL_KEY = 'attendance-admin-email-v1';
 const ACTIVE_WEEK_KEY = 'attendance-active-week-v2';
 const COURSES_KEY = 'attendance-courses-v1';
 
-const DEFAULT_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbwbjXTrbFPRqVA0I-RGc1rV7K7eZ_CkgQujSBVtOtvjDCW1GJYAkxiVlXJzAB_-R_CaLA/exec';
+const normCourseKey = (name: string) => name.replace(/\s+/g, ' ').trim().toUpperCase();
 
 const getPublicAppUrl = () => {
   const publicOrigin = window.location.origin.replace(/^https:\/\/ais-dev-/i, 'https://ais-pre-');
@@ -124,11 +123,12 @@ const MainApp: React.FC = () => {
     return (localStorage.getItem('attendance-integration-type') as IntegrationType) || 'google_sheets';
   });
   const [adminEmail, setAdminEmail] = useState<string>(() => localStorage.getItem(ADMIN_EMAIL_KEY) || '');
-  const [firebaseDatabaseUrl, setFirebaseDatabaseUrl] = useState<string>(FIREBASE_CONFIG.DATABASE_URL);
+  const [firebaseDatabaseUrl, setFirebaseDatabaseUrl] = useState<string>('');
   const [scannedStudentSession, setScannedStudentSession] = useState<{
     courseName?: string;
     courseId?: string;
     week?: string;
+    checkinToken?: string;
   }>({});
 
   const [registeredUsers, setRegisteredUsers] = useState<AppUser[]>([]);
@@ -185,7 +185,7 @@ const MainApp: React.FC = () => {
         console.error('Error loading known students');
       }
     }
-    return PRE_REGISTERED_STUDENTS;
+    return [];
   });
 
   const [courses, setCourses] = useState<CourseProfile[]>(() => {
@@ -212,7 +212,7 @@ const MainApp: React.FC = () => {
   });
 
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || DEFAULT_SCRIPT_URL;
+    return localStorage.getItem(SCRIPT_URL_KEY) || '';
   });
 
   const courseEditedAtRef = useRef<number>(0);
@@ -312,6 +312,9 @@ const MainApp: React.FC = () => {
     setActiveCourse('');
     setKnownStudents([]);
     setTeacherHistory([]);
+    setScriptUrl('');
+    setAdminEmail('');
+    setFirebaseDatabaseUrl('');
     hasInitializedUserPrefRef.current = false;
     courseEditedAtRef.current = 0;
     localStorage.removeItem(AUTH_KEY);
@@ -324,6 +327,14 @@ const MainApp: React.FC = () => {
     localStorage.removeItem(COURSES_KEY);
     localStorage.removeItem(KNOWN_STUDENTS_KEY);
     localStorage.removeItem(TEACHER_HISTORY_KEY);
+    localStorage.removeItem(SCRIPT_URL_KEY);
+    localStorage.removeItem(ADMIN_EMAIL_KEY);
+    localStorage.removeItem(ACTIVE_WEEK_KEY);
+    localStorage.removeItem('attendance-course-name');
+    localStorage.removeItem('smart-attendance-classroom-state-v1');
+    localStorage.removeItem('airtable-token');
+    localStorage.removeItem('airtable-base-id');
+    localStorage.removeItem('airtable-table-name');
     if (noticeMessage) {
       setActivationNotice({ type: 'error', message: noticeMessage });
     }
@@ -376,18 +387,12 @@ const MainApp: React.FC = () => {
         if (!res.ok || cancelled) return;
         const data = await res.json();
         if (cancelled || !data) return;
-        if (typeof data.scriptUrl === 'string' && data.scriptUrl.startsWith('https://script.google.com/')) {
-          setScriptUrl(data.scriptUrl);
-        }
         if (
           data.integrationType === 'google_sheets' ||
           data.integrationType === 'airtable' ||
           data.integrationType === 'firebase'
         ) {
           setIntegrationType(data.integrationType);
-        }
-        if (typeof data.databaseUrl === 'string' && data.databaseUrl.startsWith('https://')) {
-          setFirebaseDatabaseUrl(data.databaseUrl);
         }
       } catch { /* ignore */ }
     };
@@ -404,18 +409,18 @@ const MainApp: React.FC = () => {
       const data = await res.json();
       if (!data?.success) return;
 
+      const effectiveRole: 'admin' | 'lecturer' =
+        data.user?.role === 'admin' || data.user?.role === 'lecturer'
+          ? data.user.role
+          : 'lecturer';
+
       if (data.user) {
-        if (data.user.role === 'admin' || data.user.role === 'lecturer') {
-          setCurrentUserRole(data.user.role);
-        }
+        setCurrentUserRole(effectiveRole);
         if (data.user.username) setCurrentAdminName(data.user.username);
         if (data.user.id) setCurrentUserId(data.user.id);
       }
 
       if (data.config) {
-        if (typeof data.config.scriptUrl === 'string' && data.config.scriptUrl.startsWith('https://script.google.com/')) {
-          setScriptUrl(data.config.scriptUrl);
-        }
         if (
           data.config.integrationType === 'google_sheets' ||
           data.config.integrationType === 'airtable' ||
@@ -423,8 +428,24 @@ const MainApp: React.FC = () => {
         ) {
           setIntegrationType(data.config.integrationType);
         }
-        if (typeof data.config.adminEmail === 'string') {
-          setAdminEmail(data.config.adminEmail);
+        if (effectiveRole === 'admin') {
+          if (typeof data.config.scriptUrl === 'string' && data.config.scriptUrl.startsWith('https://script.google.com/')) {
+            setScriptUrl(data.config.scriptUrl);
+          } else if (typeof data.config.scriptUrl === 'string' && !data.config.scriptUrl) {
+            setScriptUrl('');
+          }
+          if (typeof data.config.databaseUrl === 'string') {
+            setFirebaseDatabaseUrl(data.config.databaseUrl);
+          }
+          if (typeof data.config.adminEmail === 'string') {
+            setAdminEmail(data.config.adminEmail);
+          }
+        } else {
+          setScriptUrl('');
+          setFirebaseDatabaseUrl('');
+          setAdminEmail('');
+          localStorage.removeItem(SCRIPT_URL_KEY);
+          localStorage.removeItem(ADMIN_EMAIL_KEY);
         }
       }
 
@@ -439,7 +460,7 @@ const MainApp: React.FC = () => {
           hasInitializedUserPrefRef.current = true;
           if (typeof pref.activeCourse === 'string' && pref.activeCourse.trim()) {
             const matchedCourse = loadedCourses.find(
-              c => c.courseName.trim().toUpperCase() === pref.activeCourse!.trim().toUpperCase()
+              c => normCourseKey(c.courseName) === normCourseKey(pref.activeCourse!)
             );
             if (matchedCourse) {
               setActiveCourse(matchedCourse.courseName);
@@ -466,7 +487,7 @@ const MainApp: React.FC = () => {
         hasInitializedUserPrefRef.current = true;
         if (loadedCourses.length > 0) {
           const currentMatches = loadedCourses.find(
-            c => c.courseName.trim().toUpperCase() === activeCourseRef.current.trim().toUpperCase()
+            c => normCourseKey(c.courseName) === normCourseKey(activeCourseRef.current)
           );
           if (currentMatches) {
             setKnownStudents(currentMatches.students || []);
@@ -585,20 +606,8 @@ const MainApp: React.FC = () => {
     sendHeartbeat();
     const hbInterval = setInterval(sendHeartbeat, 15000);
 
-    const handlePageHide = () => {
-      try {
-        void fetch('/api/auth/logout', {
-          method: 'POST',
-          keepalive: true,
-          headers: { Authorization: `Bearer ${authToken}` },
-        });
-      } catch { /* ignore */ }
-    };
-
-    window.addEventListener('pagehide', handlePageHide);
     return () => {
       clearInterval(hbInterval);
-      window.removeEventListener('pagehide', handlePageHide);
     };
   }, [isAuthenticated, authToken, view, apiFetch]);
 
@@ -762,6 +771,41 @@ const MainApp: React.FC = () => {
     }
   }, [apiFetch, handleSelectCourse, saveUserCoursePref, selectedWeek]);
 
+  const resolveCourseId = useCallback((courseName: string, explicitId?: string): string => {
+    if (explicitId && explicitId.trim()) return explicitId.trim();
+    const key = normCourseKey(courseName);
+    if (!key) return '';
+    return coursesRef.current.find(c => normCourseKey(c.courseName) === key)?.id || '';
+  }, []);
+
+  const handleFetchSheetTabs = useCallback(async (params?: { course?: string }): Promise<{
+    success: boolean;
+    sheets?: SheetTabCandidate[];
+    error?: string;
+  }> => {
+    try {
+      const qs = params?.course ? `?course=${encodeURIComponent(params.course)}` : '';
+      const res = await apiFetch(`/api/courses/sheet-tabs${qs}`, { cache: 'no-store' });
+      const data = (await res.json().catch(() => null)) as {
+        success?: boolean;
+        sheets?: SheetTabCandidate[];
+        error?: string;
+      } | null;
+      if (!res.ok || !data?.success) {
+        return {
+          success: false,
+          error: data?.error || `Could not read Google Sheet tabs (HTTP ${res.status}).`,
+        };
+      }
+      return {
+        success: true,
+        sheets: Array.isArray(data.sheets) ? data.sheets : [],
+      };
+    } catch {
+      return { success: false, error: 'Network error reading Google Sheet tabs.' };
+    }
+  }, [apiFetch]);
+
   const handleCheckSheetTabOwnership = useCallback(async (
     sheetTabs: SheetTabCandidate[]
   ): Promise<SheetTabOwnershipResult[]> => {
@@ -827,6 +871,7 @@ const MainApp: React.FC = () => {
           return Array.from(byId.values()).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
         });
       }
+      void syncAllCloudState();
       return {
         success: Boolean(resData?.success),
         courses: syncedList,
@@ -835,7 +880,7 @@ const MainApp: React.FC = () => {
     } catch {
       return { success: false, courses: [], skippedCourses: [] };
     }
-  }, [apiFetch]);
+  }, [apiFetch, syncAllCloudState]);
 
   const handleAssignCourseOwner = useCallback(async (
     courseId: string,
@@ -854,13 +899,14 @@ const MainApp: React.FC = () => {
       if (data?.course) {
         const updated = normalizeCourses([data.course])[0];
         setCourses(prev => prev.map(c => (c.id === updated.id ? updated : c)));
+        void syncAllCloudState();
         return { success: true, course: updated };
       }
       return { success: false, error: 'Could not update subject owner.' };
     } catch {
       return { success: false, error: 'Network error while updating subject owner.' };
     }
-  }, [apiFetch]);
+  }, [apiFetch, syncAllCloudState]);
 
   const handleUpdateCourseCoLecturers = useCallback(async (
     courseId: string,
@@ -879,13 +925,14 @@ const MainApp: React.FC = () => {
       if (data?.course) {
         const updated = normalizeCourses([data.course])[0];
         setCourses(prev => prev.map(c => (c.id === updated.id ? updated : c)));
+        void syncAllCloudState();
         return { success: true, course: updated };
       }
       return { success: false, error: 'Could not update co-lecturers.' };
     } catch {
       return { success: false, error: 'Network error while updating co-lecturers.' };
     }
-  }, [apiFetch]);
+  }, [apiFetch, syncAllCloudState]);
 
   const handleWeekChange = useCallback((week: string) => {
     courseEditedAtRef.current = Date.now();
@@ -976,16 +1023,16 @@ const MainApp: React.FC = () => {
     let cancelled = false;
     const loadRoster = async () => {
       const courseFilter = effectiveStudentCourse;
-      const cidFilter =
-        effectiveStudentCourseId ||
-        coursesRef.current.find(c => c.courseName.trim().toUpperCase() === courseFilter.trim().toUpperCase())?.id ||
-        '';
+      const cidFilter = resolveCourseId(courseFilter, effectiveStudentCourseId);
       if (!courseFilter && !cidFilter) return;
+      if (!isAuthenticated && !scannedStudentSession.checkinToken) return;
 
-      // If authenticated and already have course students locally, use them immediately while verifying server
+      // If authenticated and already have course students locally, sync immediately while verifying server
       if (isAuthenticated && courseFilter) {
-        const localCourse = coursesRef.current.find(c => c.courseName.trim().toUpperCase() === courseFilter.trim().toUpperCase());
-        if (localCourse && Array.isArray(localCourse.students) && localCourse.students.length > 0) {
+        const localCourse =
+          (cidFilter ? coursesRef.current.find(c => c.id === cidFilter) : undefined) ||
+          coursesRef.current.find(c => normCourseKey(c.courseName) === normCourseKey(courseFilter));
+        if (localCourse && Array.isArray(localCourse.students)) {
           setKnownStudents(localCourse.students);
         }
       }
@@ -994,17 +1041,24 @@ const MainApp: React.FC = () => {
         const params = new URLSearchParams();
         if (courseFilter) params.set('course', courseFilter);
         if (cidFilter) params.set('courseId', cidFilter);
-        const res = await fetch(`/api/student/roster?${params.toString()}`, { cache: 'no-store' });
+        const res = isAuthenticated
+          ? await apiFetch(`/api/student/roster?${params.toString()}`, { cache: 'no-store' })
+          : await fetch(`/api/student/roster?${params.toString()}`, {
+              cache: 'no-store',
+              headers: scannedStudentSession.checkinToken
+                ? { 'x-checkin-token': scannedStudentSession.checkinToken }
+                : {},
+            });
         if (!res.ok || cancelled) return;
         const data = await res.json();
-        if (!cancelled && Array.isArray(data?.students) && data.students.length > 0) {
+        if (!cancelled && Array.isArray(data?.students)) {
           setKnownStudents(data.students);
         }
       } catch { /* ignore */ }
     };
     void loadRoster();
     return () => { cancelled = true; };
-  }, [isAuthenticated, effectiveStudentCourse, effectiveStudentCourseId]);
+  }, [isAuthenticated, effectiveStudentCourse, effectiveStudentCourseId, scannedStudentSession.checkinToken, apiFetch, resolveCourseId]);
 
   const formatCloudPayload = useCallback((r: Student) => {
     const targetWeek = r.week || selectedWeek || 'W1';
@@ -1067,8 +1121,16 @@ const MainApp: React.FC = () => {
 
   const fetchFirebaseLiveAttendance = useCallback(async () => {
     if (view !== 'teacher' || !isAuthenticated || !authTokenRef.current) return;
+    const cid = resolveCourseId(activeCourse || '');
+    if (!activeCourse.trim() && !cid && currentUserRole !== 'admin') {
+      setAttendanceList([]);
+      return;
+    }
     try {
-      const res = await apiFetch(`/api/attendance/live?course=${encodeURIComponent(activeCourse || '')}`, {
+      const qs = new URLSearchParams();
+      if (activeCourse) qs.set('course', activeCourse);
+      if (cid) qs.set('courseId', cid);
+      const res = await apiFetch(`/api/attendance/live?${qs.toString()}`, {
         cache: 'no-store',
       });
       if (!res.ok) return;
@@ -1086,7 +1148,7 @@ const MainApp: React.FC = () => {
     } catch {
       console.warn('Polling failed');
     }
-  }, [view, isAuthenticated, activeCourse, apiFetch]);
+  }, [view, isAuthenticated, activeCourse, currentUserRole, apiFetch, resolveCourseId]);
 
   useEffect(() => {
     if (view === 'teacher' && isAuthenticated) {
@@ -1254,10 +1316,8 @@ const MainApp: React.FC = () => {
     reason: string;
   }): Promise<{ success: boolean; message: string }> => {
     try {
-      const res = await fetch('/api/auth/delete-request', {
+      const res = await apiFetch('/api/auth/delete-request', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
         cache: 'no-store',
         body: JSON.stringify(params),
       });
@@ -1463,10 +1523,14 @@ const MainApp: React.FC = () => {
 
   const handleNewSession = useCallback(async () => {
     setAttendanceList([]);
-    await apiFetch(`/api/attendance/session?course=${encodeURIComponent(activeCourse || '')}`, {
+    const cid = resolveCourseId(activeCourse || '');
+    const qs = new URLSearchParams();
+    if (activeCourse) qs.set('course', activeCourse);
+    if (cid) qs.set('courseId', cid);
+    await apiFetch(`/api/attendance/session?${qs.toString()}`, {
       method: 'DELETE',
     }).catch(() => { /* ignore */ });
-  }, [activeCourse, apiFetch]);
+  }, [activeCourse, apiFetch, resolveCourseId]);
 
   const handleEnterKiosk = useCallback(() => {
     setIsKioskMode(true);
@@ -1551,7 +1615,7 @@ const MainApp: React.FC = () => {
             email,
             status,
             courseName,
-            courseId: overrideCourseId || effectiveStudentCourseId || '',
+            courseId: overrideCourseId || effectiveStudentCourseId || resolveCourseId(courseName) || '',
             week: targetWeek,
             checkinToken,
             pin,
@@ -1602,6 +1666,7 @@ const MainApp: React.FC = () => {
     }
 
     try {
+      const resolvedCourseId = resolveCourseId(courseName, overrideCourseId);
       const res = await apiFetch('/api/attendance/manual', {
         method: 'POST',
         body: JSON.stringify({
@@ -1610,6 +1675,7 @@ const MainApp: React.FC = () => {
           email,
           status: status.trim().toUpperCase(),
           courseName,
+          courseId: resolvedCourseId || undefined,
           overrideTimestamp,
           absenceReason,
           week: targetWeek,
@@ -1691,7 +1757,11 @@ const MainApp: React.FC = () => {
 
     await apiFetch('/api/attendance/remove', {
       method: 'POST',
-      body: JSON.stringify({ removals, courseName }),
+      body: JSON.stringify({
+        removals,
+        courseName,
+        courseId: resolveCourseId(courseName) || undefined,
+      }),
     }).catch(() => { /* ignore */ });
 
     if (integrationType === 'airtable') {
@@ -1761,7 +1831,12 @@ const MainApp: React.FC = () => {
       setTeacherHistory(prev => [...records, ...prev]);
       await apiFetch('/api/attendance/bulk', {
         method: 'POST',
-        body: JSON.stringify({ records, courseName, week }),
+        body: JSON.stringify({
+          records,
+          courseName,
+          courseId: resolveCourseId(courseName) || undefined,
+          week,
+        }),
       }).catch(() => { /* ignore */ });
       if (integrationType === 'airtable') {
         await syncToAirtable(updatePayload);
@@ -1780,11 +1855,12 @@ const MainApp: React.FC = () => {
     try {
       const isCurrentWeek =
         params.week.toUpperCase() === (selectedWeek || 'W1').toUpperCase() &&
-        params.courseName.trim().toUpperCase() === activeCourseRef.current.trim().toUpperCase();
+        normCourseKey(params.courseName) === normCourseKey(activeCourseRef.current);
       const res = await apiFetch('/api/attendance/matrix-cell', {
         method: 'PUT',
         body: JSON.stringify({
           ...params,
+          courseId: resolveCourseId(params.courseName) || undefined,
           updateLiveSession: isCurrentWeek,
         }),
       });
@@ -1804,7 +1880,7 @@ const MainApp: React.FC = () => {
     } catch {
       return { success: false, message: 'Network error updating matrix cell.' };
     }
-  }, [apiFetch, integrationType, selectedWeek, syncToAirtable]);
+  }, [apiFetch, integrationType, resolveCourseId, selectedWeek, syncToAirtable]);
 
   const handleSendTestRecord = async (courseName: string): Promise<{ success: boolean; message: string }> => {
     try {
@@ -1922,6 +1998,7 @@ const MainApp: React.FC = () => {
               onSelectCourse={handleSelectCourse}
               onAddCourse={handleAddCourse}
               onDeleteCourse={handleDeleteCourse}
+              onFetchSheetTabs={handleFetchSheetTabs}
               onCheckSheetTabOwnership={handleCheckSheetTabOwnership}
               onSyncSheetCourses={handleSyncSheetCourses}
               onAssignCourseOwner={handleAssignCourseOwner}

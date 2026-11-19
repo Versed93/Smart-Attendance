@@ -44,14 +44,14 @@ interface StudentViewProps {
   isOfflineScan?: boolean;
   knownStudents: PreRegisteredStudent[];
   onSwitchToTeacher?: () => void;
-  onSessionScanned?: (session: { courseName?: string; courseId?: string; week?: string }) => void;
+  onSessionScanned?: (session: { courseName?: string; courseId?: string; week?: string; checkinToken?: string }) => void;
 }
 
 type Status = 'landing' | 'validating' | 'validating-gps' | 'gps-prompt' | 'form' | 'submitting' | 'success' | 'error' | 'show-student-qr' | 'device-locked' | 'checking-firebase' | 'history';
 
 const STUDENT_PROFILE_KEY = 'attendance-student-profile-v1';
 const STUDENT_HISTORY_KEY = 'attendance-student-history-v1';
-const SESSION_ID = new Date().toISOString().slice(0, 10);
+const getSessionDateId = () => new Date().toISOString().slice(0, 10);
 
 const getDistanceFromLatLonInM = (lat1: number, lon1: number, lat2: number, lon2: number) => {
   const R = 6371e3;
@@ -108,13 +108,33 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [geoConstraints, setGeoConstraints] = useState(initialGeoConstraints);
   const [isOfflineScan, setIsOfflineScan] = useState(initialIsOfflineScan);
   const [history, setHistory] = useState<ScanHistory[]>(() => {
-    const saved = localStorage.getItem(STUDENT_HISTORY_KEY);
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem(STUDENT_HISTORY_KEY);
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   });
   
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const autoFillRef = useRef<{ id?: string; name?: string }>({});
+  const courseNameRef = useRef<string | undefined>(courseName);
+  const courseIdRef = useRef<string | undefined>(courseId);
+  const scannedWeekRef = useRef<string | undefined>(scannedWeek);
   const [activeSuggestionField, setActiveSuggestionField] = useState<'id' | 'name' | null>(null);
+
+  useEffect(() => {
+    courseNameRef.current = courseName;
+  }, [courseName]);
+
+  useEffect(() => {
+    courseIdRef.current = courseId;
+  }, [courseId]);
+
+  useEffect(() => {
+    scannedWeekRef.current = scannedWeek;
+  }, [scannedWeek]);
 
   const normalizeId = (val: string) => val.trim().replace(/\s+/g, '').toUpperCase();
   const normalizeName = (val: string) => val.trim().replace(/\s+/g, ' ').toUpperCase();
@@ -176,7 +196,8 @@ export const StudentView: React.FC<StudentViewProps> = ({
             return;
         }
 
-        const lockKey = `attendance-device-lock-v1-${SESSION_ID}-${courseName || 'general'}`;
+        const lockCourse = courseNameRef.current || 'general';
+        const lockKey = `attendance-device-lock-v1-${getSessionDateId()}-${lockCourse}`;
         
         if (!bypassRestrictions && localStorage.getItem(lockKey)) {
           setStatus('device-locked');
@@ -191,9 +212,9 @@ export const StudentView: React.FC<StudentViewProps> = ({
               body: JSON.stringify({
                 sig: qrSig,
                 t: token,
-                courseName: courseName || '',
-                courseId: courseId || '',
-                week: scannedWeek || '',
+                courseName: courseNameRef.current || '',
+                courseId: courseIdRef.current || '',
+                week: scannedWeekRef.current || '',
               }),
             });
             const data = await res.json().catch(() => null);
@@ -206,9 +227,24 @@ export const StudentView: React.FC<StudentViewProps> = ({
             }
             setCheckinToken(data.checkinToken);
             setPinRequired(Boolean(data.pinRequired));
-            if (data.courseName) setCourseName(data.courseName);
-            if (data.courseId) setCourseId(data.courseId);
-            if (data.week) setScannedWeek(data.week);
+            if (data.courseName) {
+              courseNameRef.current = data.courseName;
+              setCourseName(data.courseName);
+            }
+            if (data.courseId) {
+              courseIdRef.current = data.courseId;
+              setCourseId(data.courseId);
+            }
+            if (data.week) {
+              scannedWeekRef.current = data.week;
+              setScannedWeek(data.week);
+            }
+            onSessionScanned?.({
+              courseName: data.courseName || courseNameRef.current || undefined,
+              courseId: data.courseId || courseIdRef.current || undefined,
+              week: data.week || scannedWeekRef.current || undefined,
+              checkinToken: data.checkinToken,
+            });
           } catch {
             if (cancelled) return;
             setStatus('error');
@@ -226,7 +262,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
     void checkStatus();
     return () => { cancelled = true; };
-  }, [bypassRestrictions, courseId, courseName, geoConstraints, isOfflineScan, qrSig, requestGpsVerification, scannedWeek, token]);
+  }, [bypassRestrictions, geoConstraints, isOfflineScan, onSessionScanned, qrSig, requestGpsVerification, token]);
 
   useEffect(() => {
     if (status === 'show-student-qr' && canvasRef.current && studentQrData) {
@@ -333,11 +369,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
       setClassroomPinInput('');
       setCheckinToken('');
       addHistory({ courseName: courseName || 'General Session', timestamp: Date.now(), type: 'online' });
-      const lockKey = `attendance-device-lock-v1-${SESSION_ID}-${courseName || 'general'}`;
+      const lockKey = `attendance-device-lock-v1-${getSessionDateId()}-${courseName || 'general'}`;
       if (!bypassRestrictions) localStorage.setItem(lockKey, 'true');
     } else if (result.message === "You have already checked in for this session." || result.message === "Attendance already recorded for this student ID.") {
       setStatus('device-locked');
-      const lockKey = `attendance-device-lock-v1-${SESSION_ID}-${courseName || 'general'}`;
+      const lockKey = `attendance-device-lock-v1-${getSessionDateId()}-${courseName || 'general'}`;
       if (!bypassRestrictions) localStorage.setItem(lockKey, 'true');
     } else if (
       result.code === 'INVALID_PIN' ||
@@ -484,7 +520,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
           const lng = url.searchParams.get('lng');
           const rad = url.searchParams.get('rad');
           const offline = url.searchParams.get('offline') === 'true';
-          if (t && sig) {
+          if (t && (sig || offline)) {
               setName('');
               setStudentId('');
               setFormError('');
@@ -492,6 +528,9 @@ export const StudentView: React.FC<StudentViewProps> = ({
               setCheckinToken('');
               autoFillRef.current = {};
               setActiveSuggestionField(null);
+              courseNameRef.current = c || undefined;
+              courseIdRef.current = cid || undefined;
+              scannedWeekRef.current = w || undefined;
               setQrSig(sig);
               setPinRequired(pinFlag);
               setToken(t);

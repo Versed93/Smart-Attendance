@@ -5,6 +5,7 @@ export interface Student {
   timestamp: number;
   status: string;
   courseName: string;
+  courseId?: string;
   absenceReason?: string;
   week?: string;
 }
@@ -61,7 +62,13 @@ export interface AdminSessionActivity {
 
 export interface AdminNotification {
   id: string;
-  type: 'user_signup' | 'delete_request' | 'account_activated';
+  type:
+    | 'user_signup'
+    | 'delete_request'
+    | 'account_activated'
+    | 'email_delivery_failure'
+    | 'course_ownership_changed'
+    | 'sheet_sync_skipped';
   userId: string;
   username: string;
   email: string;
@@ -70,16 +77,23 @@ export interface AdminNotification {
   emailSent: boolean;
   message: string;
   reason?: string;
+  courseName?: string;
 }
 
 export interface UserNotification {
   id: string;
   userId: string;
-  type: 'account_activated' | 'system_update';
+  type:
+    | 'account_activated'
+    | 'course_assigned'
+    | 'co_lecturer_added'
+    | 'co_lecturer_removed'
+    | 'system_update';
   title: string;
   message: string;
   createdAt: number;
   read: boolean;
+  courseName?: string;
 }
 
 export type EmailProviderType = 'resend' | 'smtp' | 'apps_script' | 'none';

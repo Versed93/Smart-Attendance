@@ -9,12 +9,15 @@ var PRE_REGISTERED_STUDENTS = [];
 
 // serverApp.ts
 var SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
-var ACTIVATION_EXPIRY_MS = 24 * 60 * 60 * 1e3;
-var FIREBASE_DB_URL = (process.env.FIREBASE_DATABASE_URL || "https://smart-attendance-system-c0a9b-default-rtdb.asia-southeast1.firebasedatabase.app").replace(/\/+$/, "");
-var FIREBASE_DB_SECRET = process.env.FIREBASE_DATABASE_SECRET || "Ljz9cYejOtpU83Z6h1wdZdvK1kjpRLZ4haMlkYO1";
-var AUTH_SECRET = process.env.AUTH_SECRET || crypto.createHash("sha256").update(`smart-attendance-hmac:${FIREBASE_DB_SECRET}`).digest("hex");
+var ACTIVATION_PIN_EXPIRY_MS = 24 * 60 * 60 * 1e3;
+var FIREBASE_DB_URL = (process.env.FIREBASE_DATABASE_URL || "https://gen-lang-client-0701481146-default-rtdb.asia-southeast1.firebasedatabase.app").replace(/\/+$/, "");
+var FIREBASE_DB_SECRET = (process.env.FIREBASE_DATABASE_SECRET || "").trim();
+var resolvedAuthSecret = (process.env.AUTH_SECRET || "").trim() || null;
+var authSecretPromise = null;
 var DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || "adminscm";
 var DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwbjXTrbFPRqVA0I-RGc1rV7K7eZ_CkgQujSBVtOtvjDCW1GJYAkxiVlXJzAB_-R_CaLA/exec";
+var MAX_PIN_FAILED_ATTEMPTS = 5;
+var generateActivationPin = () => crypto.randomInt(1e5, 1e6).toString();
 var toFirebaseKey = (raw) => raw.replace(/[^a-zA-Z0-9_-]/g, "_");
 var normalizeStudentId = (val) => val.trim().replace(/\s+/g, "").toUpperCase();
 var toStudentFirebaseKey = (studentId) => toFirebaseKey(normalizeStudentId(studentId));
@@ -33,8 +36,37 @@ var sanitizeCoursePath = (str) => str.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase(
 var getSessionDateId = () => (/* @__PURE__ */ new Date()).toISOString().slice(0, 10);
 var buildDbUrl = (dbPath) => {
   const cleanPath = dbPath.replace(/^\/+/, "");
-  return `${FIREBASE_DB_URL}/${cleanPath}.json?auth=${FIREBASE_DB_SECRET}&_ts=${Date.now()}`;
+  const params = new URLSearchParams();
+  if (FIREBASE_DB_SECRET) {
+    params.set("auth", FIREBASE_DB_SECRET);
+  }
+  params.set("_ts", String(Date.now()));
+  return `${FIREBASE_DB_URL}/${cleanPath}.json?${params.toString()}`;
 };
+async function getAuthSecret() {
+  if (resolvedAuthSecret) return resolvedAuthSecret;
+  if (authSecretPromise) return authSecretPromise;
+  authSecretPromise = (async () => {
+    try {
+      const stored = await fbGet("app_config/_auth_hmac_secret");
+      if (typeof stored === "string" && stored.trim().length >= 32) {
+        resolvedAuthSecret = stored.trim();
+        return resolvedAuthSecret;
+      }
+    } catch {
+    }
+    const generated = crypto.randomBytes(32).toString("hex");
+    resolvedAuthSecret = generated;
+    await fbPut("app_config/_auth_hmac_secret", generated).catch(() => {
+    });
+    return generated;
+  })();
+  try {
+    return await authSecretPromise;
+  } finally {
+    authSecretPromise = null;
+  }
+}
 async function fbGet(dbPath) {
   const res = await fetch(buildDbUrl(dbPath), { cache: "no-store" });
   if (res.status === 404) return null;
@@ -107,16 +139,18 @@ async function verifyAndUpgradeUserPassword(user, plainPassword) {
   }
   return false;
 }
-function signSessionToken(payload) {
+async function signSessionToken(payload) {
+  const secret = await getAuthSecret();
   const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-  const signature = crypto.createHmac("sha256", AUTH_SECRET).update(encodedPayload).digest("base64url");
+  const signature = crypto.createHmac("sha256", secret).update(encodedPayload).digest("base64url");
   return `${encodedPayload}.${signature}`;
 }
-function verifySessionToken(token) {
+async function verifySessionToken(token) {
   const parts = token.split(".");
   if (parts.length !== 2) return null;
   const [encodedPayload, signature] = parts;
-  const expectedSig = crypto.createHmac("sha256", AUTH_SECRET).update(encodedPayload).digest("base64url");
+  const secret = await getAuthSecret();
+  const expectedSig = crypto.createHmac("sha256", secret).update(encodedPayload).digest("base64url");
   if (!timingSafeStringEqual(signature, expectedSig)) return null;
   try {
     const parsed = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
@@ -127,10 +161,193 @@ function verifySessionToken(token) {
     return null;
   }
 }
+var PIN_CHALLENGE_TTL_MS = 15 * 60 * 1e3;
+async function signPinChallengeToken(uid) {
+  const now = Date.now();
+  const payload = {
+    purpose: "pin_activation",
+    uid,
+    iat: now,
+    exp: now + PIN_CHALLENGE_TTL_MS
+  };
+  const secret = await getAuthSecret();
+  const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const signature = crypto.createHmac("sha256", secret).update(encodedPayload).digest("base64url");
+  return `${encodedPayload}.${signature}`;
+}
+async function verifyPinChallengeToken(token) {
+  const parts = token.split(".");
+  if (parts.length !== 2) return null;
+  const [encodedPayload, signature] = parts;
+  const secret = await getAuthSecret();
+  const expectedSig = crypto.createHmac("sha256", secret).update(encodedPayload).digest("base64url");
+  if (!timingSafeStringEqual(signature, expectedSig)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8"));
+    if (!parsed || parsed.purpose !== "pin_activation" || !parsed.uid || !parsed.exp) return null;
+    if (Date.now() > parsed.exp) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+var QR_TOKEN_VALIDITY_MS = 15 * 1e3;
+var CHECKIN_GRANT_VALIDITY_MS = 2 * 60 * 1e3;
+var activePinCache = /* @__PURE__ */ new Map();
+var usedScanNonces = /* @__PURE__ */ new Map();
+var lastDbMaintenanceAt = 0;
+function pruneUsedScanNonces(now) {
+  if (usedScanNonces.size >= 200) {
+    for (const [nonce, exp] of usedScanNonces.entries()) {
+      if (now > exp) {
+        usedScanNonces.delete(nonce);
+      }
+    }
+  }
+  if (now - lastDbMaintenanceAt > 10 * 60 * 1e3) {
+    lastDbMaintenanceAt = now;
+    const todayPrefix = `${getSessionDateId()}_`;
+    void (async () => {
+      try {
+        const [noncesObj, pinsObj] = await Promise.all([
+          fbGet("used_qr_nonces"),
+          fbGet("classroom_pins")
+        ]);
+        if (noncesObj && typeof noncesObj === "object") {
+          const expiredPatch = {};
+          for (const [k, exp] of Object.entries(noncesObj)) {
+            if (typeof exp === "number" && now > exp) {
+              expiredPatch[k] = null;
+            }
+          }
+          if (Object.keys(expiredPatch).length > 0) {
+            await fbPatch("used_qr_nonces", expiredPatch).catch(() => {
+            });
+          }
+        }
+        if (pinsObj && typeof pinsObj === "object") {
+          const oldPinPatch = {};
+          for (const k of Object.keys(pinsObj)) {
+            if (/^\d{4}-\d{2}-\d{2}_/.test(k) && !k.startsWith(todayPrefix)) {
+              oldPinPatch[k] = null;
+              activePinCache.delete(k);
+            }
+          }
+          if (Object.keys(oldPinPatch).length > 0) {
+            await fbPatch("classroom_pins", oldPinPatch).catch(() => {
+            });
+          }
+        }
+      } catch {
+      }
+    })();
+  }
+}
+function generateClassroomPin() {
+  return String(crypto.randomInt(1e3, 1e4));
+}
+function buildCourseSessionSegment(params) {
+  const course = params.matchedCourse || null;
+  if (course) {
+    const baseKey = toCourseKey(course.courseName);
+    return course.id && course.id !== baseKey ? sanitizeCoursePath(course.id) : sanitizeCoursePath(course.courseName);
+  }
+  const cleanId = String(params.courseId || "").trim();
+  if (cleanId) {
+    return sanitizeCoursePath(cleanId);
+  }
+  const cleanName = String(params.courseName || "").trim();
+  return cleanName ? sanitizeCoursePath(cleanName) : "";
+}
+function buildPinSessionKey(params) {
+  const seg = buildCourseSessionSegment(params) || sanitizeCoursePath("General Session");
+  return toFirebaseKey(`${getSessionDateId()}_${seg}`);
+}
+function buildLiveSessionPath(params) {
+  const seg = buildCourseSessionSegment(params);
+  return seg ? `${getSessionDateId()}_${seg}` : getSessionDateId();
+}
+async function readPinConfig(sessionKey) {
+  try {
+    const remote = await fbGet(`classroom_pins/${sessionKey}`);
+    if (remote && typeof remote === "object" && typeof remote.pin === "string") {
+      activePinCache.set(sessionKey, remote);
+      return remote;
+    }
+  } catch {
+  }
+  return activePinCache.get(sessionKey) || null;
+}
+async function getOrUpdatePinConfig(params) {
+  const existing = await readPinConfig(params.sessionKey);
+  const now = Date.now();
+  const nextEnabled = params.requirePin !== void 0 ? Boolean(params.requirePin) : existing ? existing.enabled : true;
+  const needNewPin = Boolean(params.rotatePin) || !existing || !/^\d{4}$/.test(existing.pin);
+  if (!existing || nextEnabled !== existing.enabled || needNewPin) {
+    const nextConfig = {
+      enabled: nextEnabled,
+      pin: needNewPin ? generateClassroomPin() : existing.pin,
+      courseName: params.courseName,
+      week: params.week,
+      updatedAt: now,
+      updatedBy: params.updatedBy || existing?.updatedBy
+    };
+    activePinCache.set(params.sessionKey, nextConfig);
+    await fbPut(`classroom_pins/${params.sessionKey}`, nextConfig).catch(() => {
+    });
+    return nextConfig;
+  }
+  return existing;
+}
+async function signQrToken(payload) {
+  const secret = await getAuthSecret();
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const sig = crypto.createHmac("sha256", secret).update(`qr:${encoded}`).digest("base64url");
+  return `${encoded}.${sig}`;
+}
+async function verifyQrToken(token) {
+  const parts = String(token || "").trim().split(".");
+  if (parts.length !== 2) return null;
+  const [encoded, sig] = parts;
+  const secret = await getAuthSecret();
+  const expectedSig = crypto.createHmac("sha256", secret).update(`qr:${encoded}`).digest("base64url");
+  if (!timingSafeStringEqual(sig, expectedSig)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    if (!parsed || parsed.v !== 1 || !parsed.iat || !parsed.exp || !parsed.sessionKey) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+async function signCheckinGrant(payload) {
+  const secret = await getAuthSecret();
+  const encoded = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+  const sig = crypto.createHmac("sha256", secret).update(`grant:${encoded}`).digest("base64url");
+  return `${encoded}.${sig}`;
+}
+async function verifyCheckinGrant(token) {
+  const parts = String(token || "").trim().split(".");
+  if (parts.length !== 2) return null;
+  const [encoded, sig] = parts;
+  const secret = await getAuthSecret();
+  const expectedSig = crypto.createHmac("sha256", secret).update(`grant:${encoded}`).digest("base64url");
+  if (!timingSafeStringEqual(sig, expectedSig)) return null;
+  try {
+    const parsed = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    if (!parsed || parsed.v !== 1 || !parsed.nonce || !parsed.exp || !parsed.sessionKey) return null;
+    if (Date.now() > parsed.exp) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 function sanitizeUser(user) {
   const rest = { ...user };
   delete rest.password;
   delete rest.passwordHash;
+  delete rest.activationPin;
+  delete rest.activationToken;
   return {
     ...rest,
     role: rest.username?.toLowerCase() === "admin" ? "admin" : rest.role || "lecturer",
@@ -157,6 +374,34 @@ function canAccessCourse(course, auth) {
     return true;
   }
   return false;
+}
+function findCoursesMatching(coursesObj, params) {
+  if (!coursesObj || typeof coursesObj !== "object") return [];
+  const allCourses = Object.values(coursesObj).filter((c) => Boolean(c && c.id && c.courseName)).map(normalizeCourse);
+  const cleanId = String(params.courseId || "").trim();
+  if (cleanId) {
+    const byId = allCourses.find((c) => c.id === cleanId);
+    if (byId) return [byId];
+  }
+  const cleanName = String(params.courseName || "").trim();
+  if (cleanName) {
+    return allCourses.filter((c) => isSameCourse(c, cleanName));
+  }
+  return [];
+}
+function resolveCourseAccess(params) {
+  const matches = findCoursesMatching(params.coursesObj, {
+    courseId: params.courseId,
+    courseName: params.courseName
+  });
+  if (matches.length === 0) {
+    return { allowed: true, course: null };
+  }
+  const accessible = matches.find((c) => canAccessCourse(c, params.auth)) || null;
+  if (!accessible) {
+    return { allowed: false, course: matches[0] };
+  }
+  return { allowed: true, course: accessible };
 }
 function isDirectOwnerOrShared(course, auth) {
   if (course.ownerId && course.ownerId === auth.uid) return true;
@@ -233,9 +478,6 @@ function getDeviceLabel(ua) {
   else if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) browser = "Safari";
   return `${browser} \u2022 ${os}`;
 }
-function generateRandomToken() {
-  return crypto.randomBytes(24).toString("hex");
-}
 function sanitizePublicAppUrl(rawUrl, req) {
   if (typeof rawUrl === "string" && /^https?:\/\//i.test(rawUrl.trim())) {
     const clean = rawUrl.trim().split("?")[0].split("#")[0];
@@ -297,26 +539,33 @@ function formatCloudPayload(r, fallbackWeek = "W1") {
     Timestamp: new Date(r.timestamp).toISOString()
   };
 }
+function toAttendanceHistoryKey(rec) {
+  return toFirebaseKey(`${normalizeStudentId(rec.studentId || "")}__${rec.timestamp}`);
+}
+async function readAttendanceHistoryEntries() {
+  const histRaw = await fbGet("attendance_history");
+  if (!histRaw) return [];
+  const entries = Array.isArray(histRaw) ? histRaw.map((record, idx) => [String(idx), record]) : typeof histRaw === "object" ? Object.entries(histRaw) : [];
+  return entries.filter((entry) => Boolean(entry[1] && entry[1].studentId && entry[1].timestamp)).map(([key, record]) => ({ key, record }));
+}
 async function upsertAttendanceHistory(incoming) {
   if (!Array.isArray(incoming) || incoming.length === 0) return;
-  const histRaw = await fbGet("attendance_history");
-  const prevHist = Array.isArray(histRaw) ? histRaw.filter((h) => Boolean(h && h.studentId && h.timestamp)) : histRaw && typeof histRaw === "object" ? Object.values(histRaw).filter((h) => Boolean(h && h.studentId && h.timestamp)) : [];
-  const deduped = /* @__PURE__ */ new Map();
-  for (const rec of [...incoming, ...prevHist]) {
+  const patchMap = {};
+  for (const rec of incoming) {
     if (!rec || !rec.studentId || !rec.timestamp) continue;
-    const key = `${rec.studentId.trim().toUpperCase()}__${rec.timestamp}`;
-    if (!deduped.has(key)) {
-      deduped.set(key, rec);
-    }
+    patchMap[toAttendanceHistoryKey(rec)] = rec;
   }
-  const nextHist = Array.from(deduped.values()).sort((a, b) => b.timestamp - a.timestamp);
-  await fbPut("attendance_history", nextHist).catch(() => {
+  if (Object.keys(patchMap).length === 0) return;
+  await fbPatch("attendance_history", patchMap).catch(() => {
   });
 }
 async function postToGoogleScript(scriptUrl, bodyPayload) {
   const cleanUrl = scriptUrl.trim();
-  if (!cleanUrl || !cleanUrl.startsWith("https://script.google.com/") || cleanUrl.endsWith("/dev")) {
-    return { ok: false };
+  if (!cleanUrl || cleanUrl === DEFAULT_SCRIPT_URL || !cleanUrl.startsWith("https://script.google.com/") || cleanUrl.endsWith("/dev")) {
+    return {
+      ok: false,
+      error: "Google Apps Script /exec URL is not configured or points to a /dev test URL."
+    };
   }
   try {
     const res = await fetch(cleanUrl, {
@@ -326,15 +575,23 @@ async function postToGoogleScript(scriptUrl, bodyPayload) {
       body: JSON.stringify(bodyPayload)
     });
     const text = await res.text();
-    if (!res.ok || text.trim().startsWith("<")) return { ok: false };
+    if (!res.ok || text.trim().startsWith("<")) {
+      return {
+        ok: false,
+        error: `Apps Script returned HTTP ${res.status} or HTML instead of JSON. Check Web App access = Anyone.`
+      };
+    }
     try {
       const parsed = JSON.parse(text);
       return { ok: true, json: parsed };
     } catch {
       return { ok: true };
     }
-  } catch {
-    return { ok: false };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : "Failed to reach Google Apps Script URL."
+    };
   }
 }
 function escapeHtml(raw) {
@@ -451,57 +708,59 @@ async function sendDirectEmail(params) {
   }
   return { ok: false, provider: "none", error: "No built-in email provider configured." };
 }
-async function dispatchActivationEmails(params) {
+async function dispatchSignupApprovalEmails(params) {
   const status = getEmailDeliveryStatus(params.cfg.scriptUrl);
-  const expiryLine = params.expiresAtText ? `This activation link expires in 1 day (${params.expiresAtText}).` : "This activation link expires within 1 day (24 hours).";
   if (status.provider === "resend" || status.provider === "smtp") {
     const safeUser = escapeHtml(params.username);
-    const safeUrl = escapeHtml(params.activationUrl);
-    const safeExpiry = escapeHtml(expiryLine);
-    const userRes = await sendDirectEmail({
-      to: params.toEmail,
-      subject: "Activate Your Smart Attendance Account",
-      text: `Hello ${params.username},
-
-Please activate your Smart QR Attendance account by opening the link below:
-${params.activationUrl}
-
-${expiryLine}
-
-If you signed up by mistake or want to delete your account, open the app login page and submit an Account Deletion Request to Admin.
-`,
-      html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;"><h2 style="color:#111827;margin:0 0 10px;">Activate Your Account</h2><p style="color:#4b5563;font-size:14px;">Hello <strong>${safeUser}</strong>,</p><p style="color:#4b5563;font-size:14px;">Thank you for signing up for the Smart QR Attendance System. Click the button below to activate your account:</p><p style="margin:24px 0;"><a href="${safeUrl}" style="background:#4f46e5;color:#ffffff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;display:inline-block;">Activate Account</a></p><p style="color:#92400e;background:#fffbeb;border:1px solid #fde68a;padding:10px 12px;border-radius:8px;font-size:12px;font-weight:bold;">${safeExpiry}</p><p style="color:#6b7280;font-size:12px;">Or copy this link: ${safeUrl}</p></div>`
-    });
+    const safeEmail = escapeHtml(params.toEmail);
+    let adminEmailSent = false;
     if (params.cfg.adminEmail) {
-      const safeEmail = escapeHtml(params.toEmail);
-      await sendDirectEmail({
+      const adminRes = await sendDirectEmail({
         to: params.cfg.adminEmail,
-        subject: `[Smart Attendance] New User Signup: ${params.username}`,
-        text: `A new user signed up on the Smart QR Attendance System.
+        subject: `[Smart Attendance] Approval Needed: New User Signup (${params.username})`,
+        text: `A new user signed up on the Smart QR Attendance System and is waiting for Admin approval.
 
 Username: ${params.username}
 Email: ${params.toEmail}
-Status: Pending Activation
-${expiryLine}
+Status: Pending Admin Approval
+
+Open the Admin Control Center -> Users tab to approve and activate this account.
 `,
-        html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;"><h3 style="color:#111827;margin:0 0 8px;">New User Signup</h3><p style="color:#374151;font-size:14px;"><strong>Username:</strong> ${safeUser}<br/><strong>Email:</strong> ${safeEmail}<br/><strong>Status:</strong> Pending Activation</p><p style="color:#6b7280;font-size:12px;">${safeExpiry}</p></div>`
-      }).catch(() => {
-      });
+        html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;"><h3 style="color:#111827;margin:0 0 8px;">New User Signup \u2014 Approval Needed</h3><p style="color:#374151;font-size:14px;"><strong>Username:</strong> ${safeUser}<br/><strong>Email:</strong> ${safeEmail}<br/><strong>Status:</strong> Pending Admin Approval</p><p style="color:#6b7280;font-size:12px;">Open the Admin Control Center &rarr; Users tab in Smart Attendance to approve and activate this account.</p></div>`
+      }).catch(() => ({ ok: false, provider: status.provider, error: "Failed to notify admin" }));
+      adminEmailSent = Boolean(adminRes.ok);
     }
-    return { emailSent: userRes.ok, provider: userRes.provider, error: userRes.error };
+    const userRes = await sendDirectEmail({
+      to: params.toEmail,
+      subject: "Smart Attendance Registration Received (Pending Admin Approval)",
+      text: `Hello ${params.username},
+
+Thank you for signing up for the Smart QR Attendance System.
+
+Your account has been created and is waiting for Administrator approval before it can be used.
+You will receive another confirmation email once the Administrator approves and activates your account.
+`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;"><h2 style="color:#111827;margin:0 0 10px;">Registration Pending Approval</h2><p style="color:#4b5563;font-size:14px;">Hello <strong>${safeUser}</strong>,</p><p style="color:#4b5563;font-size:14px;">Thank you for signing up for the Smart QR Attendance System. Your account is currently <strong>pending Administrator approval</strong> and cannot be used until it is approved.</p><p style="color:#6b7280;font-size:12px;">You will receive a confirmation email once the Administrator activates your account.</p></div>`
+    }).catch(() => ({ ok: false, provider: status.provider, error: "Failed to notify user" }));
+    return {
+      emailSent: Boolean(userRes.ok || adminEmailSent),
+      provider: status.provider,
+      error: userRes.error || (!adminEmailSent ? "Could not deliver signup approval emails." : void 0)
+    };
   }
   const emailRes = await postToGoogleScript(params.cfg.scriptUrl, {
     action: "SEND_ACTIVATION_EMAIL",
     toEmail: params.toEmail,
     username: params.username,
-    activationUrl: params.activationUrl,
-    expiresAtText: params.expiresAtText,
+    activationUrl: "",
+    expiresAtText: "",
     adminEmail: params.cfg.adminEmail
   });
+  const ok = Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false);
   return {
-    emailSent: Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false),
+    emailSent: ok,
     provider: status.provider,
-    error: typeof emailRes.json?.error === "string" ? emailRes.json.error : void 0
+    error: !ok ? typeof emailRes.json?.error === "string" ? emailRes.json.error : emailRes.error || "Apps Script email failed." : void 0
   };
 }
 async function dispatchDeleteRequestEmail(params) {
@@ -509,7 +768,7 @@ async function dispatchDeleteRequestEmail(params) {
   if (status.provider === "resend" || status.provider === "smtp") {
     const targetAdmin = params.cfg.adminEmail || (process.env.EMAIL_FROM || "").trim() || (process.env.SMTP_USER || "").trim();
     if (!targetAdmin) {
-      return { emailSent: false, provider: status.provider };
+      return { emailSent: false, provider: status.provider, error: "Admin notification email address is not set." };
     }
     const safeUser = escapeHtml(params.username);
     const safeEmail = escapeHtml(params.userEmail || "N/A");
@@ -526,7 +785,7 @@ Reason: ${params.reason}
 Open the Admin Control Center to review and remove this account.`,
       html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;"><h3 style="color:#991b1b;margin:0 0 8px;">Account Deletion Request</h3><p style="color:#374151;font-size:14px;"><strong>Username:</strong> ${safeUser}<br/><strong>Email:</strong> ${safeEmail}<br/><strong>Reason:</strong> ${safeReason}</p><p style="color:#6b7280;font-size:12px;">Open the Admin Control Center in the app to review and remove this account.</p></div>`
     });
-    return { emailSent: res.ok, provider: res.provider };
+    return { emailSent: res.ok, provider: res.provider, error: res.error };
   }
   const emailRes = await postToGoogleScript(params.cfg.scriptUrl, {
     action: "SEND_DELETE_REQUEST_EMAIL",
@@ -535,10 +794,129 @@ Open the Admin Control Center to review and remove this account.`,
     reason: params.reason,
     adminEmail: params.cfg.adminEmail
   });
+  const ok = Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false);
   return {
-    emailSent: Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false),
-    provider: status.provider
+    emailSent: ok,
+    provider: status.provider,
+    error: !ok ? typeof emailRes.json?.error === "string" ? emailRes.json.error : emailRes.error || "Apps Script delete request email failed." : void 0
   };
+}
+async function dispatchApprovalPinEmail(params) {
+  const status = getEmailDeliveryStatus(params.cfg.scriptUrl);
+  const expiryLine = params.expiresAtText ? `This Activation PIN expires in 24 hours (${params.expiresAtText}).` : "This Activation PIN expires within 24 hours.";
+  if (status.provider === "resend" || status.provider === "smtp") {
+    const safeUser = escapeHtml(params.username);
+    const safePin = escapeHtml(params.pin);
+    const safeExpiry = escapeHtml(expiryLine);
+    const res = await sendDirectEmail({
+      to: params.toEmail,
+      subject: "Your Smart Attendance Account Is Approved \u2014 Activation PIN",
+      text: `Hello ${params.username},
+
+Good news! Your Smart QR Attendance account has been approved by the Administrator.
+
+Your 6-digit Activation PIN is: ${params.pin}
+
+How to complete activation:
+1. Open the Smart Attendance Sign In page and log in with your User Name and Password first.
+2. Key in this 6-digit Activation PIN when prompted to complete activation and start using your account.
+
+${expiryLine}
+`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;"><h2 style="color:#111827;margin:0 0 10px;">Account Approved \u2014 Activation PIN</h2><p style="color:#4b5563;font-size:14px;">Hello <strong>${safeUser}</strong>,</p><p style="color:#4b5563;font-size:14px;">Your Smart QR Attendance account has been approved by the Administrator. Sign in with your User Name and Password first, then key in this 6-digit Activation PIN when prompted to complete activation and access your account:</p><div style="margin:20px 0;padding:14px 20px;background:#eef2ff;border:2px solid #c7d2fe;border-radius:12px;text-align:center;font-family:monospace;font-size:28px;font-weight:900;letter-spacing:0.25em;color:#3730a3;">${safePin}</div><p style="color:#92400e;background:#fffbeb;border:1px solid #fde68a;padding:10px 12px;border-radius:8px;font-size:12px;font-weight:bold;">${safeExpiry}</p></div>`
+    }).catch(() => ({ ok: false, provider: status.provider, error: "Failed to send PIN email" }));
+    return {
+      emailSent: Boolean(res.ok),
+      provider: status.provider,
+      error: res.error
+    };
+  }
+  const emailRes = await postToGoogleScript(params.cfg.scriptUrl, {
+    action: "SEND_ACTIVATION_EMAIL",
+    toEmail: params.toEmail,
+    username: params.username,
+    activationPin: params.pin,
+    activationUrl: "",
+    expiresAtText: params.expiresAtText,
+    adminEmail: params.cfg.adminEmail
+  });
+  const ok = Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false);
+  return {
+    emailSent: ok,
+    provider: status.provider,
+    error: !ok ? typeof emailRes.json?.error === "string" ? emailRes.json.error : emailRes.error || "Apps Script PIN email failed." : void 0
+  };
+}
+async function createUserSystemNotification(params) {
+  const cleanUid = String(params.userId || "").trim();
+  if (!cleanUid) return null;
+  const now = Date.now();
+  const notifId = `unotif_${now}_${crypto.randomBytes(3).toString("hex")}`;
+  const notif = {
+    id: notifId,
+    userId: cleanUid,
+    type: params.type,
+    title: params.title,
+    message: params.message,
+    createdAt: now,
+    read: false,
+    ...params.courseName ? { courseName: params.courseName } : {}
+  };
+  await fbPut(`user_notifications/${cleanUid}/${notifId}`, notif).catch(() => {
+  });
+  return notif;
+}
+async function createAdminAlertNotification(params) {
+  const now = Date.now();
+  const notifId = `admalert_${now}_${crypto.randomBytes(3).toString("hex")}`;
+  const notif = {
+    id: notifId,
+    type: params.type,
+    userId: params.userId || "system",
+    username: params.username || "System",
+    email: params.email || "",
+    createdAt: now,
+    read: false,
+    emailSent: Boolean(params.emailSent),
+    message: params.message,
+    ...params.reason ? { reason: params.reason } : {},
+    ...params.courseName ? { courseName: params.courseName } : {}
+  };
+  await fbPut(`admin_notifications/${notifId}`, notif).catch(() => {
+  });
+  return notif;
+}
+async function createEmailDeliveryFailureAlert(params) {
+  const providerLabel = params.provider === "resend" ? "Resend API" : params.provider === "smtp" ? "SMTP" : params.provider === "apps_script" ? "Google Apps Script" : "Unconfigured Provider";
+  const targetLabel = params.targetEmail ? ` to ${params.targetEmail}` : "";
+  const detail = params.error ? ` \u2014 ${params.error}` : "";
+  return createAdminAlertNotification({
+    type: "email_delivery_failure",
+    userId: params.userId || "system",
+    username: params.username || "System",
+    email: params.targetEmail || "",
+    emailSent: false,
+    reason: params.error || `Failed via ${providerLabel}`,
+    message: `Email delivery failed (${params.context}${targetLabel}) via ${providerLabel}${detail}`
+  });
+}
+function resolveCourseSharedUserIds(entries, allUsers) {
+  if (!Array.isArray(entries)) return [];
+  const resolved = [];
+  const seen = /* @__PURE__ */ new Set();
+  for (const raw of entries) {
+    const token = String(raw || "").trim();
+    if (!token) continue;
+    const matched = allUsers.find(
+      (u) => u && u.id && (u.id === token || u.username.toLowerCase() === token.toLowerCase())
+    );
+    const finalId = matched ? matched.id : token;
+    if (!seen.has(finalId)) {
+      seen.add(finalId);
+      resolved.push(finalId);
+    }
+  }
+  return resolved;
 }
 async function createActivationNotifications(userRecord, activatedBy) {
   const now = Date.now();
@@ -560,36 +938,41 @@ async function createActivationNotifications(userRecord, activatedBy) {
     const status = getEmailDeliveryStatus(cfg.scriptUrl);
     if (status.provider === "resend" || status.provider === "smtp") {
       const safeUser = escapeHtml(userRecord.username);
-      const safeEmail = escapeHtml(userRecord.email || "no email");
-      const actorText = activatedBy === "admin" ? "by the Administrator" : "via email verification link";
+      const actorText = activatedBy === "email_pin" ? "with your Activation PIN after Admin approval" : "by the Administrator";
       if (userRecord.email) {
         const userEmailRes = await sendDirectEmail({
           to: userRecord.email,
           subject: "Your Smart Attendance Account Is Now Active",
           text: `Hello ${userRecord.username},
 
-Good news! Your lecturer account on the Smart Attendance system has been activated ${actorText}.
-You can now sign in and manage your attendance sessions.
+Your lecturer account on the Smart Attendance system is now active (${actorText}).
+You can sign in and manage your attendance sessions anytime.
 `,
-          html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;"><h2 style="color:#065f46;margin:0 0 10px;">Account Activated</h2><p style="color:#374151;font-size:14px;">Hello <strong>${safeUser}</strong>,</p><p style="color:#374151;font-size:14px;">Your Smart Attendance lecturer account has been activated ${escapeHtml(actorText)} and is now ready to use.</p></div>`
+          html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;"><h2 style="color:#065f46;margin:0 0 10px;">Account Activated</h2><p style="color:#374151;font-size:14px;">Hello <strong>${safeUser}</strong>,</p><p style="color:#374151;font-size:14px;">Your Smart Attendance lecturer account is now active and ready to use.</p></div>`
         });
-        if (userEmailRes.ok) emailSent = true;
-      }
-      if (activatedBy === "email_link" && cfg.adminEmail) {
-        const adminEmailRes = await sendDirectEmail({
-          to: cfg.adminEmail,
-          subject: `[Smart Attendance] Account Activated: ${userRecord.username}`,
-          text: `Lecturer account activated ${actorText}.
-
-Username: ${userRecord.username}
-Email: ${userRecord.email || "N/A"}
-`,
-          html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;"><h3 style="color:#065f46;margin:0 0 8px;">Lecturer Account Activated</h3><p style="color:#374151;font-size:14px;"><strong>Username:</strong> ${safeUser}<br/><strong>Email:</strong> ${safeEmail}<br/><strong>Method:</strong> Email verification link</p></div>`
-        });
-        if (adminEmailRes.ok) emailSent = true;
+        if (userEmailRes.ok) {
+          emailSent = true;
+        } else {
+          await createEmailDeliveryFailureAlert({
+            context: "Account Activated Confirmation Email",
+            targetEmail: userRecord.email,
+            username: userRecord.username,
+            userId: userRecord.id,
+            provider: status.provider,
+            error: userEmailRes.error || "Failed to send activation confirmation email."
+          });
+        }
       }
     }
-  } catch {
+  } catch (err) {
+    await createEmailDeliveryFailureAlert({
+      context: "Account Activated Confirmation Email",
+      targetEmail: userRecord.email,
+      username: userRecord.username,
+      userId: userRecord.id,
+      error: err instanceof Error ? err.message : "Unexpected email transport error."
+    }).catch(() => {
+    });
   }
   const adminNotification = {
     id: adminNotifId,
@@ -600,14 +983,14 @@ Email: ${userRecord.email || "N/A"}
     createdAt: now,
     read: false,
     emailSent,
-    message: activatedBy === "admin" ? `${userRecord.username} (${userRecord.email || "no email"}) account has been activated by Admin.` : `${userRecord.username} (${userRecord.email || "no email"}) account has been activated via verification link.`
+    message: activatedBy === "email_pin" ? `${userRecord.username} (${userRecord.email || "no email"}) entered their Activation PIN and is now active.` : `${userRecord.username} (${userRecord.email || "no email"}) account has been activated by Admin.`
   };
   const userNotification = {
     id: userNotifId,
     userId: userRecord.id,
     type: "account_activated",
     title: "Account Activated",
-    message: activatedBy === "admin" ? `Your lecturer account (${userRecord.username}) has been activated by the Administrator and is ready to use.` : `Your lecturer account (${userRecord.username}) has been activated via your verification link and is ready to use.`,
+    message: `Your lecturer account (${userRecord.username}) is now active and ready to use.`,
     createdAt: now,
     read: false
   };
@@ -624,7 +1007,7 @@ async function requireAuth(req, res, next) {
     res.status(401).json({ error: "Authentication required." });
     return;
   }
-  const payload = verifySessionToken(token);
+  const payload = await verifySessionToken(token);
   if (!payload) {
     res.status(401).json({ error: "Session expired or invalid. Please sign in again." });
     return;
@@ -666,6 +1049,7 @@ async function resolveRosterForCourse(params) {
   const cleanCourse = (params.courseName || "").trim();
   const cleanId = (params.courseId || "").trim();
   const cfg = await getAppConfig();
+  let sheetTabMatched = false;
   if (cfg.integrationType === "google_sheets" && cfg.scriptUrl && cfg.scriptUrl !== DEFAULT_SCRIPT_URL && !cfg.scriptUrl.endsWith("/dev")) {
     try {
       const sheetUrl = `${cfg.scriptUrl}${cfg.scriptUrl.includes("?") ? "&" : "?"}action=getCourse${cleanCourse ? `&course=${encodeURIComponent(cleanCourse)}` : ""}&t=${Date.now()}`;
@@ -675,9 +1059,10 @@ async function resolveRosterForCourse(params) {
         const data = JSON.parse(rawText);
         if (data?.success) {
           const sheetsArr = Array.isArray(data.sheets) ? data.sheets : [];
-          const targetUpper = cleanCourse.toUpperCase();
-          const matchedTab = targetUpper ? sheetsArr.find((s) => String(s?.courseName || "").trim().toUpperCase() === targetUpper) : void 0;
-          const rawStudents = targetUpper && sheetsArr.length > 0 ? matchedTab && Array.isArray(matchedTab.students) ? matchedTab.students : [] : Array.isArray(data.students) ? data.students : [];
+          const targetNorm = normalizeCourseNameKey(cleanCourse);
+          const matchedTab = targetNorm ? sheetsArr.find((s) => normalizeCourseNameKey(String(s?.courseName || "")) === targetNorm) : void 0;
+          if (matchedTab) sheetTabMatched = true;
+          const rawStudents = targetNorm && sheetsArr.length > 0 ? matchedTab && Array.isArray(matchedTab.students) ? matchedTab.students : [] : Array.isArray(data.students) ? data.students : [];
           if (rawStudents.length > 0) {
             const seen = /* @__PURE__ */ new Set();
             const normalized = [];
@@ -698,26 +1083,25 @@ async function resolveRosterForCourse(params) {
   }
   const coursesObj = await fbGet("courses");
   if (coursesObj && typeof coursesObj === "object") {
-    const allCourses = Object.values(coursesObj).filter((c) => c && c.id);
-    if (cleanId) {
-      const byId = allCourses.find((c) => c.id === cleanId);
-      if (byId && Array.isArray(byId.students) && byId.students.length > 0) {
-        return byId.students;
-      }
+    const matches = findCoursesMatching(coursesObj, { courseId: cleanId, courseName: cleanCourse });
+    if (matches.length > 0) {
+      const preferred = matches.find((c) => Array.isArray(c.students) && c.students.length > 0) || matches[0];
+      return Array.isArray(preferred.students) ? preferred.students : [];
     }
-    if (cleanCourse) {
-      const targetUpper = cleanCourse.toUpperCase();
-      const byName = allCourses.find((c) => c.courseName?.trim().toUpperCase() === targetUpper);
-      if (byName && Array.isArray(byName.students) && byName.students.length > 0) {
-        return byName.students;
-      }
-    }
+  }
+  if (sheetTabMatched) {
+    return [];
+  }
+  if (cleanCourse && normalizeCourseNameKey(cleanCourse) !== normalizeCourseNameKey("General Session")) {
+    return [];
   }
   return cfg.knownStudentsV2;
 }
 function createApiApp() {
   const app2 = express();
   app2.use(express.json({ limit: "5mb" }));
+  void getAuthSecret().catch(() => {
+  });
   void ensureAdminUserExists().catch((err) => {
     const msg = err instanceof Error ? err.message : String(err);
     console.warn("Could not initialize admin record on boot:", msg);
@@ -726,15 +1110,11 @@ function createApiApp() {
     try {
       const cfg = await getAppConfig();
       res.json({
-        databaseUrl: FIREBASE_DB_URL,
-        scriptUrl: cfg.scriptUrl,
         integrationType: cfg.integrationType,
         adminEmailConfigured: Boolean(cfg.adminEmail)
       });
     } catch {
       res.json({
-        databaseUrl: FIREBASE_DB_URL,
-        scriptUrl: DEFAULT_SCRIPT_URL,
         integrationType: "google_sheets",
         adminEmailConfigured: false
       });
@@ -767,7 +1147,18 @@ function createApiApp() {
       if (matched.status === "pending" && role !== "admin") {
         res.status(403).json({
           success: false,
-          message: "Account pending activation. Please click the activation link sent to your email or ask Admin to activate your account."
+          message: "Your account is waiting for Admin approval. An activation PIN will be emailed to you once approved."
+        });
+        return;
+      }
+      if (matched.status === "approved_pending_pin" && role !== "admin") {
+        const challengeToken = await signPinChallengeToken(matched.id);
+        res.status(403).json({
+          success: false,
+          requiresActivationPin: true,
+          username: matched.username,
+          challengeToken,
+          message: "Your account has been approved! Enter the 6-digit Activation PIN sent to your email to complete activation."
         });
         return;
       }
@@ -789,7 +1180,7 @@ function createApiApp() {
         fbPut(`admin_logins/${sessionId}`, newSession),
         fbPatch(`app_users/${matched.id}`, { lastLoginAt: now })
       ]);
-      const token = signSessionToken({
+      const token = await signSessionToken({
         uid: matched.id,
         username: matched.username,
         role,
@@ -832,8 +1223,6 @@ function createApiApp() {
       }
       const now = Date.now();
       const userId = `${toFirebaseKey(cleanUser.toLowerCase())}_${now.toString(36)}`;
-      const activationToken = generateRandomToken();
-      const activationExpiresAt = now + ACTIVATION_EXPIRY_MS;
       const newUser = {
         id: userId,
         username: cleanUser,
@@ -841,20 +1230,13 @@ function createApiApp() {
         passwordHash: hashPassword(password),
         role: "lecturer",
         status: "pending",
-        activationToken,
-        activationSentAt: now,
-        activationExpiresAt,
         createdAt: now
       };
       await fbPut(`app_users/${userId}`, newUser);
-      const baseAppUrl = sanitizePublicAppUrl(req.body?.publicAppUrl, req);
-      const activationUrl = `${baseAppUrl}?activate=${encodeURIComponent(activationToken)}&user=${encodeURIComponent(userId)}`;
       const cfg = await getAppConfig();
-      const { emailSent } = await dispatchActivationEmails({
+      const signupEmailRes = await dispatchSignupApprovalEmails({
         toEmail: cleanEmail,
         username: cleanUser,
-        activationUrl,
-        expiresAtText: new Date(activationExpiresAt).toLocaleString(),
         cfg
       });
       const notifId = `notif_${now}_${crypto.randomBytes(2).toString("hex")}`;
@@ -866,14 +1248,24 @@ function createApiApp() {
         email: cleanEmail,
         createdAt: now,
         read: false,
-        emailSent,
-        message: `${cleanUser} (${cleanEmail}) signed up and is waiting for account activation.`
+        emailSent: signupEmailRes.emailSent,
+        message: `${cleanUser} (${cleanEmail}) signed up and is waiting for Admin approval.`
       };
       await fbPut(`admin_notifications/${notifId}`, notif).catch(() => {
       });
+      if (!signupEmailRes.emailSent) {
+        await createEmailDeliveryFailureAlert({
+          context: "New Signup Notification Email",
+          targetEmail: cleanEmail,
+          username: cleanUser,
+          userId,
+          provider: signupEmailRes.provider,
+          error: signupEmailRes.error
+        });
+      }
       res.json({
         success: true,
-        message: emailSent ? `Account created! An activation email has been sent to ${cleanEmail}. Admin has also been notified.` : "Account created and Admin has been notified! Please check your email or ask Admin to send/activate your account link."
+        message: "Account created! Once Admin approves your request, a 6-digit Activation PIN will be emailed to you to complete activation."
       });
     } catch {
       res.status(500).json({ success: false, message: "Failed to save user registration to cloud." });
@@ -881,72 +1273,151 @@ function createApiApp() {
   });
   app2.post("/api/auth/activate", async (req, res) => {
     try {
-      const token = String(req.body?.token || "").trim();
-      const userId = String(req.body?.userId || "").trim();
-      if (!token || !userId) {
-        res.status(400).json({ success: false, message: "Invalid activation parameters." });
+      const lookup = String(req.body?.usernameOrEmail || "").trim().toLowerCase();
+      const rawPin = String(req.body?.pin || "").trim().replace(/\D/g, "");
+      const challengeToken = String(req.body?.challengeToken || "").trim();
+      if (!lookup || rawPin.length !== 6) {
+        res.status(400).json({
+          success: false,
+          message: "Please enter your User Name or Email and the 6-digit Activation PIN."
+        });
         return;
       }
-      const userRecord = await fbGet(`app_users/${toFirebaseKey(userId)}`);
+      const usersObj = await fbGet("app_users") || {};
+      const userRecord = Object.values(usersObj).find(
+        (u) => u && u.id && (u.username?.toLowerCase() === lookup || u.email && u.email.toLowerCase() === lookup)
+      );
       if (!userRecord || !userRecord.id) {
         res.status(404).json({
           success: false,
-          message: "Activation failed: Account no longer exists or was removed by Admin."
+          message: "Account not found. Please sign up first or check your username/email."
         });
         return;
       }
       if (userRecord.status === "active") {
         res.json({
           success: true,
-          message: `Account "${userRecord.username}" is already active. You can sign in now.`
+          message: `Account "${userRecord.username}" is already active. You can sign in below.`
         });
         return;
       }
-      if (!userRecord.activationToken || !timingSafeStringEqual(userRecord.activationToken, token)) {
-        res.status(400).json({
+      if (userRecord.status === "pending") {
+        res.status(403).json({
           success: false,
-          message: "Invalid or expired activation link. Contact Admin to resend."
+          message: "Your account is still waiting for Admin approval. You will receive an email with your Activation PIN once approved."
         });
         return;
       }
-      const expiresAt = userRecord.activationExpiresAt || userRecord.createdAt + ACTIVATION_EXPIRY_MS;
-      if (Date.now() > expiresAt) {
-        res.status(400).json({
+      if ((userRecord.pinFailedAttempts || 0) >= MAX_PIN_FAILED_ATTEMPTS) {
+        res.status(429).json({
           success: false,
-          message: "This activation link has expired (valid for 24 hours). Please contact Admin to resend."
+          message: "Too many invalid PIN attempts. Ask the Administrator to resend a new Activation PIN."
         });
         return;
       }
+      if (!userRecord.activationPin || !timingSafeStringEqual(rawPin, userRecord.activationPin)) {
+        const nextAttempts = (userRecord.pinFailedAttempts || 0) + 1;
+        if (nextAttempts >= MAX_PIN_FAILED_ATTEMPTS) {
+          await fbPatch(`app_users/${userRecord.id}`, {
+            pinFailedAttempts: nextAttempts,
+            activationPin: null,
+            activationExpiresAt: null
+          }).catch(() => {
+          });
+          res.status(429).json({
+            success: false,
+            message: "Too many invalid PIN attempts. This PIN has been invalidated; ask Admin to resend a new PIN."
+          });
+          return;
+        }
+        await fbPatch(`app_users/${userRecord.id}`, {
+          pinFailedAttempts: nextAttempts
+        }).catch(() => {
+        });
+        res.status(403).json({
+          success: false,
+          message: "Invalid Activation PIN. Please check the 6-digit PIN sent to your email."
+        });
+        return;
+      }
+      if (userRecord.activationExpiresAt && Date.now() > userRecord.activationExpiresAt) {
+        res.status(410).json({
+          success: false,
+          message: "This Activation PIN has expired. Please ask Admin to resend a new PIN."
+        });
+        return;
+      }
+      const now = Date.now();
+      const challenge = challengeToken ? await verifyPinChallengeToken(challengeToken) : null;
+      const canAutoSignIn = Boolean(challenge && challenge.uid === userRecord.id);
       await fbPatch(`app_users/${userRecord.id}`, {
         status: "active",
-        activatedAt: Date.now()
+        activatedAt: now,
+        activationPin: null,
+        activationExpiresAt: null,
+        pinFailedAttempts: null,
+        ...canAutoSignIn ? { lastLoginAt: now } : {}
       });
-      await createActivationNotifications(userRecord, "email_link").catch(() => {
+      await createActivationNotifications(userRecord, "email_pin").catch(() => {
       });
-      res.json({
-        success: true,
-        message: `Account "${userRecord.username}" has been activated! Please sign in below.`
-      });
-    } catch {
-      res.status(500).json({ success: false, message: "Network error while activating account." });
-    }
-  });
-  app2.post("/api/auth/delete-request", async (req, res) => {
-    try {
-      const lookup = String(req.body?.usernameOrEmail || "").trim().toLowerCase();
-      const reason = String(req.body?.reason || "Requested via app").trim();
-      if (!lookup) {
-        res.status(400).json({ success: false, message: "Please enter your User Name or Email Address." });
+      if (canAutoSignIn) {
+        const role = userRecord.username.toLowerCase() === "admin" ? "admin" : userRecord.role || "lecturer";
+        const sessionId = `${toFirebaseKey(userRecord.username.toLowerCase())}_${now}`;
+        const device = getDeviceLabel(String(req.headers["user-agent"] || ""));
+        const newSession = {
+          id: sessionId,
+          adminName: userRecord.username,
+          email: userRecord.email || "",
+          device,
+          date: new Date(now).toISOString().slice(0, 10),
+          loginTime: now,
+          lastActiveTime: now,
+          status: "active",
+          currentAction: "Dashboard"
+        };
+        await fbPut(`admin_logins/${sessionId}`, newSession);
+        const token = await signSessionToken({
+          uid: userRecord.id,
+          username: userRecord.username,
+          role,
+          sid: sessionId,
+          iat: now,
+          exp: now + SESSION_TTL_MS
+        });
+        res.json({
+          success: true,
+          token,
+          user: sanitizeUser({ ...userRecord, status: "active", activatedAt: now, role }),
+          session: newSession,
+          message: `Account "${userRecord.username}" activated and ready to use!`
+        });
         return;
       }
-      const usersObj = await fbGet("app_users") || {};
-      const matched = Object.values(usersObj).find(
-        (u) => u && u.id && (u.username?.toLowerCase() === lookup || u.email && u.email.toLowerCase() === lookup)
-      );
-      if (!matched || matched.role === "admin" || matched.username.toLowerCase() === "admin") {
-        res.status(404).json({
+      res.json({
+        success: true,
+        message: `Account "${userRecord.username}" activated! You can now sign in.`
+      });
+    } catch {
+      res.status(500).json({ success: false, message: "Server error while verifying activation PIN." });
+    }
+  });
+  app2.post("/api/auth/delete-request", requireAuth, async (req, res) => {
+    try {
+      const auth = req.auth;
+      const reason = String(req.body?.reason || "Requested via app").trim();
+      const requestedLookup = String(req.body?.usernameOrEmail || "").trim().toLowerCase();
+      const matched = await fbGet(`app_users/${auth.uid}`);
+      if (!matched || !matched.id || matched.role === "admin" || matched.username.toLowerCase() === "admin") {
+        res.status(403).json({
           success: false,
-          message: "No matching lecturer account found for that username or email."
+          message: "Only lecturer accounts can submit a deletion request."
+        });
+        return;
+      }
+      if (requestedLookup && requestedLookup !== matched.username.toLowerCase() && (!matched.email || requestedLookup !== matched.email.toLowerCase())) {
+        res.status(403).json({
+          success: false,
+          message: "You can only request deletion for your own account."
         });
         return;
       }
@@ -956,7 +1427,7 @@ function createApiApp() {
         deletionReason: reason
       });
       const cfg = await getAppConfig();
-      const { emailSent } = await dispatchDeleteRequestEmail({
+      const delEmailRes = await dispatchDeleteRequestEmail({
         username: matched.username,
         userEmail: matched.email || "",
         reason,
@@ -971,11 +1442,21 @@ function createApiApp() {
         email: matched.email || "",
         createdAt: now,
         read: false,
-        emailSent,
+        emailSent: delEmailRes.emailSent,
         reason,
         message: `${matched.username} (${matched.email || "no email"}) requested account deletion: ${reason}`
       };
       await fbPut(`admin_notifications/${notifId}`, notif);
+      if (!delEmailRes.emailSent) {
+        await createEmailDeliveryFailureAlert({
+          context: "Account Deletion Request Email",
+          targetEmail: cfg.adminEmail || matched.email || "",
+          username: matched.username,
+          userId: matched.id,
+          provider: delEmailRes.provider,
+          error: delEmailRes.error
+        });
+      }
       res.json({
         success: true,
         message: "Deletion request sent to the Administrator for review."
@@ -1018,12 +1499,159 @@ function createApiApp() {
   });
   app2.get("/api/student/roster", async (req, res) => {
     try {
-      const courseName = String(req.query.course || "").trim();
-      const courseId = String(req.query.courseId || "").trim();
+      const authHeader = String(req.headers.authorization || "");
+      const bearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+      let authedUser = null;
+      if (bearerToken) {
+        const verified = await verifySessionToken(bearerToken);
+        if (verified) {
+          const userRecord = await fbGet(`app_users/${verified.uid}`).catch(() => null);
+          if (userRecord && userRecord.id && (userRecord.role === "admin" || userRecord.status === "active")) {
+            authedUser = {
+              ...verified,
+              role: userRecord.username.toLowerCase() === "admin" ? "admin" : userRecord.role || verified.role
+            };
+          }
+        }
+      }
+      const rawGrant = String(req.headers["x-checkin-token"] || req.query.checkinToken || "").trim();
+      const grant = rawGrant ? await verifyCheckinGrant(rawGrant) : null;
+      if (!authedUser && !grant) {
+        res.status(401).json({ success: false, error: "Authentication or valid QR check-in token required." });
+        return;
+      }
+      let courseName = String(req.query.course || "").trim();
+      let courseId = String(req.query.courseId || "").trim();
+      if (grant && !authedUser) {
+        if (courseName && grant.courseName && normalizeCourseNameKey(courseName) !== normalizeCourseNameKey(grant.courseName) || courseId && grant.courseId && courseId !== grant.courseId) {
+          res.status(403).json({ success: false, error: "Check-in token is not valid for this subject." });
+          return;
+        }
+        courseName = grant.courseName || courseName;
+        courseId = grant.courseId || courseId;
+      } else if (authedUser && authedUser.role !== "admin") {
+        const coursesObj = await fbGet("courses") || {};
+        const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth: authedUser });
+        if (!access.allowed) {
+          res.status(403).json({ success: false, error: "Access denied for this subject roster." });
+          return;
+        }
+      }
       const students = await resolveRosterForCourse({ courseName, courseId });
       res.json({ success: true, students });
     } catch {
-      res.json({ success: true, students: PRE_REGISTERED_STUDENTS });
+      res.status(500).json({ success: false, error: "Failed to load student roster." });
+    }
+  });
+  app2.post("/api/qr/token", requireAuth, async (req, res) => {
+    try {
+      const auth = req.auth;
+      const courseName = String(req.body?.courseName || "General Session").trim() || "General Session";
+      const courseId = String(req.body?.courseId || "").trim();
+      const week = String(req.body?.week || "W1").trim().toUpperCase() || "W1";
+      const requirePin = typeof req.body?.requirePin === "boolean" ? req.body.requirePin : void 0;
+      const rotatePin = Boolean(req.body?.rotatePin);
+      const coursesObj = await fbGet("courses") || {};
+      const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, error: "You do not have permission to generate a QR for this subject." });
+        return;
+      }
+      const resolvedCourseName = access.course?.courseName || courseName;
+      const resolvedCourseId = access.course?.id || courseId;
+      const sessionKey = buildPinSessionKey({
+        courseName: resolvedCourseName,
+        courseId: resolvedCourseId,
+        matchedCourse: access.course
+      });
+      const pinConfig = await getOrUpdatePinConfig({
+        sessionKey,
+        courseName: resolvedCourseName,
+        week,
+        requirePin,
+        rotatePin,
+        updatedBy: auth.username
+      });
+      const iat = Date.now();
+      pruneUsedScanNonces(iat);
+      const exp = iat + QR_TOKEN_VALIDITY_MS;
+      const qrToken = await signQrToken({
+        v: 1,
+        iat,
+        exp,
+        courseName: resolvedCourseName,
+        courseId: resolvedCourseId,
+        week,
+        sessionKey,
+        pinRequired: pinConfig.enabled
+      });
+      res.json({
+        success: true,
+        qrToken,
+        iat,
+        exp,
+        ttlMs: QR_TOKEN_VALIDITY_MS,
+        pinRequired: pinConfig.enabled,
+        pin: pinConfig.pin
+      });
+    } catch {
+      res.status(500).json({ success: false, message: "Failed to issue signed QR token." });
+    }
+  });
+  app2.post("/api/qr/verify", async (req, res) => {
+    try {
+      const sig = String(req.body?.sig || "").trim();
+      if (!sig) {
+        res.status(403).json({
+          success: false,
+          code: "QR_UNVERIFIED",
+          message: "Unverified or outdated QR code. Please scan the live attendance QR code in class."
+        });
+        return;
+      }
+      const payload = await verifyQrToken(sig);
+      if (!payload) {
+        res.status(403).json({
+          success: false,
+          code: "QR_INVALID",
+          message: "Invalid or tampered QR code. Please scan the live QR code in class."
+        });
+        return;
+      }
+      const now = Date.now();
+      if (now > payload.exp) {
+        res.status(410).json({
+          success: false,
+          code: "QR_EXPIRED",
+          message: "QR Code expired (15s limit). Scan the newest live code in class."
+        });
+        return;
+      }
+      const latestPinConfig = await readPinConfig(payload.sessionKey);
+      const pinRequired = latestPinConfig ? latestPinConfig.enabled : payload.pinRequired;
+      const grantExp = now + CHECKIN_GRANT_VALIDITY_MS;
+      const checkinToken = await signCheckinGrant({
+        v: 1,
+        nonce: crypto.randomBytes(12).toString("hex"),
+        iat: now,
+        exp: grantExp,
+        courseName: payload.courseName,
+        courseId: payload.courseId,
+        week: payload.week,
+        sessionKey: payload.sessionKey,
+        pinRequired
+      });
+      res.json({
+        success: true,
+        checkinToken,
+        expiresAt: grantExp,
+        pinRequired,
+        courseName: payload.courseName,
+        courseId: payload.courseId,
+        week: payload.week
+      });
+    } catch {
+      res.status(500).json({ success: false, message: "Could not verify QR code. Please try again." });
     }
   });
   app2.post("/api/student/checkin", async (req, res) => {
@@ -1031,14 +1659,79 @@ function createApiApp() {
       const name = String(req.body?.name || "").trim();
       const studentId = String(req.body?.studentId || "").trim();
       const status = String(req.body?.status || "P").trim().toUpperCase();
-      const courseName = String(req.body?.courseName || "General Session").trim();
-      const courseId = String(req.body?.courseId || "").trim();
-      const week = String(req.body?.week || "W1").trim().toUpperCase();
+      let courseName = String(req.body?.courseName || "General Session").trim();
+      let courseId = String(req.body?.courseId || "").trim();
+      let week = String(req.body?.week || "W1").trim().toUpperCase();
       if (!name || !studentId) {
         res.status(400).json({ success: false, message: "Name and Student ID are required." });
         return;
       }
-      const roster = await resolveRosterForCourse({ courseName, courseId });
+      let kioskAuth = null;
+      const authHeader = String(req.headers.authorization || "");
+      if (authHeader.startsWith("Bearer ")) {
+        const bearerToken = authHeader.slice(7).trim();
+        const authPayload = bearerToken ? await verifySessionToken(bearerToken) : null;
+        if (authPayload) {
+          const userRecord = await fbGet(`app_users/${authPayload.uid}`).catch(() => null);
+          if (userRecord && userRecord.id && (userRecord.role === "admin" || userRecord.status === "active")) {
+            kioskAuth = {
+              ...authPayload,
+              role: userRecord.username.toLowerCase() === "admin" ? "admin" : userRecord.role || authPayload.role
+            };
+          }
+        }
+      }
+      const coursesObj = await fbGet("courses") || {};
+      let verifiedGrant = null;
+      if (!kioskAuth) {
+        const checkinToken = String(req.body?.checkinToken || "").trim();
+        verifiedGrant = await verifyCheckinGrant(checkinToken);
+        if (!verifiedGrant) {
+          res.status(401).json({
+            success: false,
+            code: "GRANT_EXPIRED",
+            message: "QR verification expired. Please scan the live QR code again."
+          });
+          return;
+        }
+        const now = Date.now();
+        pruneUsedScanNonces(now);
+        const alreadyUsedMem = usedScanNonces.has(verifiedGrant.nonce);
+        const alreadyUsedDb = !alreadyUsedMem ? await fbGet(`used_qr_nonces/${verifiedGrant.nonce}`).catch(() => null) : 1;
+        if (alreadyUsedMem || alreadyUsedDb) {
+          res.status(409).json({
+            success: false,
+            code: "QR_ALREADY_USED",
+            message: "This QR scan has already been used. Please scan the live QR code again."
+          });
+          return;
+        }
+        courseName = verifiedGrant.courseName || courseName;
+        courseId = verifiedGrant.courseId || courseId;
+        week = verifiedGrant.week || week;
+        const pinConfig = await readPinConfig(verifiedGrant.sessionKey);
+        const pinMustMatch = pinConfig ? pinConfig.enabled : verifiedGrant.pinRequired;
+        if (pinMustMatch) {
+          const submittedPin = String(req.body?.pin || "").trim();
+          if (!submittedPin || !pinConfig || !timingSafeStringEqual(submittedPin, pinConfig.pin)) {
+            res.status(403).json({
+              success: false,
+              code: "INVALID_PIN",
+              message: "Invalid Classroom PIN. Ask your lecturer for the current 4-digit PIN."
+            });
+            return;
+          }
+        }
+      } else if (kioskAuth.role !== "admin") {
+        const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth: kioskAuth });
+        if (!access.allowed) {
+          res.status(403).json({ success: false, message: "Access denied for this subject." });
+          return;
+        }
+      }
+      const matchedCourses = findCoursesMatching(coursesObj, { courseId, courseName });
+      const resolvedCourse = (kioskAuth ? matchedCourses.find((c) => canAccessCourse(c, kioskAuth)) : null) || matchedCourses[0] || null;
+      const roster = await resolveRosterForCourse({ courseName, courseId: resolvedCourse?.id || courseId });
       const normalizeRegName = (val) => val.trim().replace(/\s+/g, " ").toUpperCase();
       const normalizeRegId = (val) => val.trim().replace(/\s+/g, "").toUpperCase();
       const cleanSubmittedName = normalizeRegName(name);
@@ -1058,7 +1751,7 @@ function createApiApp() {
         });
         return;
       }
-      const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+      const sessionPath = verifiedGrant?.sessionKey ? verifiedGrant.sessionKey : buildLiveSessionPath({ courseName, courseId, matchedCourse: resolvedCourse });
       const studentKey = toStudentFirebaseKey(cleanSubmittedId);
       const liveSessionMap = await fbGet(`live_sessions/${sessionPath}`);
       const existingData = liveSessionMap && typeof liveSessionMap === "object" ? liveSessionMap[studentKey] || Object.values(liveSessionMap).find(
@@ -1068,6 +1761,7 @@ function createApiApp() {
         res.status(409).json({ success: false, message: "You have already checked in for this session." });
         return;
       }
+      const resolvedCourseId = resolvedCourse?.id || courseId || void 0;
       const timestamp = Date.now();
       const normalizedEmail = req.body?.email ? String(req.body.email).trim() : `${cleanSubmittedId}@student.edu.my`;
       const studentData = {
@@ -1077,16 +1771,29 @@ function createApiApp() {
         status,
         timestamp,
         courseName,
+        ...resolvedCourseId ? { courseId: resolvedCourseId } : {},
         week
       };
+      const pendingKey = toFirebaseKey(`${resolvedCourseId || toCourseKey(courseName)}__${studentKey}`);
       await Promise.all([
-        fbPut(`pending/${studentKey}`, studentData),
+        fbPut(`pending/${pendingKey}`, studentData),
         fbPut(`live_sessions/${sessionPath}/${studentKey}`, studentData),
         upsertAttendanceHistory([studentData])
       ]);
+      if (verifiedGrant) {
+        usedScanNonces.set(verifiedGrant.nonce, verifiedGrant.exp);
+        void fbPut(`used_qr_nonces/${verifiedGrant.nonce}`, verifiedGrant.exp).catch(() => {
+        });
+      }
       const cfg = await getAppConfig();
       if (cfg.integrationType === "google_sheets" && cfg.scriptUrl) {
-        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(studentData, week));
+        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(studentData, week)).then((r) => {
+          if (r.ok && !r.json?.error && r.json?.success !== false) {
+            return fbDelete(`pending/${pendingKey}`).catch(() => {
+            });
+          }
+        }).catch(() => {
+        });
       }
       res.json({ success: true, message: "Record submitted successfully.", record: studentData });
     } catch {
@@ -1108,9 +1815,12 @@ function createApiApp() {
       ]);
       const allCourses = coursesObj && typeof coursesObj === "object" ? Object.values(coursesObj).filter((c) => c && c.id && c.courseName).map(normalizeCourse) : [];
       const scopedCourses = allCourses.filter((c) => canAccessCourse(c, auth)).sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
-      const ownedCourseNames = new Set(scopedCourses.map((c) => c.courseName.trim().toUpperCase()));
+      const ownedCourseIds = new Set(scopedCourses.map((c) => c.id));
+      const ownedCourseNames = new Set(scopedCourses.map((c) => normalizeCourseNameKey(c.courseName)));
       const allHistory = Array.isArray(historyRaw) ? historyRaw.filter((h) => h && h.studentId && h.timestamp) : historyRaw && typeof historyRaw === "object" ? Object.values(historyRaw).filter((h) => h && h.studentId && h.timestamp) : [];
-      const scopedHistory = (auth.role === "admin" ? allHistory : allHistory.filter((h) => ownedCourseNames.has((h.courseName || "").trim().toUpperCase()))).sort((a, b) => b.timestamp - a.timestamp);
+      const scopedHistory = (auth.role === "admin" ? allHistory : allHistory.filter(
+        (h) => h.courseId ? ownedCourseIds.has(h.courseId) : ownedCourseNames.has(normalizeCourseNameKey(h.courseName || ""))
+      )).sort((a, b) => b.timestamp - a.timestamp);
       const allUserRecords = usersObj && typeof usersObj === "object" ? Object.values(usersObj).filter((u) => u && u.id && u.username) : [];
       const coLecturerOptions = allUserRecords.filter((u) => (u.status || "active") === "active").map((u) => ({
         id: u.id,
@@ -1133,7 +1843,8 @@ function createApiApp() {
         success: true,
         user: { id: auth.uid, username: auth.username, role: auth.role },
         config: {
-          scriptUrl: cfg.scriptUrl,
+          scriptUrl: auth.role === "admin" ? cfg.scriptUrl : "",
+          databaseUrl: auth.role === "admin" ? FIREBASE_DB_URL : "",
           integrationType: cfg.integrationType,
           adminEmail: auth.role === "admin" ? cfg.adminEmail : "",
           emailDelivery: auth.role === "admin" ? getEmailDeliveryStatus(cfg.scriptUrl) : void 0
@@ -1149,6 +1860,120 @@ function createApiApp() {
       });
     } catch {
       res.status(500).json({ success: false, error: "Failed to sync dashboard state." });
+    }
+  });
+  app2.get("/api/courses/sheet-tabs", requireAuth, async (req, res) => {
+    try {
+      const auth = req.auth;
+      const courseQuery = String(req.query.course || "").trim();
+      const cfg = await getAppConfig();
+      if (cfg.integrationType !== "google_sheets") {
+        res.status(400).json({ success: false, error: "Google Sheets integration is not active." });
+        return;
+      }
+      if (!cfg.scriptUrl || cfg.scriptUrl === DEFAULT_SCRIPT_URL) {
+        res.status(400).json({ success: false, error: "Configure Google Sheets Apps Script URL in Settings first." });
+        return;
+      }
+      if (cfg.scriptUrl.trim().endsWith("/dev")) {
+        res.status(400).json({ success: false, error: "Apps Script URL uses /dev. Deploy as Web App and paste the /exec URL in Settings." });
+        return;
+      }
+      const sheetUrl = `${cfg.scriptUrl}${cfg.scriptUrl.includes("?") ? "&" : "?"}action=getCourse${courseQuery ? `&course=${encodeURIComponent(courseQuery)}` : ""}&t=${Date.now()}`;
+      const sheetRes = await fetch(sheetUrl, { method: "GET", redirect: "follow" });
+      const rawText = await sheetRes.text();
+      if (sheetRes.status === 404 || rawText.trim().startsWith("<")) {
+        res.status(502).json({
+          success: false,
+          error: sheetRes.status === 404 ? "Apps Script URL returned 404. Paste your deployed /exec URL in Settings." : 'Apps Script returned HTML instead of JSON. Set Web App access to "Anyone" and use the /exec URL.'
+        });
+        return;
+      }
+      let data;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        res.status(502).json({ success: false, error: "Apps Script returned invalid JSON." });
+        return;
+      }
+      if (!data || !data.success) {
+        res.status(502).json({
+          success: false,
+          error: data?.error ? `Sheet error: ${data.error}` : "Could not read Course Name from Google Sheet."
+        });
+        return;
+      }
+      const [coursesObj, usersObj] = await Promise.all([
+        fbGet("courses"),
+        fbGet("app_users")
+      ]);
+      const allCourses = coursesObj && typeof coursesObj === "object" ? Object.values(coursesObj).filter((c) => c && c.id).map(normalizeCourse) : [];
+      const allUsers = usersObj && typeof usersObj === "object" ? Object.values(usersObj).filter((u) => u && u.id) : [];
+      const authUser = allUsers.find((u) => u.id === auth.uid) || null;
+      const rawSheets = Array.isArray(data.sheets) ? data.sheets : [];
+      const seenCourses = /* @__PURE__ */ new Set();
+      const sanitizedSheets = [];
+      for (const tab of rawSheets) {
+        if (!tab) continue;
+        const cleanCourse = String(tab.courseName || "").trim();
+        if (!cleanCourse) continue;
+        const key = normalizeCourseNameKey(cleanCourse);
+        if (seenCourses.has(key)) continue;
+        seenCourses.add(key);
+        const seenStudents = /* @__PURE__ */ new Set();
+        const normalizedStudents = [];
+        if (Array.isArray(tab.students)) {
+          for (const item of tab.students) {
+            const id = String(item?.id || "").trim().toUpperCase();
+            const name = String(item?.name || "").trim().toUpperCase();
+            if (id && name && !seenStudents.has(id)) {
+              seenStudents.add(id);
+              normalizedStudents.push({ id, name });
+            }
+          }
+        }
+        const rawOwnerStr = typeof tab.owner === "string" ? tab.owner.trim() : "";
+        const ownerExplicit = Boolean(tab.ownerExplicit);
+        if (auth.role === "admin") {
+          sanitizedSheets.push({
+            sheetName: String(tab.sheetName || ""),
+            courseName: cleanCourse,
+            owner: rawOwnerStr,
+            ownerExplicit,
+            students: normalizedStudents
+          });
+          continue;
+        }
+        const matchingCourses = allCourses.filter((c) => isSameCourse(c, cleanCourse));
+        const directMine = matchingCourses.find((c) => isDirectOwnerOrShared(c, auth));
+        const otherCourse = matchingCourses.find((c) => !isDirectOwnerOrShared(c, auth));
+        const sheetOwner = resolveSheetTabOwner(rawOwnerStr, ownerExplicit, allUsers);
+        const ownedByOtherInSheet = !directMine && (Boolean(otherCourse) || sheetOwner.recognized && !doesAuthMatchSheetOwner(sheetOwner.tokens, auth, authUser));
+        if (ownedByOtherInSheet) {
+          const safeOwnerDisplay = sheetOwner.matchedUsers.length > 0 ? sheetOwner.matchedUsers.map((u) => u.username).join(", ") : otherCourse?.createdBy || "Another Lecturer";
+          sanitizedSheets.push({
+            sheetName: String(tab.sheetName || ""),
+            courseName: cleanCourse,
+            owner: safeOwnerDisplay,
+            ownerExplicit: true,
+            students: []
+          });
+        } else {
+          sanitizedSheets.push({
+            sheetName: String(tab.sheetName || ""),
+            courseName: cleanCourse,
+            owner: rawOwnerStr,
+            ownerExplicit,
+            students: normalizedStudents
+          });
+        }
+      }
+      res.json({ success: true, sheets: sanitizedSheets });
+    } catch {
+      res.status(502).json({
+        success: false,
+        error: "Could not read Google Sheet. Check Settings \u2192 Apps Script URL."
+      });
     }
   });
   app2.patch("/api/user/notifications/:id/read", requireAuth, async (req, res) => {
@@ -1240,6 +2065,53 @@ function createApiApp() {
         selectedWeek: newCourse.selectedWeek,
         updatedAt: now
       });
+      const notifTasks = [];
+      const assignedToLecturer = auth.role === "admin" && Boolean(requestedOwnerUser) && targetOwnerId !== auth.uid;
+      if (assignedToLecturer) {
+        notifTasks.push(
+          createUserSystemNotification({
+            userId: targetOwnerId,
+            type: "course_assigned",
+            title: "Subject Assigned",
+            courseName: newCourse.courseName,
+            message: `Administrator (${auth.username}) assigned the subject "${newCourse.courseName}" to you.`
+          })
+        );
+      }
+      const addedCoNames = [];
+      for (const coId of targetSharedWith) {
+        const coUser = allUsers.find((u) => u.id === coId);
+        if (coUser) addedCoNames.push(coUser.username);
+        if (coId !== auth.uid) {
+          notifTasks.push(
+            createUserSystemNotification({
+              userId: coId,
+              type: "co_lecturer_added",
+              title: "Co-Lecturer Added",
+              courseName: newCourse.courseName,
+              message: `${auth.username} added you as a co-lecturer for "${newCourse.courseName}".`
+            })
+          );
+        }
+      }
+      if (assignedToLecturer || addedCoNames.length > 0) {
+        const parts = [];
+        if (assignedToLecturer) parts.push(`owner assigned to ${targetCreatedBy}`);
+        if (addedCoNames.length > 0) parts.push(`co-lecturers: ${addedCoNames.join(", ")}`);
+        notifTasks.push(
+          createAdminAlertNotification({
+            type: "course_ownership_changed",
+            userId: auth.uid,
+            username: auth.username,
+            courseName: newCourse.courseName,
+            message: `Subject "${newCourse.courseName}" created by ${auth.username} (${parts.join("; ")}).`
+          })
+        );
+      }
+      if (notifTasks.length > 0) {
+        await Promise.all(notifTasks).catch(() => {
+        });
+      }
       res.json({ success: true, course: newCourse });
     } catch {
       res.status(500).json({ success: false, error: "Failed to create course." });
@@ -1531,6 +2403,65 @@ function createApiApp() {
         mutableCoursesMap[finalId] = created;
         allCourses.push(created);
         synced.push(created);
+        const syncCourseNotifs = [];
+        const assignedToOtherOwner = auth.role === "admin" && targetOwnerId !== auth.uid;
+        if (assignedToOtherOwner) {
+          syncCourseNotifs.push(
+            createUserSystemNotification({
+              userId: targetOwnerId,
+              type: "course_assigned",
+              title: "Subject Assigned",
+              courseName: created.courseName,
+              message: `Administrator (${auth.username}) synced and assigned "${created.courseName}" to you.`
+            })
+          );
+        }
+        const syncedCoNames = [];
+        for (const coId of targetSharedWith) {
+          const coUser = allUsers.find((u) => u.id === coId);
+          if (coUser) syncedCoNames.push(coUser.username);
+          if (coId !== auth.uid) {
+            syncCourseNotifs.push(
+              createUserSystemNotification({
+                userId: coId,
+                type: "co_lecturer_added",
+                title: "Co-Lecturer Added",
+                courseName: created.courseName,
+                message: `${auth.username} added you as a co-lecturer for "${created.courseName}" during Google Sheet sync.`
+              })
+            );
+          }
+        }
+        if (assignedToOtherOwner || syncedCoNames.length > 0 || sheetOwner.recognized) {
+          const detailParts = [`owner: ${targetCreatedBy}`];
+          if (syncedCoNames.length > 0) detailParts.push(`co-lecturers: ${syncedCoNames.join(", ")}`);
+          syncCourseNotifs.push(
+            createAdminAlertNotification({
+              type: "course_ownership_changed",
+              userId: auth.uid,
+              username: auth.username,
+              courseName: created.courseName,
+              message: `Google Sheet tab "${created.courseName}" synced by ${auth.username} (${detailParts.join("; ")}).`
+            })
+          );
+        }
+        if (syncCourseNotifs.length > 0) {
+          await Promise.all(syncCourseNotifs).catch(() => {
+          });
+        }
+      }
+      if (skippedCourses.length > 0) {
+        const preview = skippedCourses.slice(0, 4).map((item) => `${item.courseName} (${item.reason})`).join("; ");
+        const extra = skippedCourses.length > 4 ? ` +${skippedCourses.length - 4} more` : "";
+        await createAdminAlertNotification({
+          type: "sheet_sync_skipped",
+          userId: auth.uid,
+          username: auth.username,
+          courseName: skippedCourses.map((s) => s.courseName).join(", "),
+          reason: preview,
+          message: `Google Sheet sync by ${auth.username} skipped ${skippedCourses.length} tab${skippedCourses.length === 1 ? "" : "s"}: ${preview}${extra}.`
+        }).catch(() => {
+        });
       }
       res.json({ success: true, courses: synced, skippedCourses });
     } catch {
@@ -1539,17 +2470,19 @@ function createApiApp() {
   });
   app2.patch("/api/courses/:id/owner", requireAuth, requireAdmin, async (req, res) => {
     try {
+      const auth = req.auth;
       const courseId = String(req.params.id || "").trim();
       const newOwnerId = String(req.body?.ownerId || "").trim();
       const sharedWith = Array.isArray(req.body?.sharedWith) ? req.body.sharedWith.map(String) : void 0;
-      const [existing, usersObj] = await Promise.all([
+      const [existingRaw, usersObj] = await Promise.all([
         fbGet(`courses/${courseId}`),
         fbGet("app_users")
       ]);
-      if (!existing) {
+      if (!existingRaw) {
         res.status(404).json({ success: false, error: "Course not found." });
         return;
       }
+      const existing = normalizeCourse(existingRaw);
       const allUsers = usersObj && typeof usersObj === "object" ? Object.values(usersObj) : [];
       let nextCreatedBy = existing.createdBy || "admin";
       if (newOwnerId) {
@@ -1560,6 +2493,9 @@ function createApiApp() {
         }
         nextCreatedBy = ownerUser.username;
       }
+      const prevOwnerId = existing.ownerId || "";
+      const prevOwnerLabel = existing.createdBy || "Unassigned";
+      const prevSharedIds = resolveCourseSharedUserIds(existing.sharedWith, allUsers);
       const effectiveOwnerId = newOwnerId || existing.ownerId;
       const patchPayload = {
         updatedAt: Date.now()
@@ -1575,6 +2511,91 @@ function createApiApp() {
       }
       await fbPatch(`courses/${courseId}`, patchPayload);
       const updated = normalizeCourse({ ...existing, ...patchPayload });
+      const nextSharedIds = resolveCourseSharedUserIds(updated.sharedWith, allUsers);
+      const notifTasks = [];
+      const ownerChanged = Boolean(newOwnerId && newOwnerId !== prevOwnerId);
+      if (ownerChanged) {
+        if (newOwnerId !== auth.uid) {
+          notifTasks.push(
+            createUserSystemNotification({
+              userId: newOwnerId,
+              type: "course_assigned",
+              title: "Subject Assigned",
+              courseName: updated.courseName,
+              message: `Administrator (${auth.username}) assigned the subject "${updated.courseName}" to you.`
+            })
+          );
+        }
+        if (prevOwnerId && prevOwnerId !== auth.uid) {
+          notifTasks.push(
+            createUserSystemNotification({
+              userId: prevOwnerId,
+              type: "system_update",
+              title: "Subject Reassigned",
+              courseName: updated.courseName,
+              message: `Administrator (${auth.username}) reassigned "${updated.courseName}" to ${nextCreatedBy}.`
+            })
+          );
+        }
+        notifTasks.push(
+          createAdminAlertNotification({
+            type: "course_ownership_changed",
+            userId: auth.uid,
+            username: auth.username,
+            courseName: updated.courseName,
+            message: `Subject "${updated.courseName}" ownership changed from ${prevOwnerLabel} to ${nextCreatedBy} (by ${auth.username}).`
+          })
+        );
+      }
+      if (sharedWith !== void 0) {
+        const addedIds = nextSharedIds.filter((id) => !prevSharedIds.includes(id));
+        const removedIds = prevSharedIds.filter((id) => !nextSharedIds.includes(id) && id !== effectiveOwnerId);
+        for (const coId of addedIds) {
+          if (coId !== auth.uid) {
+            notifTasks.push(
+              createUserSystemNotification({
+                userId: coId,
+                type: "co_lecturer_added",
+                title: "Co-Lecturer Added",
+                courseName: updated.courseName,
+                message: `Administrator (${auth.username}) added you as a co-lecturer for "${updated.courseName}".`
+              })
+            );
+          }
+        }
+        for (const coId of removedIds) {
+          if (coId !== auth.uid) {
+            notifTasks.push(
+              createUserSystemNotification({
+                userId: coId,
+                type: "co_lecturer_removed",
+                title: "Co-Lecturer Removed",
+                courseName: updated.courseName,
+                message: `Administrator (${auth.username}) removed your co-lecturer access for "${updated.courseName}".`
+              })
+            );
+          }
+        }
+        if (!ownerChanged && (addedIds.length > 0 || removedIds.length > 0)) {
+          const resolveNames = (ids) => ids.map((id) => allUsers.find((u) => u.id === id)?.username || id).join(", ");
+          const changes = [];
+          if (addedIds.length > 0) changes.push(`added ${resolveNames(addedIds)}`);
+          if (removedIds.length > 0) changes.push(`removed ${resolveNames(removedIds)}`);
+          notifTasks.push(
+            createAdminAlertNotification({
+              type: "course_ownership_changed",
+              userId: auth.uid,
+              username: auth.username,
+              courseName: updated.courseName,
+              message: `Co-lecturer sharing updated for "${updated.courseName}" by ${auth.username}: ${changes.join("; ")}.`
+            })
+          );
+        }
+      }
+      if (notifTasks.length > 0) {
+        await Promise.all(notifTasks).catch(() => {
+        });
+      }
       res.json({ success: true, course: updated });
     } catch {
       res.status(500).json({ success: false, error: "Failed to update course ownership." });
@@ -1603,6 +2624,7 @@ function createApiApp() {
         return;
       }
       const allUsers = usersObj && typeof usersObj === "object" ? Object.values(usersObj) : [];
+      const prevSharedIds = resolveCourseSharedUserIds(existing.sharedWith, allUsers);
       const cleanedSharedWith = sanitizeSharedWithIds(req.body?.sharedWith, allUsers, existing.ownerId);
       const patchPayload = {
         sharedWith: cleanedSharedWith,
@@ -1610,6 +2632,56 @@ function createApiApp() {
       };
       await fbPatch(`courses/${courseId}`, patchPayload);
       const updated = normalizeCourse({ ...existing, ...patchPayload });
+      const addedIds = cleanedSharedWith.filter((id) => !prevSharedIds.includes(id));
+      const removedIds = prevSharedIds.filter(
+        (id) => !cleanedSharedWith.includes(id) && id !== existing.ownerId
+      );
+      const notifTasks = [];
+      for (const coId of addedIds) {
+        if (coId !== auth.uid) {
+          notifTasks.push(
+            createUserSystemNotification({
+              userId: coId,
+              type: "co_lecturer_added",
+              title: "Co-Lecturer Added",
+              courseName: updated.courseName,
+              message: `${auth.username} added you as a co-lecturer for "${updated.courseName}".`
+            })
+          );
+        }
+      }
+      for (const coId of removedIds) {
+        if (coId !== auth.uid) {
+          notifTasks.push(
+            createUserSystemNotification({
+              userId: coId,
+              type: "co_lecturer_removed",
+              title: "Co-Lecturer Removed",
+              courseName: updated.courseName,
+              message: `${auth.username} removed your co-lecturer access for "${updated.courseName}".`
+            })
+          );
+        }
+      }
+      if (addedIds.length > 0 || removedIds.length > 0) {
+        const resolveNames = (ids) => ids.map((id) => allUsers.find((u) => u.id === id)?.username || id).join(", ");
+        const changes = [];
+        if (addedIds.length > 0) changes.push(`added ${resolveNames(addedIds)}`);
+        if (removedIds.length > 0) changes.push(`removed ${resolveNames(removedIds)}`);
+        notifTasks.push(
+          createAdminAlertNotification({
+            type: "course_ownership_changed",
+            userId: auth.uid,
+            username: auth.username,
+            courseName: updated.courseName,
+            message: `Co-lecturer sharing updated for "${updated.courseName}" by ${auth.username}: ${changes.join("; ")}.`
+          })
+        );
+      }
+      if (notifTasks.length > 0) {
+        await Promise.all(notifTasks).catch(() => {
+        });
+      }
       res.json({ success: true, course: updated });
     } catch {
       res.status(500).json({ success: false, error: "Failed to update co-lecturers." });
@@ -1619,15 +2691,22 @@ function createApiApp() {
     try {
       const auth = req.auth;
       const courseName = String(req.query.course || "").trim();
-      if (courseName && auth.role !== "admin") {
-        const coursesObj = await fbGet("courses") || {};
-        const matched = Object.values(coursesObj).filter((c) => c && c.courseName).find((c) => c.courseName.trim().toUpperCase() === courseName.toUpperCase());
-        if (matched && !canAccessCourse(normalizeCourse(matched), auth)) {
-          res.status(403).json({ success: false, error: "Access denied for this subject." });
-          return;
-        }
+      const courseId = String(req.query.courseId || "").trim();
+      if (!courseName && !courseId && auth.role !== "admin") {
+        res.status(400).json({ success: false, error: "Subject is required." });
+        return;
       }
-      const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+      const coursesObj = await fbGet("courses") || {};
+      const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, error: "Access denied for this subject." });
+        return;
+      }
+      const sessionPath = buildLiveSessionPath({
+        courseName: access.course?.courseName || courseName,
+        courseId: access.course?.id || courseId,
+        matchedCourse: access.course
+      });
       const data = await fbGet(`live_sessions/${sessionPath}`);
       const students = data && typeof data === "object" ? Object.values(data).sort((a, b) => b.timestamp - a.timestamp) : [];
       res.json({ success: true, students });
@@ -1637,10 +2716,12 @@ function createApiApp() {
   });
   app2.post("/api/attendance/manual", requireAuth, async (req, res) => {
     try {
+      const auth = req.auth;
       const name = String(req.body?.name || "").trim();
       const studentId = String(req.body?.studentId || "").trim();
       const status = String(req.body?.status || "P").trim().toUpperCase();
       const courseName = String(req.body?.courseName || "General Session").trim();
+      const courseId = String(req.body?.courseId || "").trim();
       const absenceReason = typeof req.body?.absenceReason === "string" ? req.body.absenceReason : void 0;
       const week = String(req.body?.week || "W1").trim().toUpperCase();
       const overrideTimestamp = typeof req.body?.overrideTimestamp === "number" ? req.body.overrideTimestamp : void 0;
@@ -1648,9 +2729,19 @@ function createApiApp() {
         res.status(400).json({ success: false, message: "Name and Student ID are required." });
         return;
       }
+      const coursesObj = await fbGet("courses") || {};
+      const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, message: "You do not have permission to edit attendance for this subject." });
+        return;
+      }
       const cleanStudentId = normalizeStudentId(studentId);
       const studentKey = toStudentFirebaseKey(cleanStudentId);
-      const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+      const sessionPath = buildLiveSessionPath({
+        courseName: access.course?.courseName || courseName,
+        courseId: access.course?.id || courseId,
+        matchedCourse: access.course
+      });
       if (status === "P") {
         const liveSessionMap = await fbGet(`live_sessions/${sessionPath}`);
         const existingData = liveSessionMap && typeof liveSessionMap === "object" ? liveSessionMap[studentKey] || Object.values(liveSessionMap).find(
@@ -1661,6 +2752,7 @@ function createApiApp() {
           return;
         }
       }
+      const resolvedCourseId = access.course?.id || courseId || void 0;
       const timestamp = overrideTimestamp || Date.now();
       const studentData = {
         name,
@@ -1668,18 +2760,26 @@ function createApiApp() {
         email: req.body?.email ? String(req.body.email).trim() : `${cleanStudentId}@student.edu.my`,
         status,
         timestamp,
-        courseName,
+        courseName: access.course?.courseName || courseName,
+        ...resolvedCourseId ? { courseId: resolvedCourseId } : {},
         absenceReason,
         week
       };
+      const pendingKey = toFirebaseKey(`${resolvedCourseId || toCourseKey(studentData.courseName)}__${studentKey}`);
       await Promise.all([
-        fbPut(`pending/${studentKey}`, studentData),
+        fbPut(`pending/${pendingKey}`, studentData),
         fbPut(`live_sessions/${sessionPath}/${studentKey}`, studentData),
         upsertAttendanceHistory([studentData])
       ]);
       const cfg = await getAppConfig();
       if (cfg.integrationType === "google_sheets" && cfg.scriptUrl) {
-        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(studentData, week));
+        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(studentData, week)).then((r) => {
+          if (r.ok && !r.json?.error && r.json?.success !== false) {
+            return fbDelete(`pending/${pendingKey}`).catch(() => {
+            });
+          }
+        }).catch(() => {
+        });
       }
       res.json({ success: true, message: "Record submitted successfully.", record: studentData });
     } catch {
@@ -1688,30 +2788,74 @@ function createApiApp() {
   });
   app2.post("/api/attendance/bulk", requireAuth, async (req, res) => {
     try {
+      const auth = req.auth;
       const records = Array.isArray(req.body?.records) ? req.body.records : [];
       const courseName = String(req.body?.courseName || "").trim();
+      const courseId = String(req.body?.courseId || "").trim();
       const week = String(req.body?.week || "W1").trim().toUpperCase();
       if (records.length === 0) {
         res.json({ success: true });
         return;
       }
-      const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+      const coursesObj = await fbGet("courses") || {};
+      const access = resolveCourseAccess({
+        coursesObj,
+        courseId,
+        courseName: courseName || String(records[0]?.courseName || ""),
+        auth
+      });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, error: "You do not have permission to update attendance for this subject." });
+        return;
+      }
+      if (auth.role !== "admin") {
+        for (const rec of records) {
+          if (rec?.courseName) {
+            const recAccess = resolveCourseAccess({ coursesObj, courseName: rec.courseName, auth });
+            if (!recAccess.allowed) {
+              res.status(403).json({ success: false, error: "You do not have permission to update attendance for one or more subjects." });
+              return;
+            }
+          }
+        }
+      }
+      const sessionPath = buildLiveSessionPath({
+        courseName: access.course?.courseName || courseName,
+        courseId: access.course?.id || courseId,
+        matchedCourse: access.course
+      });
+      const resolvedBulkCourseId = access.course?.id || courseId || void 0;
+      const enrichedRecords = records.map((r) => ({
+        ...r,
+        ...r.courseId || resolvedBulkCourseId ? { courseId: r.courseId || resolvedBulkCourseId } : {}
+      }));
+      const pendingKeys = enrichedRecords.map((r) => {
+        const sk = toStudentFirebaseKey(r.studentId || "");
+        return sk ? toFirebaseKey(`${r.courseId || toCourseKey(r.courseName || courseName)}__${sk}`) : "";
+      }).filter(Boolean);
       await Promise.all([
-        ...records.flatMap((r) => {
+        ...enrichedRecords.flatMap((r) => {
           const key = toStudentFirebaseKey(r.studentId || "");
+          const pKey = toFirebaseKey(`${r.courseId || toCourseKey(r.courseName || courseName)}__${key}`);
           return [
-            fbPut(`pending/${key}`, r),
+            fbPut(`pending/${pKey}`, r),
             fbPut(`live_sessions/${sessionPath}/${key}`, r)
           ];
         }),
-        upsertAttendanceHistory(records)
+        upsertAttendanceHistory(enrichedRecords)
       ]);
       const cfg = await getAppConfig();
       if (cfg.integrationType === "google_sheets" && cfg.scriptUrl) {
         void postToGoogleScript(
           cfg.scriptUrl,
-          records.map((r) => formatCloudPayload(r, week))
-        );
+          enrichedRecords.map((r) => formatCloudPayload(r, week))
+        ).then((r) => {
+          if (r.ok && !r.json?.error && r.json?.success !== false) {
+            return Promise.all(pendingKeys.map((k) => fbDelete(`pending/${k}`).catch(() => {
+            })));
+          }
+        }).catch(() => {
+        });
       }
       res.json({ success: true });
     } catch {
@@ -1720,15 +2864,53 @@ function createApiApp() {
   });
   app2.post("/api/attendance/remove", requireAuth, async (req, res) => {
     try {
+      const auth = req.auth;
       const removals = Array.isArray(req.body?.removals) ? req.body.removals : [];
       const courseName = String(req.body?.courseName || "").trim();
-      const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+      const courseId = String(req.body?.courseId || "").trim();
+      const coursesObj = await fbGet("courses") || {};
+      const access = resolveCourseAccess({
+        coursesObj,
+        courseId,
+        courseName: courseName || String(removals[0]?.courseName || ""),
+        auth
+      });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, error: "You do not have permission to remove students from this subject." });
+        return;
+      }
+      if (auth.role !== "admin") {
+        for (const rem of removals) {
+          if (rem?.courseName) {
+            const recAccess = resolveCourseAccess({ coursesObj, courseId: rem.courseId || courseId, courseName: rem.courseName, auth });
+            if (!recAccess.allowed) {
+              res.status(403).json({ success: false, error: "You do not have permission to modify one or more subjects." });
+              return;
+            }
+          }
+        }
+      }
+      const sessionPath = buildLiveSessionPath({
+        courseName: access.course?.courseName || courseName,
+        courseId: access.course?.id || courseId,
+        matchedCourse: access.course
+      });
+      const resolvedRemoveCourseId = access.course?.id || courseId || void 0;
+      const enrichedRemovals = removals.map((r) => ({
+        ...r,
+        ...r.courseId || resolvedRemoveCourseId ? { courseId: r.courseId || resolvedRemoveCourseId } : {}
+      }));
+      const pendingKeys = enrichedRemovals.map((r) => {
+        const sk = toStudentFirebaseKey(r.studentId || "");
+        return sk ? toFirebaseKey(`${r.courseId || toCourseKey(r.courseName || courseName)}__${sk}`) : "";
+      }).filter(Boolean);
       await Promise.all([
-        ...removals.flatMap((r) => {
+        ...enrichedRemovals.flatMap((r) => {
           const rawId = String(r.studentId || "").trim();
           const key = toStudentFirebaseKey(rawId);
+          const pKey = toFirebaseKey(`${r.courseId || toCourseKey(r.courseName || courseName)}__${key}`);
           const tasks = [
-            fbPut(`pending/${key}`, r),
+            fbPut(`pending/${pKey}`, r),
             fbDelete(`live_sessions/${sessionPath}/${key}`)
           ];
           if (rawId && rawId !== key) {
@@ -1736,14 +2918,20 @@ function createApiApp() {
           }
           return tasks;
         }),
-        upsertAttendanceHistory(removals)
+        upsertAttendanceHistory(enrichedRemovals)
       ]);
       const cfg = await getAppConfig();
-      if (cfg.integrationType === "google_sheets" && cfg.scriptUrl && removals.length > 0) {
+      if (cfg.integrationType === "google_sheets" && cfg.scriptUrl && enrichedRemovals.length > 0) {
         void postToGoogleScript(
           cfg.scriptUrl,
-          removals.map((r) => formatCloudPayload(r, r.week || "W1"))
-        );
+          enrichedRemovals.map((r) => formatCloudPayload(r, r.week || "W1"))
+        ).then((r) => {
+          if (r.ok && !r.json?.error && r.json?.success !== false) {
+            return Promise.all(pendingKeys.map((k) => fbDelete(`pending/${k}`).catch(() => {
+            })));
+          }
+        }).catch(() => {
+        });
       }
       res.json({ success: true });
     } catch {
@@ -1758,6 +2946,7 @@ function createApiApp() {
       const studentKey = toStudentFirebaseKey(studentId);
       const name = String(req.body?.name || "").trim();
       const courseName = String(req.body?.courseName || "General Session").trim();
+      const courseId = String(req.body?.courseId || "").trim();
       const week = String(req.body?.week || "W1").trim().toUpperCase();
       const status = String(req.body?.status || "P").trim().toUpperCase();
       const absenceReason = typeof req.body?.absenceReason === "string" ? req.body.absenceReason.trim() : "";
@@ -1766,14 +2955,13 @@ function createApiApp() {
         res.status(400).json({ success: false, error: "Valid Student ID, Name, and Week (W1\u2013W14) are required." });
         return;
       }
-      if (auth.role !== "admin" && courseName) {
-        const coursesObj = await fbGet("courses") || {};
-        const matched = Object.values(coursesObj).filter((c) => c && c.courseName).find((c) => c.courseName.trim().toUpperCase() === courseName.toUpperCase());
-        if (matched && !canAccessCourse(normalizeCourse(matched), auth)) {
-          res.status(403).json({ success: false, error: "You do not have permission to edit this subject." });
-          return;
-        }
+      const coursesObj = await fbGet("courses") || {};
+      const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, error: "You do not have permission to edit this subject." });
+        return;
       }
+      const resolvedMatrixCourseId = access.course?.id || courseId || void 0;
       const timestamp = Date.now();
       const record = {
         studentId,
@@ -1781,22 +2969,34 @@ function createApiApp() {
         email: `${studentId}@student.edu.my`,
         status,
         timestamp,
-        courseName,
+        courseName: access.course?.courseName || courseName,
+        ...resolvedMatrixCourseId ? { courseId: resolvedMatrixCourseId } : {},
         absenceReason: status === "P" ? "" : absenceReason || void 0,
         week
       };
+      const pendingKey = toFirebaseKey(`${resolvedMatrixCourseId || toCourseKey(record.courseName)}__${studentKey}`);
       const writes = [
-        fbPut(`pending/${studentKey}`, record),
+        fbPut(`pending/${pendingKey}`, record),
         upsertAttendanceHistory([record])
       ];
       if (updateLiveSession) {
-        const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+        const sessionPath = buildLiveSessionPath({
+          courseName: access.course?.courseName || courseName,
+          courseId: access.course?.id || courseId,
+          matchedCourse: access.course
+        });
         writes.push(fbPut(`live_sessions/${sessionPath}/${studentKey}`, record));
       }
       await Promise.all(writes);
       const cfg = await getAppConfig();
       if (cfg.integrationType === "google_sheets" && cfg.scriptUrl) {
-        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(record, week));
+        void postToGoogleScript(cfg.scriptUrl, formatCloudPayload(record, week)).then((r) => {
+          if (r.ok && !r.json?.error && r.json?.success !== false) {
+            return fbDelete(`pending/${pendingKey}`).catch(() => {
+            });
+          }
+        }).catch(() => {
+        });
       }
       res.json({ success: true, record });
     } catch {
@@ -1805,8 +3005,20 @@ function createApiApp() {
   });
   app2.delete("/api/attendance/session", requireAuth, async (req, res) => {
     try {
+      const auth = req.auth;
       const courseName = String(req.query.course || "").trim();
-      const sessionPath = courseName ? `${getSessionDateId()}_${sanitizeCoursePath(courseName)}` : getSessionDateId();
+      const courseId = String(req.query.courseId || "").trim();
+      const coursesObj = await fbGet("courses") || {};
+      const access = resolveCourseAccess({ coursesObj, courseId, courseName, auth });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, error: "You do not have permission to clear this subject session." });
+        return;
+      }
+      const sessionPath = buildLiveSessionPath({
+        courseName: access.course?.courseName || courseName,
+        courseId: access.course?.id || courseId,
+        matchedCourse: access.course
+      });
       await fbDelete(`live_sessions/${sessionPath}`);
       res.json({ success: true });
     } catch {
@@ -1818,26 +3030,32 @@ function createApiApp() {
       const auth = req.auth;
       const timestamp = Number(req.query.timestamp);
       const studentId = String(req.query.studentId || "").trim();
-      const histRaw = await fbGet("attendance_history");
-      const prevHist = Array.isArray(histRaw) ? histRaw : histRaw && typeof histRaw === "object" ? Object.values(histRaw) : [];
+      const normId = normalizeStudentId(studentId);
+      const entries = await readAttendanceHistoryEntries();
+      let allowedCourseIds = null;
       let allowedCourses = null;
       if (auth.role !== "admin") {
         const coursesObj = await fbGet("courses") || {};
-        allowedCourses = new Set(
-          Object.values(coursesObj).filter((c) => c && c.courseName && canAccessCourse(normalizeCourse(c), auth)).map((c) => c.courseName.trim().toUpperCase())
+        const accessible = Object.values(coursesObj).filter(
+          (c) => c && c.courseName && canAccessCourse(normalizeCourse(c), auth)
         );
+        allowedCourseIds = new Set(accessible.map((c) => c.id));
+        allowedCourses = new Set(accessible.map((c) => normalizeCourseNameKey(c.courseName)));
       }
-      const nextHist = prevHist.filter((h) => {
-        if (!h) return false;
-        if (h.timestamp === timestamp && h.studentId === studentId) {
-          if (allowedCourses && !allowedCourses.has((h.courseName || "").trim().toUpperCase())) {
-            return true;
+      const deletePatch = {};
+      for (const { key, record } of entries) {
+        if (record.timestamp === timestamp && (record.studentId === studentId || normalizeStudentId(record.studentId) === normId)) {
+          const hasPermission = record.courseId ? Boolean(allowedCourseIds?.has(record.courseId)) : Boolean(allowedCourses?.has(normalizeCourseNameKey(record.courseName || "")));
+          if (allowedCourses && !hasPermission) {
+            res.status(403).json({ success: false, error: "You do not have permission to delete this history record." });
+            return;
           }
-          return false;
+          deletePatch[key] = null;
         }
-        return true;
-      });
-      await fbPut("attendance_history", nextHist);
+      }
+      if (Object.keys(deletePatch).length > 0) {
+        await fbPatch("attendance_history", deletePatch);
+      }
       res.json({ success: true });
     } catch {
       res.status(500).json({ success: false, error: "Failed to delete history item." });
@@ -1847,18 +3065,27 @@ function createApiApp() {
     try {
       const auth = req.auth;
       if (auth.role === "admin") {
-        await fbPut("attendance_history", []);
+        await fbDelete("attendance_history");
         res.json({ success: true });
         return;
       }
       const coursesObj = await fbGet("courses") || {};
-      const ownedNames = new Set(
-        Object.values(coursesObj).filter((c) => c && c.courseName && canAccessCourse(normalizeCourse(c), auth)).map((c) => c.courseName.trim().toUpperCase())
+      const accessible = Object.values(coursesObj).filter(
+        (c) => c && c.courseName && canAccessCourse(normalizeCourse(c), auth)
       );
-      const histRaw = await fbGet("attendance_history");
-      const prevHist = Array.isArray(histRaw) ? histRaw : histRaw && typeof histRaw === "object" ? Object.values(histRaw) : [];
-      const remaining = prevHist.filter((h) => h && !ownedNames.has((h.courseName || "").trim().toUpperCase()));
-      await fbPut("attendance_history", remaining);
+      const ownedCourseIds = new Set(accessible.map((c) => c.id));
+      const ownedNames = new Set(accessible.map((c) => normalizeCourseNameKey(c.courseName)));
+      const entries = await readAttendanceHistoryEntries();
+      const deletePatch = {};
+      for (const { key, record } of entries) {
+        const hasPermission = record.courseId ? ownedCourseIds.has(record.courseId) : ownedNames.has(normalizeCourseNameKey(record.courseName || ""));
+        if (hasPermission) {
+          deletePatch[key] = null;
+        }
+      }
+      if (Object.keys(deletePatch).length > 0) {
+        await fbPatch("attendance_history", deletePatch);
+      }
       res.json({ success: true });
     } catch {
       res.status(500).json({ success: false, error: "Failed to clear history." });
@@ -1866,8 +3093,15 @@ function createApiApp() {
   });
   app2.post("/api/queue/test", requireAuth, async (req, res) => {
     try {
+      const auth = req.auth;
       const courseName = String(req.body?.courseName || "Connectivity Test").trim();
       const week = String(req.body?.week || "W1").trim().toUpperCase();
+      const coursesObj = await fbGet("courses") || {};
+      const access = resolveCourseAccess({ coursesObj, courseName, auth });
+      if (!access.allowed) {
+        res.status(403).json({ success: false, message: "Access denied for this subject." });
+        return;
+      }
       const testRecord = {
         name: "CONNECTION TEST",
         studentId: "TEST999",
@@ -1878,25 +3112,60 @@ function createApiApp() {
         absenceReason: "",
         week
       };
-      await fbPut("pending/TEST999", testRecord);
       const cfg = await getAppConfig();
-      if (cfg.integrationType === "google_sheets" && cfg.scriptUrl) {
-        await postToGoogleScript(cfg.scriptUrl, formatCloudPayload(testRecord, week));
+      if (cfg.integrationType === "google_sheets") {
+        if (!cfg.scriptUrl || cfg.scriptUrl === DEFAULT_SCRIPT_URL) {
+          res.status(400).json({ success: false, message: "Google Apps Script URL is not configured." });
+          return;
+        }
+        const scriptRes = await postToGoogleScript(cfg.scriptUrl, formatCloudPayload(testRecord, week));
+        await fbDelete("pending/TEST999").catch(() => {
+        });
+        if (!scriptRes.ok || scriptRes.json?.success === false || scriptRes.json?.error) {
+          const errMsg = typeof scriptRes.json?.error === "string" && scriptRes.json.error || scriptRes.error || "Google Apps Script test failed.";
+          res.status(502).json({ success: false, message: errMsg });
+          return;
+        }
+        res.json({ success: true, message: `Test signal delivered to Google Sheets (${week}).` });
+        return;
       }
-      res.json({ success: true, message: `Test signal sent to Cloud (${week}).` });
+      res.json({ success: true, message: `Test signal verified (${week}).` });
     } catch {
       res.status(500).json({ success: false, message: "Cloud test failed." });
     }
   });
-  app2.get("/api/queue", requireAuth, async (_req, res) => {
+  app2.get("/api/queue", requireAuth, async (req, res) => {
     try {
-      const data = await fbGet("pending");
-      const count = data && typeof data === "object" ? Object.keys(data).length : 0;
+      const auth = req.auth;
+      const [data, coursesObj] = await Promise.all([
+        fbGet("pending"),
+        auth.role === "admin" ? Promise.resolve(null) : fbGet("courses")
+      ]);
+      const scoped = {};
+      if (data && typeof data === "object") {
+        for (const [key, rec] of Object.entries(data)) {
+          if (!rec || key === "TEST999" || normalizeStudentId(rec.studentId || "") === "TEST999") continue;
+          if (auth.role === "admin") {
+            scoped[key] = rec;
+          } else {
+            const access = resolveCourseAccess({
+              coursesObj,
+              courseId: rec.courseId || "",
+              courseName: rec.courseName || "",
+              auth
+            });
+            if (access.allowed && access.course) {
+              scoped[key] = rec;
+            }
+          }
+        }
+      }
+      const count = Object.keys(scoped).length;
       res.json({
         success: true,
         message: count > 0 ? `Queue length: ${count}` : "Synchronization queue is empty.",
         count,
-        data: data || {}
+        data: scoped
       });
     } catch {
       res.status(500).json({ success: false, message: "Status check failed.", count: 0 });
@@ -1912,14 +3181,37 @@ function createApiApp() {
   });
   app2.post("/api/queue/sync", requireAuth, async (req, res) => {
     try {
+      const auth = req.auth;
       const selectedWeek = String(req.body?.week || "W1").trim().toUpperCase();
       const cfg = await getAppConfig();
       if (cfg.integrationType === "firebase") {
         res.json({ success: true, message: "Firebase syncs automatically.", syncedCount: 0, errorCount: 0, total: 0 });
         return;
       }
-      const pendingData = await fbGet("pending");
-      const records = pendingData && typeof pendingData === "object" ? Object.values(pendingData) : [];
+      const [pendingData, coursesObj] = await Promise.all([
+        fbGet("pending"),
+        auth.role === "admin" ? Promise.resolve(null) : fbGet("courses")
+      ]);
+      const scopedEntries = [];
+      if (pendingData && typeof pendingData === "object") {
+        for (const [key, rec] of Object.entries(pendingData)) {
+          if (!rec || key === "TEST999" || normalizeStudentId(rec.studentId || "") === "TEST999") continue;
+          if (auth.role === "admin") {
+            scopedEntries.push([key, rec]);
+          } else {
+            const access = resolveCourseAccess({
+              coursesObj,
+              courseId: rec.courseId || "",
+              courseName: rec.courseName || "",
+              auth
+            });
+            if (access.allowed && access.course) {
+              scopedEntries.push([key, rec]);
+            }
+          }
+        }
+      }
+      const records = scopedEntries.map(([, rec]) => rec);
       if (cfg.integrationType === "airtable") {
         res.json({
           success: true,
@@ -1931,13 +3223,26 @@ function createApiApp() {
         });
         return;
       }
-      if (!cfg.scriptUrl) {
-        res.status(400).json({ success: false, message: "Script Endpoint missing.", syncedCount: 0, errorCount: 0, total: 0 });
+      if (!cfg.scriptUrl || cfg.scriptUrl === DEFAULT_SCRIPT_URL) {
+        res.status(400).json({ success: false, message: "Google Apps Script URL is not configured.", syncedCount: 0, errorCount: 0, total: 0 });
         return;
       }
       if (records.length > 0) {
         const bulkPayload = records.map((r) => formatCloudPayload({ ...r, week: r.week || selectedWeek }, selectedWeek));
-        await postToGoogleScript(cfg.scriptUrl, bulkPayload);
+        const scriptRes = await postToGoogleScript(cfg.scriptUrl, bulkPayload);
+        if (!scriptRes.ok || scriptRes.json?.success === false || scriptRes.json?.error) {
+          const errMsg = typeof scriptRes.json?.error === "string" && scriptRes.json.error || scriptRes.error || "Google Apps Script sync failed.";
+          res.status(502).json({
+            success: false,
+            message: errMsg,
+            syncedCount: 0,
+            errorCount: records.length,
+            total: records.length
+          });
+          return;
+        }
+        await Promise.all(scopedEntries.map(([key]) => fbDelete(`pending/${key}`).catch(() => {
+        })));
         res.json({
           success: true,
           message: `Synced ${records.length} record(s) to ${selectedWeek}.`,
@@ -1947,7 +3252,12 @@ function createApiApp() {
         });
         return;
       }
-      await postToGoogleScript(cfg.scriptUrl, { action: "SYNC_QUEUE", week: selectedWeek });
+      const pingRes = await postToGoogleScript(cfg.scriptUrl, { action: "SYNC_QUEUE", week: selectedWeek });
+      if (!pingRes.ok || pingRes.json?.success === false || pingRes.json?.error) {
+        const errMsg = typeof pingRes.json?.error === "string" && pingRes.json.error || pingRes.error || "Google Apps Script sync trigger failed.";
+        res.status(502).json({ success: false, message: errMsg, syncedCount: 0, errorCount: 1, total: 0 });
+        return;
+      }
       res.json({ success: true, message: `Cloud sync triggered (${selectedWeek}).`, syncedCount: 0, errorCount: 0, total: 0 });
     } catch {
       res.status(500).json({ success: false, message: "Trigger failed.", syncedCount: 0, errorCount: 0, total: 0 });
@@ -2005,18 +3315,32 @@ Verification link: ${testLink}
           });
           return;
         }
+        const failMsg = directRes.error || `Failed to send via ${deliveryStatus.label}.`;
+        await createEmailDeliveryFailureAlert({
+          context: "Test Email Delivery",
+          targetEmail: recipient,
+          provider: deliveryStatus.provider,
+          error: failMsg
+        });
         res.json({
           success: false,
           provider: deliveryStatus.provider,
-          message: directRes.error || `Failed to send via ${deliveryStatus.label}.`
+          message: failMsg
         });
         return;
       }
       if (!cfg.scriptUrl || cfg.scriptUrl === DEFAULT_SCRIPT_URL || cfg.scriptUrl.endsWith("/dev")) {
+        const failMsg = "No email service configured yet. Deploy your Google Apps Script /exec URL in Settings, or use the Copy Link button for pending accounts.";
+        await createEmailDeliveryFailureAlert({
+          context: "Test Email Delivery",
+          targetEmail: recipient,
+          provider: "none",
+          error: failMsg
+        });
         res.json({
           success: false,
           provider: "none",
-          message: "No email service configured yet. Deploy your Google Apps Script /exec URL in Settings, or use the Copy Link button for pending accounts."
+          message: failMsg
         });
         return;
       }
@@ -2028,6 +3352,13 @@ Verification link: ${testLink}
         adminEmail: recipient
       });
       if (!emailRes.ok) {
+        const failMsg = emailRes.error || "Apps Script returned HTML or failed. Check Web App access = Anyone.";
+        await createEmailDeliveryFailureAlert({
+          context: "Test Email Delivery",
+          targetEmail: recipient,
+          provider: "apps_script",
+          error: failMsg
+        });
         res.json({ success: false, message: "Apps Script returned HTML or failed. Check Web App access = Anyone." });
         return;
       }
@@ -2041,12 +3372,25 @@ Verification link: ${testLink}
       }
       const errText = String(emailRes.json?.error || "Email could not be sent.");
       if (errText.includes("script.send_mail") || errText.includes("MailApp")) {
+        const failMsg = "Apps Script lacks email permission (script.send_mail). Please re-authorize Apps Script MailApp in your deployment.";
+        await createEmailDeliveryFailureAlert({
+          context: "Test Email Delivery",
+          targetEmail: recipient,
+          provider: "apps_script",
+          error: failMsg
+        });
         res.json({
           success: false,
-          message: "Apps Script lacks email permission (script.send_mail). Please re-authorize Apps Script MailApp in your deployment."
+          message: failMsg
         });
         return;
       }
+      await createEmailDeliveryFailureAlert({
+        context: "Test Email Delivery",
+        targetEmail: recipient,
+        provider: "apps_script",
+        error: errText
+      });
       res.json({ success: false, message: errText });
     } catch {
       res.json({ success: false, message: "Server error while sending test email." });
@@ -2062,19 +3406,62 @@ Verification link: ${testLink}
     if (userRecord.status === "active") {
       res.json({
         success: true,
+        status: "active",
         activatedAt: userRecord.activatedAt || Date.now(),
         alreadyActive: true
       });
       return;
     }
     const now = Date.now();
-    await fbPatch(`app_users/${userId}`, { status: "active", activatedAt: now });
-    const { adminNotification, userNotification } = await createActivationNotifications(userRecord, "admin");
+    const pin = generateActivationPin();
+    const activationExpiresAt = now + ACTIVATION_PIN_EXPIRY_MS;
+    await fbPatch(`app_users/${userId}`, {
+      status: "approved_pending_pin",
+      activationPin: pin,
+      pinFailedAttempts: 0,
+      approvedAt: userRecord.approvedAt || now,
+      activationSentAt: now,
+      activationExpiresAt
+    });
+    const existingAdminNotifs = await fbGet("admin_notifications").catch(() => null);
+    if (existingAdminNotifs && typeof existingAdminNotifs === "object") {
+      await Promise.all(
+        Object.values(existingAdminNotifs).filter((n) => n && !n.read && n.type === "user_signup" && n.userId === userRecord.id).map((n) => fbPatch(`admin_notifications/${n.id}`, { read: true }).catch(() => {
+        }))
+      );
+    }
+    let emailSent = false;
+    let provider = "none";
+    if (userRecord.email) {
+      const cfg = await getAppConfig();
+      const emailRes = await dispatchApprovalPinEmail({
+        toEmail: userRecord.email,
+        username: userRecord.username,
+        pin,
+        expiresAtText: new Date(activationExpiresAt).toLocaleString(),
+        cfg
+      });
+      emailSent = emailRes.emailSent;
+      provider = emailRes.provider;
+      if (!emailSent) {
+        await createEmailDeliveryFailureAlert({
+          context: "Account Approval PIN Email",
+          targetEmail: userRecord.email,
+          username: userRecord.username,
+          userId: userRecord.id,
+          provider,
+          error: emailRes.error
+        });
+      }
+    }
     res.json({
       success: true,
-      activatedAt: now,
-      adminNotification,
-      userNotification
+      status: "approved_pending_pin",
+      approvedAt: userRecord.approvedAt || now,
+      emailSent,
+      provider,
+      email: userRecord.email || "",
+      pin: emailSent ? void 0 : pin
     });
   });
   app2.delete("/api/admin/users/:id", requireAuth, requireAdmin, async (req, res) => {
@@ -2102,34 +3489,49 @@ Verification link: ${testLink}
   });
   app2.post("/api/admin/users/:id/resend-activation", requireAuth, requireAdmin, async (req, res) => {
     const userId = String(req.params.id || "").trim();
-    const user = await fbGet(`app_users/${userId}`);
-    if (!user) {
-      res.status(404).json({ success: false, error: "User not found." });
+    const userRecord = await fbGet(`app_users/${userId}`);
+    if (!userRecord || !userRecord.id) {
+      res.status(404).json({ sent: false, error: "User not found." });
+      return;
+    }
+    if (userRecord.status === "active") {
+      res.json({ sent: false, error: "Account is already active." });
       return;
     }
     const now = Date.now();
-    const tokenToUse = generateRandomToken();
-    const activationExpiresAt = now + ACTIVATION_EXPIRY_MS;
+    const pin = generateActivationPin();
+    const activationExpiresAt = now + ACTIVATION_PIN_EXPIRY_MS;
     await fbPatch(`app_users/${userId}`, {
-      activationToken: tokenToUse,
+      status: "approved_pending_pin",
+      activationPin: pin,
+      pinFailedAttempts: 0,
+      approvedAt: userRecord.approvedAt || now,
       activationSentAt: now,
       activationExpiresAt
     });
-    const baseAppUrl = sanitizePublicAppUrl(req.body?.publicAppUrl, req);
-    const activationUrl = `${baseAppUrl}?activate=${encodeURIComponent(tokenToUse)}&user=${encodeURIComponent(user.id)}`;
-    if (!user.email) {
-      res.json({ sent: false, activationUrl });
+    if (!userRecord.email) {
+      res.json({ sent: false, pin });
       return;
     }
     const cfg = await getAppConfig();
-    const { emailSent, provider } = await dispatchActivationEmails({
-      toEmail: user.email,
-      username: user.username,
-      activationUrl,
+    const { emailSent, provider, error } = await dispatchApprovalPinEmail({
+      toEmail: userRecord.email,
+      username: userRecord.username,
+      pin,
       expiresAtText: new Date(activationExpiresAt).toLocaleString(),
       cfg
     });
-    res.json({ sent: emailSent, provider, activationUrl });
+    if (!emailSent) {
+      await createEmailDeliveryFailureAlert({
+        context: "Resend Activation PIN Email",
+        targetEmail: userRecord.email,
+        username: userRecord.username,
+        userId: userRecord.id,
+        provider,
+        error
+      });
+    }
+    res.json({ sent: emailSent, provider, email: userRecord.email, pin: emailSent ? void 0 : pin });
   });
   app2.post("/api/admin/sessions/:id/revoke", requireAuth, requireAdmin, async (req, res) => {
     const sessionId = String(req.params.id || "").trim();

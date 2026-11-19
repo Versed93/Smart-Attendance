@@ -76,6 +76,7 @@ interface TeacherViewProps {
   onSelectCourse?: (course: CourseProfile) => void;
   onAddCourse?: (courseName: string, initialStudents?: PreRegisteredStudent[], ownerId?: string, sharedWith?: string[]) => CourseProfile | null;
   onDeleteCourse?: (courseId: string) => Promise<void> | void;
+  onFetchSheetTabs?: (params?: { course?: string }) => Promise<{ success: boolean; sheets?: SheetTabCandidate[]; error?: string }>;
   onCheckSheetTabOwnership?: (sheetTabs: SheetTabCandidate[]) => Promise<SheetTabOwnershipResult[]>;
   onSyncSheetCourses?: (
     sheetTabs: SheetTabCandidate[],
@@ -181,6 +182,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onSelectCourse,
   onAddCourse,
   onDeleteCourse,
+  onFetchSheetTabs,
   onCheckSheetTabOwnership,
   onSyncSheetCourses,
   onAssignCourseOwner,
@@ -464,14 +466,20 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   );
 
   const fetchCourseFromB1 = async (manual = false, mode: 'select-tabs' | 'active-only' = manual ? 'select-tabs' : 'active-only') => {
-      if (!scriptUrl || integrationType !== 'google_sheets') {
+      if (integrationType !== 'google_sheets') {
           const msg = 'Configure Google Sheets Apps Script URL in Settings first.';
           setSheetReadError(msg);
           if (manual) showToast('error', msg);
           return;
       }
-      if (scriptUrl.trim().endsWith('/dev')) {
+      if (isAdmin && scriptUrl.trim().endsWith('/dev')) {
           const msg = 'Apps Script URL uses /dev. Deploy as Web App and paste the /exec URL in Settings.';
+          setSheetReadError(msg);
+          if (manual) showToast('error', msg);
+          return;
+      }
+      if (!onFetchSheetTabs) {
+          const msg = 'Sheet sync service is unavailable. Please refresh the page.';
           setSheetReadError(msg);
           if (manual) showToast('error', msg);
           return;
@@ -479,21 +487,9 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       setIsLoadingSheetCourse(true);
       setSheetReadError(null);
       try {
-          const courseQuery = courseName ? `&course=${encodeURIComponent(courseName)}` : '';
-          const url = `${scriptUrl.trim()}${scriptUrl.includes('?') ? '&' : '?'}action=getCourse${courseQuery}&t=${Date.now()}`;
-          const res = await fetch(url, { method: 'GET', redirect: 'follow' });
-          const rawText = await res.text();
-          if (res.status === 404 || rawText.trim().startsWith('<')) {
-              const msg = res.status === 404
-                  ? 'Apps Script URL returned 404. Paste your deployed /exec URL in Settings.'
-                  : 'Apps Script returned HTML instead of JSON. Set Web App access to "Anyone" and use the /exec URL.';
-              setSheetReadError(msg);
-              if (manual) showToast('error', msg);
-              return;
-          }
-          const data = JSON.parse(rawText);
+          const data = await onFetchSheetTabs({ course: courseName || undefined });
           if (!data || !data.success) {
-              const msg = data?.error ? `Sheet error: ${data.error}` : 'Could not read Course Name from Google Sheet. Re-deploy updated Apps Script.';
+              const msg = data?.error || 'Could not read Course Name from Google Sheet. Re-deploy updated Apps Script.';
               setSheetReadError(msg);
               if (manual) showToast('error', msg);
               return;
@@ -504,11 +500,11 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
           // Automatic background refresh: NEVER import other tabs or change active subject; only refresh current owned course roster.
           if (!manual) {
-              const targetUpper = courseName.trim().toUpperCase();
+              const targetUpper = courseName.replace(/\s+/g, ' ').trim().toUpperCase();
               if (!targetUpper) return;
-              const ownsCurrent = courses.some((c) => c.courseName.trim().toUpperCase() === targetUpper);
+              const ownsCurrent = courses.some((c) => c.courseName.replace(/\s+/g, ' ').trim().toUpperCase() === targetUpper);
               if (!ownsCurrent) return;
-              const matchedSheet = validCourseSheets.find((s) => s.courseName.toUpperCase() === targetUpper);
+              const matchedSheet = validCourseSheets.find((s) => s.courseName.replace(/\s+/g, ' ').trim().toUpperCase() === targetUpper);
               if (matchedSheet && matchedSheet.students.length > 0) {
                   onUpdateKnownStudents(matchedSheet.students);
               }
@@ -519,8 +515,8 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               mode === 'active-only' && !courseName.trim() ? 'select-tabs' : mode;
 
           if (effectiveMode === 'active-only') {
-              const targetUpper = courseName.trim().toUpperCase();
-              const matchedSheet = validCourseSheets.find((s) => s.courseName.toUpperCase() === targetUpper);
+              const targetUpper = courseName.replace(/\s+/g, ' ').trim().toUpperCase();
+              const matchedSheet = validCourseSheets.find((s) => s.courseName.replace(/\s+/g, ' ').trim().toUpperCase() === targetUpper);
               if (!matchedSheet) {
                   showToast('error', `No Google Sheet tab found for "${courseName}". Use "Sync Sheet Tabs" to choose from available tabs.`);
                   return;
@@ -669,57 +665,43 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
       }
   };
 
-  useEffect(() => {
-      if (!scriptUrl || integrationType !== 'google_sheets') return;
-      if (scriptUrl.trim().endsWith('/dev')) {
-          setSheetReadError('Apps Script URL uses /dev. Paste the deployed /exec URL in Settings.');
-          return;
-      }
-      let cancelled = false;
-      const loadInitialCourse = async () => {
-          try {
-              const url = `${scriptUrl.trim()}${scriptUrl.includes('?') ? '&' : '?'}action=getCourse&t=${Date.now()}`;
-              const res = await fetch(url, { method: 'GET', redirect: 'follow' });
-              const rawText = await res.text();
-              if (cancelled) return;
-              if (res.status === 404 || rawText.trim().startsWith('<')) {
-                  setSheetReadError(
-                      res.status === 404
-                          ? 'Apps Script URL returned 404. Paste your deployed /exec URL in Settings.'
-                          : 'Apps Script returned HTML instead of JSON. Ensure Web App access is "Anyone" and use /exec URL.'
-                  );
-                  return;
-              }
-              const data = JSON.parse(rawText);
-              if (cancelled || !data?.success) return;
-              setSheetReadError(null);
-              const targetUpper = courseName.trim().toUpperCase();
-              if (!targetUpper) return;
-              const ownsCurrent = courses.some((c) => c.courseName.trim().toUpperCase() === targetUpper);
-              if (!ownsCurrent) return;
-              const validCourseSheets = parseValidCourseSheets(data);
-              const matchedSheet = validCourseSheets.find((s) => s.courseName.toUpperCase() === targetUpper);
-              if (matchedSheet && matchedSheet.students.length > 0) {
-                  onUpdateKnownStudents(matchedSheet.students);
-              }
-          } catch {
-              if (!cancelled) {
-                  setSheetReadError('Could not connect to Apps Script URL. Check Settings → Apps Script URL.');
-              }
-          }
-      };
-      void loadInitialCourse();
-      return () => { cancelled = true; };
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scriptUrl, integrationType]);
-
   const handleScanResult = (data: string) => {
       setShowScanner(false);
       try {
-        const studentData = JSON.parse(data);
-        addStudent(studentData.name, studentData.studentId, studentData.email, 'P', courseName, studentData.timestamp)
+        const studentData = JSON.parse(data) as {
+          name?: unknown;
+          studentId?: unknown;
+          email?: unknown;
+          timestamp?: unknown;
+        } | null;
+        const cleanName = typeof studentData?.name === 'string' ? studentData.name.trim() : '';
+        const cleanId = typeof studentData?.studentId === 'string' ? studentData.studentId.trim().replace(/\s+/g, '').toUpperCase() : '';
+        const cleanEmail = typeof studentData?.email === 'string' ? studentData.email.trim() : '';
+        const rawTimestamp = typeof studentData?.timestamp === 'number' && Number.isFinite(studentData.timestamp) ? studentData.timestamp : undefined;
+
+        if (!studentData || typeof studentData !== 'object' || !cleanName || !cleanId) {
+          setScanResult({ type: 'error', message: 'Invalid student QR code (missing Name or Student ID).' });
+          setTimeout(() => setScanResult(null), 2500);
+          return;
+        }
+
+        if (knownStudents.length > 0) {
+          const isRegistered = knownStudents.some(
+            (s) => s.id.trim().replace(/\s+/g, '').toUpperCase() === cleanId
+          );
+          if (!isRegistered) {
+            setScanResult({
+              type: 'error',
+              message: `Student ID "${cleanId}" is not registered in this subject roster.`,
+            });
+            setTimeout(() => setScanResult(null), 3000);
+            return;
+          }
+        }
+
+        addStudent(cleanName, cleanId, cleanEmail, 'P', courseName, rawTimestamp)
             .then(result => {
-                if (result.success) setScanResult({ type: 'success', message: `${studentData.name} checked-in! Thank you.` });
+                if (result.success) setScanResult({ type: 'success', message: `${cleanName} checked-in! Thank you.` });
                 else setScanResult({ type: 'duplicate', message: result.message });
             });
       } catch { setScanResult({ type: 'error', message: 'Invalid QR format.' }); }
@@ -1985,41 +1967,81 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
          </div>
        )}
 
-       {unreadUserNotifications.length > 0 && (
-         <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm">
-           <div className="flex items-start gap-3 min-w-0">
-             <span className="mt-1 w-2.5 h-2.5 rounded-full bg-emerald-500 shrink-0 animate-pulse"></span>
-             <div className="min-w-0">
-               <p className="text-xs font-black text-emerald-900 uppercase tracking-wider">
-                 {unreadUserNotifications[0].title}
-                 {unreadUserNotifications.length > 1 ? ` (+${unreadUserNotifications.length - 1} more)` : ''}
-               </p>
-               <p className="text-xs font-semibold text-emerald-800 mt-0.5">
-                 {unreadUserNotifications[0].message}
-               </p>
-               <p className="text-[10px] font-bold text-emerald-700/75 mt-1 tabular-nums">
-                 {new Date(unreadUserNotifications[0].createdAt).toLocaleString()}
-               </p>
+       {unreadUserNotifications.length > 0 && (() => {
+         const topNotif = unreadUserNotifications[0];
+         const isRemoved = topNotif.type === 'co_lecturer_removed';
+         const isCourse = topNotif.type === 'course_assigned' || topNotif.type === 'co_lecturer_added';
+         const boxStyle = isRemoved
+           ? 'bg-amber-50 border-amber-200'
+           : isCourse
+             ? 'bg-indigo-50 border-indigo-200'
+             : 'bg-emerald-50 border-emerald-200';
+         const dotStyle = isRemoved
+           ? 'bg-amber-500'
+           : isCourse
+             ? 'bg-indigo-500'
+             : 'bg-emerald-500';
+         const titleStyle = isRemoved
+           ? 'text-amber-900'
+           : isCourse
+             ? 'text-indigo-900'
+             : 'text-emerald-900';
+         const msgStyle = isRemoved
+           ? 'text-amber-800'
+           : isCourse
+             ? 'text-indigo-800'
+             : 'text-emerald-800';
+         const timeStyle = isRemoved
+           ? 'text-amber-700/75'
+           : isCourse
+             ? 'text-indigo-700/75'
+             : 'text-emerald-700/75';
+         const btnStyle = isRemoved
+           ? 'bg-amber-600 hover:bg-amber-700'
+           : isCourse
+             ? 'bg-indigo-600 hover:bg-indigo-700'
+             : 'bg-emerald-600 hover:bg-emerald-700';
+         const secondaryBtnStyle = isRemoved
+           ? 'text-amber-700 border-amber-200 hover:bg-amber-100'
+           : isCourse
+             ? 'text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+             : 'text-emerald-700 border-emerald-200 hover:bg-emerald-100';
+         return (
+           <div className={`${boxStyle} border rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-sm`}>
+             <div className="flex items-start gap-3 min-w-0">
+               <span className={`mt-1 w-2.5 h-2.5 rounded-full ${dotStyle} shrink-0 animate-pulse`}></span>
+               <div className="min-w-0">
+                 <p className={`text-xs font-black uppercase tracking-wider ${titleStyle}`}>
+                   {topNotif.title}
+                   {unreadUserNotifications.length > 1 ? ` (+${unreadUserNotifications.length - 1} more)` : ''}
+                 </p>
+                 <p className={`text-xs font-semibold mt-0.5 ${msgStyle}`}>
+                   {topNotif.message}
+                 </p>
+                 <p className={`text-[10px] font-bold mt-1 tabular-nums ${timeStyle}`}>
+                   {new Date(topNotif.createdAt).toLocaleString()}
+                 </p>
+               </div>
+             </div>
+             <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+               <button
+                 type="button"
+                 onClick={() => void onMarkUserNotificationRead?.(topNotif.id)}
+                 className={`text-[10px] font-bold uppercase tracking-wider text-white px-3 py-1.5 rounded-xl transition-all ${btnStyle}`}
+               >
+                 Mark Read
+               </button>
+               <button
+                 type="button"
+                 onClick={() => setShowUserNotificationsModal(true)}
+                 className={`text-[10px] font-bold uppercase tracking-wider bg-white border px-3 py-1.5 rounded-xl transition-all ${secondaryBtnStyle}`}
+               >
+                 All Updates
+               </button>
              </div>
            </div>
-           <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
-             <button
-               type="button"
-               onClick={() => void onMarkUserNotificationRead?.(unreadUserNotifications[0].id)}
-               className="text-[10px] font-bold uppercase tracking-wider bg-emerald-600 text-white px-3 py-1.5 rounded-xl hover:bg-emerald-700 transition-all"
-             >
-               Mark Read
-             </button>
-             <button
-               type="button"
-               onClick={() => setShowUserNotificationsModal(true)}
-               className="text-[10px] font-bold uppercase tracking-wider bg-white text-emerald-700 border border-emerald-200 px-3 py-1.5 rounded-xl hover:bg-emerald-100 transition-all"
-             >
-               All Updates
-             </button>
-           </div>
-         </div>
-       )}
+         );
+       })()}
 
        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
           <button
@@ -2127,26 +2149,41 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                 const topNotif = unreadNotifications[0];
                 const isActivation = topNotif.type === 'account_activated';
                 const isDeleteReq = topNotif.type === 'delete_request';
+                const isEmailFail = topNotif.type === 'email_delivery_failure';
+                const isOwnership = topNotif.type === 'course_ownership_changed';
+                const isSyncSkip = topNotif.type === 'sheet_sync_skipped';
                 const bannerStyle = isActivation
                   ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                  : isDeleteReq
+                  : isDeleteReq || isEmailFail
                     ? 'bg-red-50 border-red-200 text-red-900'
-                    : 'bg-amber-50 border-amber-200 text-amber-900';
+                    : isOwnership
+                      ? 'bg-indigo-50 border-indigo-200 text-indigo-900'
+                      : 'bg-amber-50 border-amber-200 text-amber-900';
                 const dotColor = isActivation
                   ? 'bg-emerald-500'
-                  : isDeleteReq
+                  : isDeleteReq || isEmailFail
                     ? 'bg-red-500'
-                    : 'bg-amber-500';
+                    : isOwnership
+                      ? 'bg-indigo-500'
+                      : 'bg-amber-500';
                 const btnStyle = isActivation
                   ? 'bg-emerald-600 hover:bg-emerald-700'
-                  : isDeleteReq
+                  : isDeleteReq || isEmailFail
                     ? 'bg-red-600 hover:bg-red-700'
-                    : 'bg-amber-600 hover:bg-amber-700';
+                    : isOwnership
+                      ? 'bg-indigo-600 hover:bg-indigo-700'
+                      : 'bg-amber-600 hover:bg-amber-700';
                 const prefix = isActivation
                   ? 'Account Activated:'
                   : isDeleteReq
                     ? 'Deletion Request:'
-                    : 'New Signup:';
+                    : isEmailFail
+                      ? 'Email Delivery Failure:'
+                      : isOwnership
+                        ? 'Ownership Change:'
+                        : isSyncSkip
+                          ? 'Sheet Sync Skip:'
+                          : 'New Signup:';
                 return (
                   <div className={`border rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 ${bannerStyle}`}>
                     <div className="flex items-center gap-2 text-xs font-bold min-w-0">
@@ -2475,33 +2512,63 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                       {adminNotifications.map((notif) => {
                         const isActivation = notif.type === 'account_activated';
                         const isDeleteReq = notif.type === 'delete_request';
+                        const isEmailFail = notif.type === 'email_delivery_failure';
+                        const isOwnership = notif.type === 'course_ownership_changed';
+                        const isSyncSkip = notif.type === 'sheet_sync_skipped';
                         const typeLabel = isActivation
                           ? 'Account Activated'
                           : isDeleteReq
                             ? 'Deletion Request'
-                            : 'New Signup';
+                            : isEmailFail
+                              ? 'Email Failure'
+                              : isOwnership
+                                ? 'Ownership Change'
+                                : isSyncSkip
+                                  ? 'Sheet Sync Skip'
+                                  : 'New Signup';
                         const badgeClass = isActivation
                           ? 'bg-emerald-100 text-emerald-700'
-                          : isDeleteReq
+                          : isDeleteReq || isEmailFail
                             ? 'bg-red-100 text-red-700'
-                            : 'bg-amber-100 text-amber-700';
+                            : isOwnership
+                              ? 'bg-indigo-100 text-indigo-700'
+                              : 'bg-amber-100 text-amber-700';
                         const rowUnreadClass = isActivation
                           ? 'bg-emerald-50/60 border-emerald-200'
-                          : isDeleteReq
+                          : isDeleteReq || isEmailFail
                             ? 'bg-red-50/60 border-red-200'
-                            : 'bg-amber-50/60 border-amber-200';
+                            : isOwnership
+                              ? 'bg-indigo-50/60 border-indigo-200'
+                              : 'bg-amber-50/60 border-amber-200';
                         const dotClass = isActivation
                           ? 'bg-emerald-500'
-                          : isDeleteReq
+                          : isDeleteReq || isEmailFail
                             ? 'bg-red-500'
-                            : 'bg-amber-500';
-                        const deliveryLabel = notif.emailSent
-                          ? isActivation
-                            ? 'Confirmation Email Sent'
-                            : 'Notification Email Sent'
-                          : notif.type === 'user_signup'
-                            ? 'Awaiting Admin Approval'
-                            : 'In-System Alert';
+                            : isOwnership
+                              ? 'bg-indigo-500'
+                              : 'bg-amber-500';
+                        const deliveryLabel = isEmailFail
+                          ? 'Delivery Failed'
+                          : isOwnership
+                            ? 'Course / Sheet Ownership'
+                            : isSyncSkip
+                              ? 'Google Sheet Sync Skipped'
+                              : notif.emailSent
+                                ? isActivation
+                                  ? 'Confirmation Email Sent'
+                                  : 'Notification Email Sent'
+                                : notif.type === 'user_signup'
+                                  ? 'Awaiting Admin Approval'
+                                  : 'In-System Alert';
+                        const deliveryClass = isEmailFail
+                          ? 'text-red-700'
+                          : isOwnership
+                            ? 'text-indigo-700'
+                            : isSyncSkip
+                              ? 'text-amber-700'
+                              : notif.emailSent || isActivation
+                                ? 'text-emerald-700'
+                                : 'text-amber-700';
                         return (
                           <div
                             key={notif.id}
@@ -2518,9 +2585,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                 <span className="font-bold text-xs text-gray-900">{notif.message}</span>
                               </div>
                               <div className="flex items-center gap-2 mt-1 flex-wrap text-[10px] font-bold">
-                                <span
-                                  className={notif.emailSent || isActivation ? 'text-emerald-700' : 'text-amber-700'}
-                                >
+                                <span className={deliveryClass}>
                                   {deliveryLabel}
                                 </span>
                                 <span className="text-gray-300" aria-hidden="true">·</span>
@@ -4961,36 +5026,60 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
               </div>
             ) : (
               <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1 custom-scrollbar">
-                {userNotifications.map((notif) => (
-                  <div
-                    key={notif.id}
-                    className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
-                      notif.read ? 'bg-gray-50 border-gray-100' : 'bg-emerald-50/70 border-emerald-200'
-                    }`}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {!notif.read && <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>}
-                        <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded-md">
-                          {notif.title}
-                        </span>
+                {userNotifications.map((notif) => {
+                  const isRemoved = notif.type === 'co_lecturer_removed';
+                  const isCourse = notif.type === 'course_assigned' || notif.type === 'co_lecturer_added';
+                  const unreadBox = isRemoved
+                    ? 'bg-amber-50/70 border-amber-200'
+                    : isCourse
+                      ? 'bg-indigo-50/70 border-indigo-200'
+                      : 'bg-emerald-50/70 border-emerald-200';
+                  const dotClass = isRemoved
+                    ? 'bg-amber-500'
+                    : isCourse
+                      ? 'bg-indigo-500'
+                      : 'bg-emerald-500';
+                  const badgeClass = isRemoved
+                    ? 'text-amber-700 bg-amber-100'
+                    : isCourse
+                      ? 'text-indigo-700 bg-indigo-100'
+                      : 'text-emerald-700 bg-emerald-100';
+                  const readBtnClass = isRemoved
+                    ? 'text-amber-700 border-amber-200 hover:bg-amber-50'
+                    : isCourse
+                      ? 'text-indigo-700 border-indigo-200 hover:bg-indigo-50'
+                      : 'text-emerald-700 border-emerald-200 hover:bg-emerald-50';
+                  return (
+                    <div
+                      key={notif.id}
+                      className={`p-3.5 rounded-2xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
+                        notif.read ? 'bg-gray-50 border-gray-100' : unreadBox
+                      }`}
+                    >
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {!notif.read && <span className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`}></span>}
+                          <span className={`text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-md ${badgeClass}`}>
+                            {notif.title}
+                          </span>
+                        </div>
+                        <p className="text-xs font-semibold text-gray-800 mt-1.5">{notif.message}</p>
+                        <p className="text-[10px] font-bold text-gray-400 mt-1 tabular-nums">
+                          {new Date(notif.createdAt).toLocaleString()}
+                        </p>
                       </div>
-                      <p className="text-xs font-semibold text-gray-800 mt-1.5">{notif.message}</p>
-                      <p className="text-[10px] font-bold text-gray-400 mt-1 tabular-nums">
-                        {new Date(notif.createdAt).toLocaleString()}
-                      </p>
+                      {!notif.read && (
+                        <button
+                          type="button"
+                          onClick={() => void onMarkUserNotificationRead?.(notif.id)}
+                          className={`self-start sm:self-auto shrink-0 text-[10px] font-bold bg-white border px-2.5 py-1.5 rounded-xl uppercase ${readBtnClass}`}
+                        >
+                          Mark Read
+                        </button>
+                      )}
                     </div>
-                    {!notif.read && (
-                      <button
-                        type="button"
-                        onClick={() => void onMarkUserNotificationRead?.(notif.id)}
-                        className="self-start sm:self-auto shrink-0 text-[10px] font-bold text-emerald-700 bg-white border border-emerald-200 hover:bg-emerald-50 px-2.5 py-1.5 rounded-xl uppercase"
-                      >
-                        Mark Read
-                      </button>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
 
