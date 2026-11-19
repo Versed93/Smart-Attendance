@@ -3,6 +3,10 @@ import React, { useState, useEffect } from 'react';
 interface CloudIntegrationSettingsProps {
   scriptUrl: string;
   onScriptUrlChange: (url: string) => void;
+  scriptSecret?: string;
+  scriptSecretConfigured?: boolean;
+  scriptSecretFromEnv?: boolean;
+  onScriptSecretChange?: (secret: string) => Promise<boolean> | boolean | void;
   onSendTestRecord: () => Promise<{ success: boolean; message: string }>;
   onCheckPendingRecords: () => Promise<{ success: boolean; message: string; count: number }>;
   onClearPendingQueue: () => Promise<{ success: boolean; message: string }>;
@@ -17,6 +21,10 @@ interface CloudIntegrationSettingsProps {
 export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> = ({ 
   scriptUrl, 
   onScriptUrlChange, 
+  scriptSecret = '',
+  scriptSecretConfigured = false,
+  scriptSecretFromEnv = false,
+  onScriptSecretChange,
   onSendTestRecord, 
   onCheckPendingRecords, 
   onClearPendingQueue,
@@ -43,9 +51,71 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
 
   const [status, setStatus] = useState('');
   const [copied, setCopied] = useState(false);
+  const [secretInput, setSecretInput] = useState(scriptSecret);
+  const [showSecret, setShowSecret] = useState(false);
+  const [secretStatus, setSecretStatus] = useState('');
 
-  const appScriptCode = `function doGet(e) {
+  useEffect(() => {
+    setSecretInput(scriptSecret);
+  }, [scriptSecret]);
+
+  const activeSecretForScript = (secretInput || scriptSecret || '').trim();
+  const escapedSecretForScript = activeSecretForScript.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+
+  const handleGenerateSecret = async () => {
+    const bytes = new Uint8Array(24);
+    window.crypto.getRandomValues(bytes);
+    const nextKey = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    setSecretInput(nextKey);
+    setShowSecret(true);
+    if (onScriptSecretChange) {
+      const ok = await onScriptSecretChange(nextKey);
+      setSecretStatus(
+        ok !== false
+          ? 'Generated & saved! Copy Script Code below and deploy a New Version in Google Apps Script.'
+          : 'Failed to save key.'
+      );
+    }
+  };
+
+  const handleSaveSecret = async () => {
+    if (!onScriptSecretChange) return;
+    const ok = await onScriptSecretChange(secretInput.trim());
+    setSecretStatus(
+      ok !== false
+        ? secretInput.trim()
+          ? 'Secret key saved! Make sure SCRIPT_SECRET in Apps Script matches this key.'
+          : 'Secret key cleared.'
+        : 'Failed to save key.'
+    );
+  };
+
+  const appScriptCode = `var SCRIPT_SECRET = "${escapedSecretForScript}"; // Recommended: Set here OR in Apps Script Project Settings -> Script Properties as SCRIPT_SECRET
+
+function getExpectedSecret_() {
+  var prop = "";
   try {
+    prop = PropertiesService.getScriptProperties().getProperty("SCRIPT_SECRET") || "";
+  } catch (errProp) {}
+  return String(prop || SCRIPT_SECRET || "").trim();
+}
+
+function isAuthorizedRequest_(e) {
+  var expected = getExpectedSecret_();
+  if (!expected) return true;
+  var provided = (e && e.parameter && e.parameter.key) ? String(e.parameter.key).trim() : "";
+  return provided !== "" && provided === expected;
+}
+
+function doGet(e) {
+  try {
+    if (!isAuthorizedRequest_(e)) {
+      return ContentService.createTextOutput(JSON.stringify({
+        success: false,
+        error: "Unauthorized: Invalid Apps Script secret key."
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
     var doc = SpreadsheetApp.getActiveSpreadsheet();
     var sheets = doc.getSheets();
     var requestedCourse = (e && e.parameter && e.parameter.course) ? String(e.parameter.course).trim().toUpperCase() : "";
@@ -129,6 +199,12 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
 }
 
 function doPost(e) {
+  if (!isAuthorizedRequest_(e)) {
+    return ContentService.createTextOutput(JSON.stringify({
+      success: false,
+      error: "Unauthorized: Invalid Apps Script secret key."
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
   if (!e || !e.postData || !e.postData.contents) {
     return ContentService.createTextOutput(JSON.stringify({success: false, error: "No data"})).setMimeType(ContentService.MimeType.JSON);
   }
@@ -439,6 +515,74 @@ function authorizeMail() {
                     <p className="mt-2 text-[10px] font-bold text-red-600 uppercase">
                       Warning: URL ends in /dev. Use the deployed /exec URL with "Who has access: Anyone" so it works after deployment.
                     </p>
+                  )}
+              </div>
+
+              <div className="p-4 bg-indigo-50/70 rounded-2xl border border-indigo-100 space-y-3">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                      <div>
+                          <h5 className="text-[10px] font-bold text-indigo-900 uppercase tracking-widest">
+                              Apps Script Secret Key (Security Lock)
+                          </h5>
+                          <p className="text-[10px] text-indigo-700 mt-0.5 leading-relaxed">
+                              Google Apps Script must use <strong>Who has access: Anyone</strong> so this server can connect without a Google login. Protect that public endpoint with a secret key so only this server can read or write your sheet.
+                          </p>
+                      </div>
+                      <span className={`text-[9px] font-bold px-2.5 py-1 rounded-full uppercase tracking-wider ${
+                          scriptSecretConfigured || Boolean(activeSecretForScript)
+                              ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                              : 'bg-amber-100 text-amber-800 border border-amber-200'
+                      }`}>
+                          {scriptSecretFromEnv
+                              ? 'Protected (Env Var)'
+                              : scriptSecretConfigured
+                                  ? 'Protected'
+                                  : 'Unprotected'}
+                      </span>
+                  </div>
+
+                  {scriptSecretFromEnv ? (
+                      <p className="text-[10px] font-semibold text-emerald-800 bg-white/80 border border-emerald-200 rounded-xl px-3 py-2">
+                          Secured via server environment variable <code className="font-mono">APPS_SCRIPT_SECRET</code>. Set the same value in Google Apps Script &rarr; Project Settings &rarr; Script Properties as <code className="font-mono">SCRIPT_SECRET</code>.
+                      </p>
+                  ) : (
+                      <div className="space-y-2">
+                          <div className="flex flex-col sm:flex-row gap-2">
+                              <div className="relative flex-1">
+                                  <input
+                                      type={showSecret ? 'text' : 'password'}
+                                      value={secretInput}
+                                      onChange={(e) => setSecretInput(e.target.value)}
+                                      placeholder="Paste or generate a secret key..."
+                                      className="w-full border border-indigo-200 bg-white rounded-xl pl-3.5 pr-14 py-2.5 text-xs font-mono font-bold text-gray-800 outline-none focus:border-indigo-500"
+                                  />
+                                  <button
+                                      type="button"
+                                      onClick={() => setShowSecret((prev) => !prev)}
+                                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-indigo-600 hover:text-indigo-800 uppercase"
+                                  >
+                                      {showSecret ? 'Hide' : 'Show'}
+                                  </button>
+                              </div>
+                              <button
+                                  type="button"
+                                  onClick={() => void handleGenerateSecret()}
+                                  className="px-3.5 py-2.5 rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 text-[10px] font-bold uppercase tracking-wider transition-all shrink-0"
+                              >
+                                  Generate Key
+                              </button>
+                              <button
+                                  type="button"
+                                  onClick={() => void handleSaveSecret()}
+                                  className="px-3.5 py-2.5 rounded-xl bg-white text-indigo-700 border border-indigo-200 hover:bg-indigo-50 text-[10px] font-bold uppercase tracking-wider transition-all shrink-0"
+                              >
+                                  Save Key
+                              </button>
+                          </div>
+                          {secretStatus && (
+                              <p className="text-[10px] font-bold text-indigo-800">{secretStatus}</p>
+                          )}
+                      </div>
                   )}
               </div>
           </div>

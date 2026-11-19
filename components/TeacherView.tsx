@@ -60,6 +60,10 @@ interface TeacherViewProps {
   onNewSession: () => void;
   scriptUrl: string;
   onScriptUrlChange: (url: string) => void;
+  scriptSecret?: string;
+  scriptSecretConfigured?: boolean;
+  scriptSecretFromEnv?: boolean;
+  onScriptSecretChange?: (secret: string) => Promise<boolean> | boolean | void;
   onOpenKiosk: () => void;
   onManualAdd: (name: string, id: string, email: string, status: string, courseName: string, reason?: string) => Promise<{success: boolean, message: string}>;
   addStudent: (name: string, studentId: string, email: string, status: string, courseName: string, overrideTimestamp?: number, reason?: string) => Promise<{ success: boolean, message: string }>;
@@ -176,6 +180,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   onNewSession,
   scriptUrl,
   onScriptUrlChange,
+  scriptSecret = '',
+  scriptSecretConfigured = false,
+  scriptSecretFromEnv = false,
+  onScriptSecretChange,
   onOpenKiosk, 
   onManualAdd,
   addStudent,
@@ -3635,6 +3643,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                         <CloudIntegrationSettings 
                             scriptUrl={scriptUrl} 
                             onScriptUrlChange={onScriptUrlChange} 
+                            scriptSecret={scriptSecret}
+                            scriptSecretConfigured={scriptSecretConfigured}
+                            scriptSecretFromEnv={scriptSecretFromEnv}
+                            onScriptSecretChange={onScriptSecretChange}
                             onSendTestRecord={() => onSendTestRecord(courseName)} 
                             onCheckPendingRecords={onCheckPendingRecords} 
                             onClearPendingQueue={onClearPendingQueue}

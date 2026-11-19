@@ -227,6 +227,9 @@ const MainApp: React.FC = () => {
   const [scriptUrl, setScriptUrl] = useState<string>(() => {
     return localStorage.getItem(SCRIPT_URL_KEY) || '';
   });
+  const [scriptSecret, setScriptSecret] = useState<string>('');
+  const [scriptSecretConfigured, setScriptSecretConfigured] = useState<boolean>(false);
+  const [scriptSecretFromEnv, setScriptSecretFromEnv] = useState<boolean>(false);
   const [isSheetScriptConfigured, setIsSheetScriptConfigured] = useState<boolean>(() => {
     const saved = localStorage.getItem(SCRIPT_URL_KEY) || '';
     return saved.startsWith('https://script.google.com/') && !saved.endsWith('/dev');
@@ -450,11 +453,20 @@ const MainApp: React.FC = () => {
         if (typeof data.config.scriptConfigured === 'boolean') {
           setIsSheetScriptConfigured(data.config.scriptConfigured);
         }
+        if (typeof data.config.scriptSecretConfigured === 'boolean') {
+          setScriptSecretConfigured(data.config.scriptSecretConfigured);
+        }
         if (effectiveRole === 'admin') {
           if (typeof data.config.scriptUrl === 'string' && data.config.scriptUrl.startsWith('https://script.google.com/')) {
             setScriptUrl(data.config.scriptUrl);
           } else if (typeof data.config.scriptUrl === 'string' && !data.config.scriptUrl) {
             setScriptUrl('');
+          }
+          if (typeof data.config.scriptSecret === 'string') {
+            setScriptSecret(data.config.scriptSecret);
+          }
+          if (typeof data.config.scriptSecretFromEnv === 'boolean') {
+            setScriptSecretFromEnv(data.config.scriptSecretFromEnv);
           }
           if (typeof data.config.databaseUrl === 'string') {
             setFirebaseDatabaseUrl(data.config.databaseUrl);
@@ -464,6 +476,8 @@ const MainApp: React.FC = () => {
           }
         } else {
           setScriptUrl('');
+          setScriptSecret('');
+          setScriptSecretFromEnv(false);
           setFirebaseDatabaseUrl('');
           setAdminEmail('');
           localStorage.removeItem(SCRIPT_URL_KEY);
@@ -625,6 +639,21 @@ const MainApp: React.FC = () => {
       setIsSheetScriptConfigured(false);
     }
   }, [apiFetch]);
+
+  const handleScriptSecretChange = useCallback(async (nextSecret: string): Promise<boolean> => {
+    const trimmed = nextSecret.trim();
+    setScriptSecret(trimmed);
+    setScriptSecretConfigured(Boolean(trimmed) || scriptSecretFromEnv);
+    try {
+      const res = await apiFetch('/api/admin/config', {
+        method: 'PATCH',
+        body: JSON.stringify({ scriptSecret: trimmed }),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }, [apiFetch, scriptSecretFromEnv]);
 
   const saveUserCoursePref = useCallback((nextCourse: string, nextWeek: string) => {
     if (!authTokenRef.current) return;
@@ -2116,6 +2145,10 @@ const MainApp: React.FC = () => {
               onNewSession={handleNewSession}
               scriptUrl={scriptUrl}
               onScriptUrlChange={handleScriptUrlChange}
+              scriptSecret={scriptSecret}
+              scriptSecretConfigured={scriptSecretConfigured}
+              scriptSecretFromEnv={scriptSecretFromEnv}
+              onScriptSecretChange={handleScriptSecretChange}
               onOpenKiosk={handleEnterKiosk}
               onManualAdd={(name, id, email, status, courseName, reason) => addStudent(name, id, email, status, courseName, undefined, reason)}
               addStudent={addStudent}

@@ -864,6 +864,8 @@ async function ensureAdminUserExists(): Promise<StoredAppUser> {
 
 async function getAppConfig(): Promise<{
   scriptUrl: string;
+  scriptSecret: string;
+  scriptSecretFromEnv: boolean;
   integrationType: IntegrationType;
   adminEmail: string;
   knownStudentsV2: PreRegisteredStudent[];
@@ -873,6 +875,9 @@ async function getAppConfig(): Promise<{
     typeof cfg.script_url === 'string' && cfg.script_url.trim().startsWith('https://script.google.com/')
       ? cfg.script_url.trim()
       : DEFAULT_SCRIPT_URL;
+  const envSecret = (process.env.APPS_SCRIPT_SECRET || process.env.GOOGLE_SCRIPT_SECRET || '').trim();
+  const dbSecret = typeof cfg.script_secret === 'string' ? cfg.script_secret.trim() : '';
+  const scriptSecret = envSecret || dbSecret;
   const integrationType: IntegrationType =
     cfg.integration_type === 'google_sheets' ||
     cfg.integration_type === 'airtable' ||
@@ -883,7 +888,32 @@ async function getAppConfig(): Promise<{
   const knownStudentsV2 = Array.isArray(cfg.known_students_v2)
     ? (cfg.known_students_v2 as PreRegisteredStudent[])
     : PRE_REGISTERED_STUDENTS;
-  return { scriptUrl, integrationType, adminEmail, knownStudentsV2 };
+  return {
+    scriptUrl,
+    scriptSecret,
+    scriptSecretFromEnv: Boolean(envSecret),
+    integrationType,
+    adminEmail,
+    knownStudentsV2,
+  };
+}
+
+function buildGoogleScriptUrl(
+  scriptUrl: string,
+  queryParams: Record<string, string | undefined>,
+  scriptSecret?: string
+): string {
+  const url = new URL(scriptUrl.trim());
+  for (const [k, v] of Object.entries(queryParams)) {
+    if (v !== undefined && v !== '') {
+      url.searchParams.set(k, v);
+    }
+  }
+  const cleanSecret = (scriptSecret || '').trim();
+  if (cleanSecret) {
+    url.searchParams.set('key', cleanSecret);
+  }
+  return url.toString();
 }
 
 function formatCloudPayload(r: Student, fallbackWeek = 'W1') {
@@ -933,7 +963,8 @@ async function upsertAttendanceHistory(incoming: Student[]): Promise<void> {
 
 async function postToGoogleScript(
   scriptUrl: string,
-  bodyPayload: unknown
+  bodyPayload: unknown,
+  scriptSecret?: string
 ): Promise<{ ok: boolean; json?: Record<string, unknown>; error?: string }> {
   const cleanUrl = scriptUrl.trim();
   if (!cleanUrl || cleanUrl === DEFAULT_SCRIPT_URL || !cleanUrl.startsWith('https://script.google.com/') || cleanUrl.endsWith('/dev')) {
@@ -943,7 +974,18 @@ async function postToGoogleScript(
     };
   }
   try {
-    const res = await fetch(cleanUrl, {
+    let effectiveSecret = (scriptSecret ?? '').trim();
+    if (scriptSecret === undefined) {
+      const envSecret = (process.env.APPS_SCRIPT_SECRET || process.env.GOOGLE_SCRIPT_SECRET || '').trim();
+      if (envSecret) {
+        effectiveSecret = envSecret;
+      } else {
+        const dbSecret = await fbGet<string>('app_config/script_secret').catch(() => null);
+        effectiveSecret = typeof dbSecret === 'string' ? dbSecret.trim() : '';
+      }
+    }
+    const targetUrl = buildGoogleScriptUrl(cleanUrl, {}, effectiveSecret);
+    const res = await fetch(targetUrl, {
       method: 'POST',
       redirect: 'follow',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
@@ -958,6 +1000,9 @@ async function postToGoogleScript(
     }
     try {
       const parsed = JSON.parse(text) as Record<string, unknown>;
+      if (parsed && parsed.success === false && typeof parsed.error === 'string') {
+        return { ok: false, json: parsed, error: parsed.error };
+      }
       return { ok: true, json: parsed };
     } catch {
       return { ok: true };
@@ -1564,9 +1609,15 @@ async function resolveRosterForCourse(params: {
     !cfg.scriptUrl.endsWith('/dev')
   ) {
     try {
-      const sheetUrl = `${cfg.scriptUrl}${cfg.scriptUrl.includes('?') ? '&' : '?'}action=getCourse${
-        cleanCourse ? `&course=${encodeURIComponent(cleanCourse)}` : ''
-      }&t=${Date.now()}`;
+      const sheetUrl = buildGoogleScriptUrl(
+        cfg.scriptUrl,
+        {
+          action: 'getCourse',
+          course: cleanCourse || undefined,
+          t: String(Date.now()),
+        },
+        cfg.scriptSecret
+      );
       const res = await fetch(sheetUrl, { method: 'GET', redirect: 'follow' });
       const rawText = await res.text();
       if (res.ok && !rawText.trim().startsWith('<')) {
@@ -2560,6 +2611,9 @@ export function createApiApp(): express.Express {
               cfg.scriptUrl !== DEFAULT_SCRIPT_URL &&
               !cfg.scriptUrl.trim().endsWith('/dev')
           ),
+          scriptSecret: auth.role === 'admin' && !cfg.scriptSecretFromEnv ? cfg.scriptSecret : '',
+          scriptSecretConfigured: Boolean(cfg.scriptSecret),
+          scriptSecretFromEnv: auth.role === 'admin' ? cfg.scriptSecretFromEnv : false,
           databaseUrl: auth.role === 'admin' ? getFirebaseDbUrl() : '',
           integrationType: cfg.integrationType,
           adminEmail: auth.role === 'admin' ? cfg.adminEmail : '',
@@ -2599,9 +2653,15 @@ export function createApiApp(): express.Express {
         return;
       }
 
-      const sheetUrl = `${cfg.scriptUrl}${cfg.scriptUrl.includes('?') ? '&' : '?'}action=getCourse${
-        courseQuery ? `&course=${encodeURIComponent(courseQuery)}` : ''
-      }&t=${Date.now()}`;
+      const sheetUrl = buildGoogleScriptUrl(
+        cfg.scriptUrl,
+        {
+          action: 'getCourse',
+          course: courseQuery || undefined,
+          t: String(Date.now()),
+        },
+        cfg.scriptSecret
+      );
       const sheetRes = await fetch(sheetUrl, { method: 'GET', redirect: 'follow' });
       const rawText = await sheetRes.text();
       if (sheetRes.status === 404 || rawText.trim().startsWith('<')) {
@@ -4234,6 +4294,15 @@ export function createApiApp(): express.Express {
           await fbPut('app_config/script_url', trimmed);
           updates.scriptUrl = trimmed;
         }
+      }
+      if (typeof req.body?.scriptSecret === 'string') {
+        const trimmedSecret = req.body.scriptSecret.trim();
+        if (trimmedSecret) {
+          await fbPut('app_config/script_secret', trimmedSecret);
+        } else {
+          await fbDelete('app_config/script_secret');
+        }
+        updates.scriptSecretConfigured = Boolean(trimmedSecret);
       }
       if (
         req.body?.integrationType === 'google_sheets' ||
