@@ -20,19 +20,41 @@ import { PRE_REGISTERED_STUDENTS, type PreRegisteredStudent } from './studentLis
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const ACTIVATION_PIN_EXPIRY_MS = 24 * 60 * 60 * 1000;
 
+const loadLocalEnvIfPresent = () => {
+  const loader = (process as unknown as { loadEnvFile?: (path?: string) => void }).loadEnvFile;
+  if (typeof loader !== 'function') return;
+  for (const envPath of ['.env.local', '.env']) {
+    try {
+      loader(envPath);
+    } catch {
+      // File not present or unreadable
+    }
+  }
+};
+loadLocalEnvIfPresent();
+
 const normalizeEnvString = (raw: string | undefined): string =>
   (raw || '').trim().replace(/^["']|["']$/g, '').trim();
 
 const getFirebaseDbUrl = (): string =>
   (
-    normalizeEnvString(process.env.FIREBASE_DATABASE_URL) ||
-    'https://gen-lang-client-0701481146-default-rtdb.asia-southeast1.firebasedatabase.app'
+    normalizeEnvString(
+      process.env.FIREBASE_DATABASE_URL ||
+        process.env.FIREBASE_DB_URL ||
+        process.env.VITE_FIREBASE_DATABASE_URL
+    ) || 'https://gen-lang-client-0701481146-default-rtdb.asia-southeast1.firebasedatabase.app'
   )
     .replace(/\.json$/i, '')
     .replace(/\/+$/, '');
 
 const getFirebaseDbSecret = (): string =>
-  normalizeEnvString(process.env.FIREBASE_DATABASE_SECRET || process.env.FIREBASE_DB_SECRET);
+  normalizeEnvString(
+    process.env.FIREBASE_DATABASE_SECRET ||
+      process.env.FIREBASE_DB_SECRET ||
+      process.env.DATABASE_SECRET ||
+      process.env.FIREBASE_SECRET ||
+      process.env.VITE_FIREBASE_DATABASE_SECRET
+  );
 
 let resolvedAuthSecret: string | null = null;
 let authSecretPromise: Promise<string> | null = null;

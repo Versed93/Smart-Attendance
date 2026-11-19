@@ -10,9 +10,24 @@ var PRE_REGISTERED_STUDENTS = [];
 // serverApp.ts
 var SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1e3;
 var ACTIVATION_PIN_EXPIRY_MS = 24 * 60 * 60 * 1e3;
+var loadLocalEnvIfPresent = () => {
+  const loader = process.loadEnvFile;
+  if (typeof loader !== "function") return;
+  for (const envPath of [".env.local", ".env"]) {
+    try {
+      loader(envPath);
+    } catch {
+    }
+  }
+};
+loadLocalEnvIfPresent();
 var normalizeEnvString = (raw) => (raw || "").trim().replace(/^["']|["']$/g, "").trim();
-var getFirebaseDbUrl = () => (normalizeEnvString(process.env.FIREBASE_DATABASE_URL) || "https://gen-lang-client-0701481146-default-rtdb.asia-southeast1.firebasedatabase.app").replace(/\.json$/i, "").replace(/\/+$/, "");
-var getFirebaseDbSecret = () => normalizeEnvString(process.env.FIREBASE_DATABASE_SECRET || process.env.FIREBASE_DB_SECRET);
+var getFirebaseDbUrl = () => (normalizeEnvString(
+  process.env.FIREBASE_DATABASE_URL || process.env.FIREBASE_DB_URL || process.env.VITE_FIREBASE_DATABASE_URL
+) || "https://gen-lang-client-0701481146-default-rtdb.asia-southeast1.firebasedatabase.app").replace(/\.json$/i, "").replace(/\/+$/, "");
+var getFirebaseDbSecret = () => normalizeEnvString(
+  process.env.FIREBASE_DATABASE_SECRET || process.env.FIREBASE_DB_SECRET || process.env.DATABASE_SECRET || process.env.FIREBASE_SECRET || process.env.VITE_FIREBASE_DATABASE_SECRET
+);
 var resolvedAuthSecret = null;
 var authSecretPromise = null;
 var DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || "adminscm";
