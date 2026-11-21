@@ -418,6 +418,17 @@ export const StandaloneClassroomView: React.FC = () => {
       const fallbackAge = Date.now() - (fallbackToken.qrTokenIat || 0);
       if (syncState.qrToken && tokenAge < 7000) return;
       if (fallbackToken.qrToken && fallbackAge < 5000) return;
+      if (new URLSearchParams(window.location.search).get('demo') === '1') {
+        const now = Date.now();
+        setFallbackToken({
+          qrToken: `demo_qr_${now}`,
+          qrTokenIat: now,
+          qrTokenExpiresAt: now + 15000,
+          pinRequired: Boolean(syncState.pinRequired),
+          classroomPin: syncState.classroomPin || '4829',
+        });
+        return;
+      }
       const authToken = localStorage.getItem('attendance-auth-token-v1') || '';
       if (!authToken) return;
       try {

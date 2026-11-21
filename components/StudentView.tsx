@@ -42,6 +42,7 @@ interface StudentViewProps {
   geoConstraints?: { lat: number; lng: number; radius: number };
   bypassRestrictions?: boolean;
   isOfflineScan?: boolean;
+  isDemoMode?: boolean;
   knownStudents: PreRegisteredStudent[];
   onSwitchToTeacher?: () => void;
   onSessionScanned?: (session: { courseName?: string; courseId?: string; week?: string; checkinToken?: string }) => void;
@@ -83,6 +84,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   geoConstraints: initialGeoConstraints, 
   bypassRestrictions = false, 
   isOfflineScan: initialIsOfflineScan = false,
+  isDemoMode = false,
   knownStudents,
   onSwitchToTeacher,
   onSessionScanned,
@@ -108,6 +110,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const [geoConstraints, setGeoConstraints] = useState(initialGeoConstraints);
   const [isOfflineScan, setIsOfflineScan] = useState(initialIsOfflineScan);
   const [history, setHistory] = useState<ScanHistory[]>(() => {
+    if (isDemoMode) return [];
     try {
       const saved = localStorage.getItem(STUDENT_HISTORY_KEY);
       const parsed = saved ? JSON.parse(saved) : [];
@@ -333,7 +336,9 @@ export const StudentView: React.FC<StudentViewProps> = ({
     const addHistory = (entry: Omit<ScanHistory, 'id'>) => {
       const newHistory = [{ ...entry, id: Date.now().toString() }, ...history];
       setHistory(newHistory);
-      localStorage.setItem(STUDENT_HISTORY_KEY, JSON.stringify(newHistory));
+      if (!isDemoMode) {
+        localStorage.setItem(STUDENT_HISTORY_KEY, JSON.stringify(newHistory));
+      }
     };
 
     if (isOfflineScan) {
@@ -566,7 +571,9 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const handleDeleteHistory = (id: string) => {
     const newHistory = history.filter(h => h.id !== id);
     setHistory(newHistory);
-    localStorage.setItem(STUDENT_HISTORY_KEY, JSON.stringify(newHistory));
+    if (!isDemoMode) {
+      localStorage.setItem(STUDENT_HISTORY_KEY, JSON.stringify(newHistory));
+    }
   };
 
   if (status === 'landing') {

@@ -85,6 +85,9 @@ export function buildStandaloneClassroomUrl(payload: ClassroomSyncPayload): stri
   if (payload.courseName) url.searchParams.set('c', payload.courseName);
   if (payload.courseId) url.searchParams.set('cid', payload.courseId);
   if (payload.isOfflineMode) url.searchParams.set('offline', 'true');
+  if (typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('demo') === '1') {
+    url.searchParams.set('demo', '1');
+  }
   if (payload.isGeoEnabled && payload.teacherLocation) {
     url.searchParams.set('lat', payload.teacherLocation.lat.toFixed(6));
     url.searchParams.set('lng', payload.teacherLocation.lng.toFixed(6));

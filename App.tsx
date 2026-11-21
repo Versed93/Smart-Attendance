@@ -16,6 +16,7 @@ import type {
   UserNotification,
 } from './types';
 import type { PreRegisteredStudent } from './studentList';
+import { createDemoSandboxSnapshot, type DemoSandboxSnapshot } from './utils/demoSandbox';
 
 type View = 'teacher' | 'student';
 type IntegrationType = 'google_sheets' | 'airtable' | 'firebase';
@@ -98,17 +99,30 @@ const MainApp: React.FC = () => {
   const weekParam = initialUrlParams.get('w');
   const isOfflineScan = initialUrlParams.get('offline') === 'true';
   const testEmailParam = initialUrlParams.get('test_email');
-
   const latParam = initialUrlParams.get('lat');
   const lngParam = initialUrlParams.get('lng');
   const radParam = initialUrlParams.get('rad');
+  const [isDemoMode, setIsDemoMode] = useState(() => initialUrlParams.get('demo') === '1' && !token);
+  const [initialDemoSnapshot] = useState<DemoSandboxSnapshot | null>(() =>
+    initialUrlParams.get('demo') === '1' && !token ? createDemoSandboxSnapshot() : null
+  );
+  const [demoNotice, setDemoNotice] = useState<string>('');
+  const demoPinRef = useRef<string>('4829');
+  const demoSheetTabsRef = useRef<SheetTabCandidate[]>(initialDemoSnapshot?.sheetTabs || []);
+  const demoLiveByCourseRef = useRef<Record<string, Student[]>>(
+    initialDemoSnapshot
+      ? { [normCourseKey(initialDemoSnapshot.activeCourse)]: initialDemoSnapshot.attendanceList }
+      : {}
+  );
 
   const [authToken, setAuthToken] = useState<string>(() => {
+    if (initialDemoSnapshot) return 'demo-sandbox-token';
     localStorage.removeItem(LEGACY_REGISTERED_USERS_KEY);
     return localStorage.getItem(AUTH_TOKEN_KEY) || '';
   });
 
   const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    if (initialDemoSnapshot) return true;
     localStorage.removeItem(VIEW_PREF_KEY);
     localStorage.removeItem(KIOSK_PREF_KEY);
     if (testEmailParam === 'verified') return false;
@@ -119,24 +133,34 @@ const MainApp: React.FC = () => {
 
   // Always direct root URL opens to Main Access ('teacher' -> LoginView when unauthenticated),
   // reserving 'student' view strictly for QR scan links (?t=...) or active Kiosk sessions.
-  const initialView: View = testEmailParam === 'verified'
+  const initialView: View = initialDemoSnapshot
     ? 'teacher'
-    : token
-      ? 'student'
-      : 'teacher';
+    : testEmailParam === 'verified'
+      ? 'teacher'
+      : token
+        ? 'student'
+        : 'teacher';
 
   const [view, setView] = useState<View>(initialView);
   const [isKioskMode, setIsKioskMode] = useState(false);
-  const [activeCourse, setActiveCourse] = useState(() => localStorage.getItem('attendance-course-name') || '');
+  const [activeCourse, setActiveCourse] = useState(() =>
+    initialDemoSnapshot ? initialDemoSnapshot.activeCourse : (localStorage.getItem('attendance-course-name') || '')
+  );
   const [selectedWeek, setSelectedWeek] = useState<string>(() => {
+    if (initialDemoSnapshot) return initialDemoSnapshot.selectedWeek;
     localStorage.removeItem('attendance-active-week');
     return localStorage.getItem(ACTIVE_WEEK_KEY) || 'W1';
   });
   const [integrationType, setIntegrationType] = useState<IntegrationType>(() => {
+    if (initialDemoSnapshot) return 'google_sheets';
     return (localStorage.getItem('attendance-integration-type') as IntegrationType) || 'google_sheets';
   });
-  const [adminEmail, setAdminEmail] = useState<string>(() => localStorage.getItem(ADMIN_EMAIL_KEY) || '');
-  const [firebaseDatabaseUrl, setFirebaseDatabaseUrl] = useState<string>('');
+  const [adminEmail, setAdminEmail] = useState<string>(() =>
+    initialDemoSnapshot ? 'demo-admin@university.edu' : (localStorage.getItem(ADMIN_EMAIL_KEY) || '')
+  );
+  const [firebaseDatabaseUrl, setFirebaseDatabaseUrl] = useState<string>(() =>
+    initialDemoSnapshot ? 'Isolated Demo Sandbox (No Live DB Writes)' : ''
+  );
   const [scannedStudentSession, setScannedStudentSession] = useState<{
     courseName?: string;
     courseId?: string;
@@ -144,10 +168,18 @@ const MainApp: React.FC = () => {
     checkinToken?: string;
   }>({});
 
-  const [registeredUsers, setRegisteredUsers] = useState<AppUser[]>([]);
-  const [adminSessions, setAdminSessions] = useState<AdminSessionActivity[]>([]);
-  const [adminNotifications, setAdminNotifications] = useState<AdminNotification[]>([]);
-  const [userNotifications, setUserNotifications] = useState<UserNotification[]>([]);
+  const [registeredUsers, setRegisteredUsers] = useState<AppUser[]>(() =>
+    initialDemoSnapshot ? initialDemoSnapshot.users : []
+  );
+  const [adminSessions, setAdminSessions] = useState<AdminSessionActivity[]>(() =>
+    initialDemoSnapshot ? initialDemoSnapshot.sessions : []
+  );
+  const [adminNotifications, setAdminNotifications] = useState<AdminNotification[]>(() =>
+    initialDemoSnapshot ? initialDemoSnapshot.adminNotifications : []
+  );
+  const [userNotifications, setUserNotifications] = useState<UserNotification[]>(() =>
+    initialDemoSnapshot ? initialDemoSnapshot.userNotifications : []
+  );
   const [activationNotice, setActivationNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(() =>
     testEmailParam === 'verified'
       ? {
@@ -157,24 +189,30 @@ const MainApp: React.FC = () => {
       : null
   );
 
-  const [currentAdminName, setCurrentAdminName] = useState(() => {
-    return localStorage.getItem(CURRENT_ADMIN_NAME_KEY) || '';
-  });
-  const [currentUserId, setCurrentUserId] = useState(() => {
-    return localStorage.getItem(CURRENT_USER_ID_KEY) || '';
-  });
+  const [currentAdminName, setCurrentAdminName] = useState(() =>
+    initialDemoSnapshot ? 'admin' : (localStorage.getItem(CURRENT_ADMIN_NAME_KEY) || '')
+  );
+  const [currentUserId, setCurrentUserId] = useState(() =>
+    initialDemoSnapshot ? 'admin' : (localStorage.getItem(CURRENT_USER_ID_KEY) || '')
+  );
   const [currentUserRole, setCurrentUserRole] = useState<'admin' | 'lecturer'>(() => {
+    if (initialDemoSnapshot) return 'admin';
     const savedRole = localStorage.getItem(CURRENT_USER_ROLE_KEY);
     if (savedRole === 'admin' || savedRole === 'lecturer') return savedRole;
     return localStorage.getItem(CURRENT_ADMIN_NAME_KEY)?.toLowerCase() === 'admin' ? 'admin' : 'lecturer';
   });
-  const [activeSessionId, setActiveSessionId] = useState(() => {
-    return localStorage.getItem(ACTIVE_SESSION_ID_KEY) || '';
-  });
+  const [activeSessionId, setActiveSessionId] = useState(() =>
+    initialDemoSnapshot ? 'demo_sess_admin' : (localStorage.getItem(ACTIVE_SESSION_ID_KEY) || '')
+  );
 
-  const [attendanceList, setAttendanceList] = useState<Student[]>([]);
-  const [coLecturerOptions, setCoLecturerOptions] = useState<CollaboratorOption[]>([]);
+  const [attendanceList, setAttendanceList] = useState<Student[]>(() =>
+    initialDemoSnapshot ? initialDemoSnapshot.attendanceList : []
+  );
+  const [coLecturerOptions, setCoLecturerOptions] = useState<CollaboratorOption[]>(() =>
+    initialDemoSnapshot ? initialDemoSnapshot.coLecturerOptions : []
+  );
   const [teacherHistory, setTeacherHistory] = useState<Student[]>(() => {
+    if (initialDemoSnapshot) return initialDemoSnapshot.teacherHistory;
     const saved = localStorage.getItem(TEACHER_HISTORY_KEY);
     if (saved) {
       try {
@@ -186,6 +224,7 @@ const MainApp: React.FC = () => {
   });
 
   const [knownStudents, setKnownStudents] = useState<PreRegisteredStudent[]>(() => {
+    if (initialDemoSnapshot) return initialDemoSnapshot.knownStudents;
     localStorage.removeItem(LEGACY_KNOWN_STUDENTS_KEY);
     const saved = localStorage.getItem(KNOWN_STUDENTS_KEY);
     if (saved !== null) {
@@ -202,6 +241,7 @@ const MainApp: React.FC = () => {
   });
 
   const [courses, setCourses] = useState<CourseProfile[]>(() => {
+    if (initialDemoSnapshot) return initialDemoSnapshot.courses;
     const saved = localStorage.getItem(COURSES_KEY);
     if (saved) {
       try {
@@ -224,20 +264,23 @@ const MainApp: React.FC = () => {
     return [];
   });
 
-  const [scriptUrl, setScriptUrl] = useState<string>(() => {
-    return localStorage.getItem(SCRIPT_URL_KEY) || '';
-  });
+  const [scriptUrl, setScriptUrl] = useState<string>(() =>
+    initialDemoSnapshot
+      ? 'https://script.google.com/macros/s/DEMO_SANDBOX_MODE/exec'
+      : (localStorage.getItem(SCRIPT_URL_KEY) || '')
+  );
   const [scriptSecret, setScriptSecret] = useState<string>('');
-  const [scriptSecretConfigured, setScriptSecretConfigured] = useState<boolean>(false);
+  const [scriptSecretConfigured, setScriptSecretConfigured] = useState<boolean>(() => Boolean(initialDemoSnapshot));
   const [scriptSecretFromEnv, setScriptSecretFromEnv] = useState<boolean>(false);
   const [isSheetScriptConfigured, setIsSheetScriptConfigured] = useState<boolean>(() => {
+    if (initialDemoSnapshot) return true;
     const saved = localStorage.getItem(SCRIPT_URL_KEY) || '';
     return saved.startsWith('https://script.google.com/') && !saved.endsWith('/dev');
   });
 
   const courseEditedAtRef = useRef<number>(0);
   const courseDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hasInitializedUserPrefRef = useRef<boolean>(false);
+  const hasInitializedUserPrefRef = useRef<boolean>(Boolean(initialDemoSnapshot));
   const coursesRef = useRef<CourseProfile[]>(courses);
   const activeCourseRef = useRef<string>(activeCourse);
   const authTokenRef = useRef<string>(authToken);
@@ -262,60 +305,73 @@ const MainApp: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    if (isDemoMode) return;
     if (authToken) localStorage.setItem(AUTH_TOKEN_KEY, authToken);
     else localStorage.removeItem(AUTH_TOKEN_KEY);
-  }, [authToken]);
+  }, [authToken, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     if (currentAdminName) localStorage.setItem(CURRENT_ADMIN_NAME_KEY, currentAdminName);
     else localStorage.removeItem(CURRENT_ADMIN_NAME_KEY);
-  }, [currentAdminName]);
+  }, [currentAdminName, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     if (currentUserId) localStorage.setItem(CURRENT_USER_ID_KEY, currentUserId);
     else localStorage.removeItem(CURRENT_USER_ID_KEY);
-  }, [currentUserId]);
+  }, [currentUserId, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     localStorage.setItem(CURRENT_USER_ROLE_KEY, currentUserRole);
-  }, [currentUserRole]);
+  }, [currentUserRole, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     if (activeSessionId) localStorage.setItem(ACTIVE_SESSION_ID_KEY, activeSessionId);
     else localStorage.removeItem(ACTIVE_SESSION_ID_KEY);
-  }, [activeSessionId]);
+  }, [activeSessionId, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     localStorage.setItem('attendance-course-name', activeCourse);
-  }, [activeCourse]);
+  }, [activeCourse, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     localStorage.setItem(ACTIVE_WEEK_KEY, selectedWeek);
-  }, [selectedWeek]);
+  }, [selectedWeek, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     localStorage.setItem('attendance-integration-type', integrationType);
-  }, [integrationType]);
+  }, [integrationType, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     localStorage.setItem(ADMIN_EMAIL_KEY, adminEmail);
-  }, [adminEmail]);
+  }, [adminEmail, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     localStorage.setItem(TEACHER_HISTORY_KEY, JSON.stringify(teacherHistory));
-  }, [teacherHistory]);
+  }, [teacherHistory, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     localStorage.setItem(KNOWN_STUDENTS_KEY, JSON.stringify(knownStudents));
-  }, [knownStudents]);
+  }, [knownStudents, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     localStorage.setItem(COURSES_KEY, JSON.stringify(courses));
-  }, [courses]);
+  }, [courses, isDemoMode]);
 
   useEffect(() => {
+    if (isDemoMode) return;
     localStorage.setItem(SCRIPT_URL_KEY, scriptUrl);
-  }, [scriptUrl]);
+  }, [scriptUrl, isDemoMode]);
 
   const clearClientSession = useCallback((noticeMessage?: string) => {
     setIsAuthenticated(false);
@@ -365,7 +421,45 @@ const MainApp: React.FC = () => {
     setScannedStudentSession({});
   }, []);
 
+  const handleDemoReset = useCallback(() => {
+    const snap = createDemoSandboxSnapshot();
+    demoSheetTabsRef.current = snap.sheetTabs;
+    demoPinRef.current = '4829';
+    demoLiveByCourseRef.current = {
+      [normCourseKey(snap.activeCourse)]: snap.attendanceList,
+    };
+    setCourses(snap.courses);
+    setActiveCourse(snap.activeCourse);
+    setSelectedWeek(snap.selectedWeek);
+    setKnownStudents(snap.knownStudents);
+    setAttendanceList(snap.attendanceList);
+    setTeacherHistory(snap.teacherHistory);
+    setRegisteredUsers(snap.users);
+    setCoLecturerOptions(snap.coLecturerOptions);
+    setAdminSessions(snap.sessions);
+    setAdminNotifications(snap.adminNotifications);
+    setUserNotifications(snap.userNotifications);
+    setIntegrationType('google_sheets');
+    setScriptUrl('https://script.google.com/macros/s/DEMO_SANDBOX_MODE/exec');
+    setIsSheetScriptConfigured(true);
+    setScriptSecret('');
+    setScriptSecretConfigured(true);
+    setAdminEmail('demo-admin@university.edu');
+    setView('teacher');
+    setIsKioskMode(false);
+    setDemoNotice('Demo sandbox reset to initial sample data.');
+  }, []);
+
+  const handleDemoExit = useCallback(() => {
+    setIsDemoMode(false);
+    window.location.href = window.location.pathname;
+  }, []);
+
   const handleLogout = useCallback(() => {
+    if (isDemoMode) {
+      handleDemoExit();
+      return;
+    }
     const activeToken = authTokenRef.current || localStorage.getItem(AUTH_TOKEN_KEY);
     if (activeToken) {
       void fetch('/api/auth/logout', {
@@ -374,10 +468,16 @@ const MainApp: React.FC = () => {
       }).catch(() => { /* ignore */ });
     }
     clearClientSession();
-  }, [clearClientSession]);
+  }, [clearClientSession, handleDemoExit, isDemoMode]);
 
   const apiFetch = useCallback(
     async (url: string, options: RequestInit = {}): Promise<Response> => {
+      if (isDemoMode) {
+        return new Response(JSON.stringify({ success: true }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
       const activeToken = authTokenRef.current || localStorage.getItem(AUTH_TOKEN_KEY) || '';
       const headers = new Headers(options.headers || {});
       if (activeToken) {
@@ -397,11 +497,12 @@ const MainApp: React.FC = () => {
       }
       return res;
     },
-    [clearClientSession]
+    [clearClientSession, isDemoMode]
   );
 
   // Load public non-secret configuration on boot
   useEffect(() => {
+    if (isDemoMode) return;
     let cancelled = false;
     const loadPublicCfg = async () => {
       try {
@@ -420,9 +521,10 @@ const MainApp: React.FC = () => {
     };
     void loadPublicCfg();
     return () => { cancelled = true; };
-  }, []);
+  }, [isDemoMode]);
 
   const syncAllCloudState = useCallback(async () => {
+    if (isDemoMode) return;
     const activeToken = authTokenRef.current || localStorage.getItem(AUTH_TOKEN_KEY);
     if (!isAuthenticated || !activeToken) return;
     try {
@@ -568,7 +670,7 @@ const MainApp: React.FC = () => {
     } catch {
       // Ignore transient network errors
     }
-  }, [isAuthenticated, apiFetch]);
+  }, [isDemoMode, isAuthenticated, apiFetch]);
 
   // Clean up test email verification query parameter (?test_email=verified)
   useEffect(() => {
@@ -579,7 +681,7 @@ const MainApp: React.FC = () => {
 
   // Initial sync + cross-device polling when authenticated
   useEffect(() => {
-    if (!isAuthenticated || !authToken) return;
+    if (isDemoMode || !isAuthenticated || !authToken) return;
     const initialTimer = setTimeout(() => {
       void syncAllCloudState();
     }, 0);
@@ -605,11 +707,11 @@ const MainApp: React.FC = () => {
       window.removeEventListener('online', handleVisibilityOrFocus);
       document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
     };
-  }, [syncAllCloudState, isAuthenticated, authToken, view]);
+  }, [syncAllCloudState, isAuthenticated, authToken, view, isDemoMode]);
 
   // Activity Heartbeat for currently logged-in user
   useEffect(() => {
-    if (!isAuthenticated || !authToken) return;
+    if (isDemoMode || !isAuthenticated || !authToken) return;
 
     const sendHeartbeat = () => {
       void apiFetch('/api/auth/heartbeat', {
@@ -624,7 +726,7 @@ const MainApp: React.FC = () => {
     return () => {
       clearInterval(hbInterval);
     };
-  }, [isAuthenticated, authToken, view, apiFetch]);
+  }, [isAuthenticated, authToken, view, apiFetch, isDemoMode]);
 
   const handleScriptUrlChange = useCallback((nextUrl: string) => {
     const trimmed = nextUrl.trim();
@@ -681,12 +783,16 @@ const MainApp: React.FC = () => {
       if (matched) {
         setKnownStudents(matched.students || []);
       }
+      if (isDemoMode) {
+        setAttendanceList(demoLiveByCourseRef.current[normCourseKey(trimmed)] || []);
+      }
     }
+    if (isDemoMode) return;
     if (courseDebounceRef.current) clearTimeout(courseDebounceRef.current);
     courseDebounceRef.current = setTimeout(() => {
       saveUserCoursePref(courseName, selectedWeek);
     }, 450);
-  }, [saveUserCoursePref, selectedWeek]);
+  }, [isDemoMode, saveUserCoursePref, selectedWeek]);
 
   const handleSelectCourse = useCallback((course: CourseProfile) => {
     courseEditedAtRef.current = Date.now();
@@ -695,9 +801,11 @@ const MainApp: React.FC = () => {
     setActiveCourse(course.courseName);
     setSelectedWeek(nextWeek);
     setKnownStudents(course.students || []);
-    setAttendanceList([]);
-    saveUserCoursePref(course.courseName, nextWeek);
-  }, [saveUserCoursePref]);
+    setAttendanceList(isDemoMode ? (demoLiveByCourseRef.current[normCourseKey(course.courseName)] || []) : []);
+    if (!isDemoMode) {
+      saveUserCoursePref(course.courseName, nextWeek);
+    }
+  }, [isDemoMode, saveUserCoursePref]);
 
   const handleAddCourse = useCallback((rawCourseName: string, initialStudents: PreRegisteredStudent[] = [], ownerId?: string, sharedWith: string[] = []): CourseProfile | null => {
     const cleanName = rawCourseName.trim();
@@ -750,6 +858,10 @@ const MainApp: React.FC = () => {
     setSelectedWeek('W1');
     setKnownStudents(optimisticCourse.students);
     setAttendanceList([]);
+    if (isDemoMode) {
+      demoLiveByCourseRef.current[normCourseKey(optimisticCourse.courseName)] = [];
+      return optimisticCourse;
+    }
 
     void apiFetch('/api/courses', {
       method: 'POST',
@@ -782,14 +894,20 @@ const MainApp: React.FC = () => {
       .catch(() => { /* ignore */ });
 
     return optimisticCourse;
-  }, [apiFetch, coLecturerOptions, currentAdminName, currentUserId, handleSelectCourse, persistCourseToServer, registeredUsers, toCourseKey]);
+  }, [apiFetch, coLecturerOptions, currentAdminName, currentUserId, handleSelectCourse, isDemoMode, persistCourseToServer, registeredUsers, toCourseKey]);
 
   const handleDeleteCourse = useCallback(async (courseId: string) => {
     courseEditedAtRef.current = Date.now();
     const remaining = coursesRef.current.filter(c => c.id !== courseId);
     const deletedCourse = coursesRef.current.find(c => c.id === courseId);
     setCourses(remaining);
-    await apiFetch(`/api/courses/${encodeURIComponent(courseId)}`, { method: 'DELETE' }).catch(() => { /* ignore */ });
+    if (isDemoMode) {
+      if (deletedCourse) {
+        delete demoLiveByCourseRef.current[normCourseKey(deletedCourse.courseName)];
+      }
+    } else {
+      await apiFetch(`/api/courses/${encodeURIComponent(courseId)}`, { method: 'DELETE' }).catch(() => { /* ignore */ });
+    }
 
     if (deletedCourse && activeCourseRef.current.trim().toUpperCase() === deletedCourse.courseName.trim().toUpperCase()) {
       const next = remaining[0];
@@ -802,7 +920,7 @@ const MainApp: React.FC = () => {
         saveUserCoursePref('', selectedWeek);
       }
     }
-  }, [apiFetch, handleSelectCourse, saveUserCoursePref, selectedWeek]);
+  }, [apiFetch, handleSelectCourse, isDemoMode, saveUserCoursePref, selectedWeek]);
 
   const resolveCourseId = useCallback((courseName: string, explicitId?: string): string => {
     if (explicitId && explicitId.trim()) return explicitId.trim();
@@ -817,6 +935,16 @@ const MainApp: React.FC = () => {
     updatedCourses?: CourseProfile[];
     error?: string;
   }> => {
+    if (isDemoMode) {
+      const sheets = demoSheetTabsRef.current.filter(
+        t => !params?.course || normCourseKey(t.courseName) === normCourseKey(params.course)
+      );
+      return {
+        success: true,
+        sheets,
+        updatedCourses: [],
+      };
+    }
     try {
       const qs = params?.course ? `?course=${encodeURIComponent(params.course)}` : '';
       const res = await apiFetch(`/api/courses/sheet-tabs${qs}`, { cache: 'no-store' });
@@ -859,12 +987,13 @@ const MainApp: React.FC = () => {
     } catch {
       return { success: false, error: 'Network error reading Google Sheet tabs.' };
     }
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   // Automatic background Google Sheet roster sync so student additions/removals update synced subjects automatically
   const hasCourses = courses.length > 0;
   useEffect(() => {
     if (
+      isDemoMode ||
       !isAuthenticated ||
       !authToken ||
       view !== 'teacher' ||
@@ -919,12 +1048,29 @@ const MainApp: React.FC = () => {
       window.removeEventListener('online', handleReturnToTab);
       document.removeEventListener('visibilitychange', handleReturnToTab);
     };
-  }, [isAuthenticated, authToken, view, integrationType, isSheetScriptConfigured, hasCourses, handleFetchSheetTabs]);
+  }, [isDemoMode, isAuthenticated, authToken, view, integrationType, isSheetScriptConfigured, hasCourses, handleFetchSheetTabs]);
 
   const handleCheckSheetTabOwnership = useCallback(async (
     sheetTabs: SheetTabCandidate[]
   ): Promise<SheetTabOwnershipResult[]> => {
     if (!Array.isArray(sheetTabs) || sheetTabs.length === 0) return [];
+    if (isDemoMode) {
+      return sheetTabs.map((tab) => {
+        const existing = coursesRef.current.find(c => normCourseKey(c.courseName) === normCourseKey(tab.courseName));
+        if (!existing) {
+          return { courseName: tab.courseName, status: 'unclaimed' };
+        }
+        const isMine = existing.ownerId === currentUserId || (existing.sharedWith || []).includes(currentUserId);
+        return {
+          courseName: tab.courseName,
+          status: isMine ? 'mine' : 'other',
+          alreadySynced: true,
+          ownerId: existing.ownerId,
+          ownerLabel: existing.createdBy || existing.ownerId,
+          sharedWith: existing.sharedWith || [],
+        };
+      });
+    }
     try {
       const res = await apiFetch('/api/courses/check-tab-ownership', {
         method: 'POST',
@@ -942,7 +1088,7 @@ const MainApp: React.FC = () => {
     } catch {
       return [];
     }
-  }, [apiFetch]);
+  }, [apiFetch, currentUserId, isDemoMode]);
 
   const handleSyncSheetCourses = useCallback(async (
     sheetTabs: SheetTabCandidate[],
@@ -952,6 +1098,47 @@ const MainApp: React.FC = () => {
       return { success: true, courses: [], skippedCourses: [] };
     }
     courseEditedAtRef.current = Date.now();
+    if (isDemoMode) {
+      const now = Date.now();
+      const updatedList: CourseProfile[] = [];
+      const nextCourses = [...coursesRef.current];
+      for (const tab of sheetTabs) {
+        const key = normCourseKey(tab.courseName);
+        const existingIdx = nextCourses.findIndex(c => normCourseKey(c.courseName) === key);
+        if (existingIdx >= 0) {
+          const updated: CourseProfile = {
+            ...nextCourses[existingIdx],
+            students: tab.students || [],
+            updatedAt: now,
+          };
+          nextCourses[existingIdx] = updated;
+          updatedList.push(updated);
+        } else {
+          const created: CourseProfile = {
+            id: `DEMO_${toCourseKey(tab.courseName)}`,
+            courseName: tab.courseName,
+            sheetName: tab.sheetName || tab.courseName,
+            selectedWeek: 'W5',
+            students: tab.students || [],
+            ownerId: currentUserId || 'admin',
+            createdBy: currentAdminName || 'admin',
+            sharedWith: [],
+            createdAt: now,
+            updatedAt: now,
+          };
+          nextCourses.push(created);
+          updatedList.push(created);
+        }
+      }
+      setCourses(nextCourses);
+      const activeKey = normCourseKey(activeCourseRef.current);
+      const matchedActive = updatedList.find(c => normCourseKey(c.courseName) === activeKey);
+      if (matchedActive) {
+        setKnownStudents(matchedActive.students || []);
+      }
+      setDemoNotice(`Synced ${updatedList.length} subject${updatedList.length === 1 ? '' : 's'} in Demo Sandbox.`);
+      return { success: true, courses: updatedList, skippedCourses: [] };
+    }
     try {
       const res = await apiFetch('/api/courses/sync-tabs', {
         method: 'POST',
@@ -1002,13 +1189,29 @@ const MainApp: React.FC = () => {
     } catch {
       return { success: false, courses: [], skippedCourses: [] };
     }
-  }, [apiFetch, syncAllCloudState]);
+  }, [apiFetch, currentAdminName, currentUserId, isDemoMode, syncAllCloudState, toCourseKey]);
 
   const handleAssignCourseOwner = useCallback(async (
     courseId: string,
     ownerId: string
   ): Promise<{ success: boolean; course?: CourseProfile; error?: string }> => {
     courseEditedAtRef.current = Date.now();
+    if (isDemoMode) {
+      const ownerObj = registeredUsers.find(u => u.id === ownerId) || coLecturerOptions.find(u => u.id === ownerId);
+      let updatedCourse: CourseProfile | undefined;
+      setCourses(prev => prev.map(c => {
+        if (c.id !== courseId) return c;
+        updatedCourse = {
+          ...c,
+          ownerId,
+          createdBy: ownerObj?.username || ownerId,
+          sharedWith: (c.sharedWith || []).filter(id => id !== ownerId),
+          updatedAt: Date.now(),
+        };
+        return updatedCourse;
+      }));
+      return { success: true, course: updatedCourse };
+    }
     try {
       const res = await apiFetch(`/api/courses/${encodeURIComponent(courseId)}/owner`, {
         method: 'PATCH',
@@ -1028,13 +1231,26 @@ const MainApp: React.FC = () => {
     } catch {
       return { success: false, error: 'Network error while updating subject owner.' };
     }
-  }, [apiFetch, syncAllCloudState]);
+  }, [apiFetch, coLecturerOptions, isDemoMode, registeredUsers, syncAllCloudState]);
 
   const handleUpdateCourseCoLecturers = useCallback(async (
     courseId: string,
     sharedWith: string[]
   ): Promise<{ success: boolean; course?: CourseProfile; error?: string }> => {
     courseEditedAtRef.current = Date.now();
+    if (isDemoMode) {
+      let updatedCourse: CourseProfile | undefined;
+      setCourses(prev => prev.map(c => {
+        if (c.id !== courseId) return c;
+        updatedCourse = {
+          ...c,
+          sharedWith: sharedWith.filter(id => id && id !== c.ownerId),
+          updatedAt: Date.now(),
+        };
+        return updatedCourse;
+      }));
+      return { success: true, course: updatedCourse };
+    }
     try {
       const res = await apiFetch(`/api/courses/${encodeURIComponent(courseId)}/co-lecturers`, {
         method: 'PATCH',
@@ -1054,7 +1270,7 @@ const MainApp: React.FC = () => {
     } catch {
       return { success: false, error: 'Network error while updating co-lecturers.' };
     }
-  }, [apiFetch, syncAllCloudState]);
+  }, [apiFetch, isDemoMode, syncAllCloudState]);
 
   const handleWeekChange = useCallback((week: string) => {
     courseEditedAtRef.current = Date.now();
@@ -1143,6 +1359,7 @@ const MainApp: React.FC = () => {
 
   // Load course roster when viewing Student QR check-in or switching active course
   useEffect(() => {
+    if (isDemoMode) return;
     let cancelled = false;
     const loadRoster = async () => {
       const courseFilter = effectiveStudentCourse;
@@ -1181,7 +1398,7 @@ const MainApp: React.FC = () => {
     };
     void loadRoster();
     return () => { cancelled = true; };
-  }, [isAuthenticated, effectiveStudentCourse, effectiveStudentCourseId, scannedStudentSession.checkinToken, apiFetch, resolveCourseId]);
+  }, [isDemoMode, isAuthenticated, effectiveStudentCourse, effectiveStudentCourseId, scannedStudentSession.checkinToken, apiFetch, resolveCourseId]);
 
   const formatCloudPayload = useCallback((r: Student) => {
     const targetWeek = r.week || selectedWeek || 'W1';
@@ -1228,12 +1445,13 @@ const MainApp: React.FC = () => {
   }, [formatCloudPayload, integrationType]);
 
   const checkAndClearForNewDay = useCallback(() => {
+    if (isDemoMode) return;
     const today = new Date().toISOString().slice(0, 10);
     const lastScanDate = localStorage.getItem(LAST_SCAN_DATE_KEY);
     if (lastScanDate && lastScanDate !== today) {
       setAttendanceList([]);
     }
-  }, []);
+  }, [isDemoMode]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -1243,7 +1461,7 @@ const MainApp: React.FC = () => {
   }, [checkAndClearForNewDay]);
 
   const fetchFirebaseLiveAttendance = useCallback(async () => {
-    if (view !== 'teacher' || !isAuthenticated || !authTokenRef.current) return;
+    if (isDemoMode || view !== 'teacher' || !isAuthenticated || !authTokenRef.current) return;
     const cid = resolveCourseId(activeCourse || '');
     if (!activeCourse.trim() && !cid && currentUserRole !== 'admin') {
       setAttendanceList([]);
@@ -1271,10 +1489,10 @@ const MainApp: React.FC = () => {
     } catch {
       console.warn('Polling failed');
     }
-  }, [view, isAuthenticated, activeCourse, currentUserRole, apiFetch, resolveCourseId]);
+  }, [isDemoMode, view, isAuthenticated, activeCourse, currentUserRole, apiFetch, resolveCourseId]);
 
   useEffect(() => {
-    if (view === 'teacher' && isAuthenticated) {
+    if (!isDemoMode && view === 'teacher' && isAuthenticated) {
       const timer = setTimeout(() => {
         void fetchFirebaseLiveAttendance();
       }, 0);
@@ -1286,9 +1504,15 @@ const MainApp: React.FC = () => {
         clearInterval(interval);
       };
     }
-  }, [fetchFirebaseLiveAttendance, view, isAuthenticated]);
+  }, [fetchFirebaseLiveAttendance, view, isAuthenticated, isDemoMode]);
 
   const sendTestAdminEmail = useCallback(async (targetEmail?: string): Promise<{ success: boolean; message: string }> => {
+    if (isDemoMode) {
+      return {
+        success: true,
+        message: `Demo Sandbox: Simulated test email previewed for ${targetEmail || adminEmail || 'demo-admin@university.edu'} (no real email sent).`,
+      };
+    }
     try {
       const res = await apiFetch('/api/admin/test-email', {
         method: 'POST',
@@ -1299,7 +1523,7 @@ const MainApp: React.FC = () => {
     } catch {
       return { success: false, message: 'Network error reaching server.' };
     }
-  }, [apiFetch]);
+  }, [adminEmail, apiFetch, isDemoMode]);
 
   useEffect(() => {
     if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
@@ -1496,6 +1720,12 @@ const MainApp: React.FC = () => {
     usernameOrEmail: string;
     reason: string;
   }): Promise<{ success: boolean; message: string }> => {
+    if (isDemoMode) {
+      return {
+        success: true,
+        message: 'Demo Sandbox: Simulated account deletion request logged in demo state.',
+      };
+    }
     try {
       const res = await apiFetch('/api/auth/delete-request', {
         method: 'POST',
@@ -1523,8 +1753,9 @@ const MainApp: React.FC = () => {
     const targetUser = registeredUsers.find(u => u.id === userId);
     if (!targetUser || targetUser.role === 'admin' || targetUser.username.toLowerCase() === 'admin') return;
     setRegisteredUsers(prev => prev.filter(u => u.id !== userId));
+    if (isDemoMode) return;
     await apiFetch(`/api/admin/users/${encodeURIComponent(userId)}`, { method: 'DELETE' }).catch(() => { /* ignore */ });
-  }, [apiFetch, registeredUsers]);
+  }, [apiFetch, isDemoMode, registeredUsers]);
 
   const handleActivateWithPin = async (
     usernameOrEmail: string,
@@ -1590,6 +1821,32 @@ const MainApp: React.FC = () => {
     error?: string;
   }> => {
     const now = Date.now();
+    if (isDemoMode) {
+      const target = registeredUsers.find(u => u.id === userId);
+      const demoPin = String(Math.floor(100000 + Math.random() * 900000));
+      setRegisteredUsers(prev =>
+        prev.map(u =>
+          u.id === userId
+            ? {
+                ...u,
+                status: 'approved_pending_pin',
+                approvedAt: u.approvedAt || now,
+                activationSentAt: now,
+                activationExpiresAt: now + 24 * 60 * 60 * 1000,
+              }
+            : u
+        )
+      );
+      setAdminNotifications(prev =>
+        prev.map(n => (n.type === 'user_signup' && n.userId === userId ? { ...n, read: true } : n))
+      );
+      return {
+        success: true,
+        emailSent: false,
+        email: target?.email || '',
+        pin: demoPin,
+      };
+    }
     try {
       const res = await apiFetch(`/api/admin/users/${encodeURIComponent(userId)}/activate`, { method: 'POST' });
       const data = await readJsonSafe<{
@@ -1631,7 +1888,7 @@ const MainApp: React.FC = () => {
     } catch {
       return { success: false, error: 'Network error while approving account.' };
     }
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode, registeredUsers]);
 
   const handleResendActivationEmail = useCallback(async (user: AppUser): Promise<{
     sent: boolean;
@@ -1640,6 +1897,14 @@ const MainApp: React.FC = () => {
     email?: string;
     error?: string;
   }> => {
+    if (isDemoMode) {
+      return {
+        sent: false,
+        activationUrl: '',
+        pin: String(Math.floor(100000 + Math.random() * 900000)),
+        email: user.email,
+      };
+    }
     try {
       const res = await apiFetch(`/api/admin/users/${encodeURIComponent(user.id)}/resend-activation`, {
         method: 'POST',
@@ -1656,13 +1921,28 @@ const MainApp: React.FC = () => {
     } catch {
       return { sent: false, activationUrl: '', error: 'Network error while resending PIN.' };
     }
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   const handleResetUserPassword = useCallback(async (params: {
     userId: string;
     newPassword: string;
     activateAccount?: boolean;
   }): Promise<{ success: boolean; error?: string }> => {
+    if (isDemoMode) {
+      const now = Date.now();
+      setRegisteredUsers(prev =>
+        prev.map(u =>
+          u.id === params.userId
+            ? {
+                ...u,
+                status: params.activateAccount ? 'active' : u.status,
+                activatedAt: params.activateAccount ? (u.activatedAt || now) : u.activatedAt,
+              }
+            : u
+        )
+      );
+      return { success: true };
+    }
     try {
       const res = await apiFetch(`/api/admin/users/${encodeURIComponent(params.userId)}/reset-password`, {
         method: 'POST',
@@ -1696,7 +1976,7 @@ const MainApp: React.FC = () => {
     } catch {
       return { success: false, error: 'Network error while resetting password.' };
     }
-  }, [apiFetch, syncAllCloudState]);
+  }, [apiFetch, isDemoMode, syncAllCloudState]);
 
   const handleRevokeSession = useCallback(async (sessionId: string) => {
     const now = Date.now();
@@ -1744,6 +2024,13 @@ const MainApp: React.FC = () => {
 
   const handleNewSession = useCallback(async () => {
     setAttendanceList([]);
+    if (isDemoMode) {
+      if (activeCourse.trim()) {
+        demoLiveByCourseRef.current[normCourseKey(activeCourse)] = [];
+      }
+      setDemoNotice(`Started a fresh live session for ${activeCourse || 'General Session'}.`);
+      return;
+    }
     const cid = resolveCourseId(activeCourse || '');
     const qs = new URLSearchParams();
     if (activeCourse) qs.set('course', activeCourse);
@@ -1751,7 +2038,7 @@ const MainApp: React.FC = () => {
     await apiFetch(`/api/attendance/session?${qs.toString()}`, {
       method: 'DELETE',
     }).catch(() => { /* ignore */ });
-  }, [activeCourse, apiFetch, resolveCourseId]);
+  }, [activeCourse, apiFetch, isDemoMode, resolveCourseId]);
 
   const handleEnterKiosk = useCallback(() => {
     setIsKioskMode(true);
@@ -1772,6 +2059,21 @@ const MainApp: React.FC = () => {
     pinRequired?: boolean;
     pin?: string;
   }> => {
+    if (isDemoMode) {
+      const now = Date.now();
+      if (params.rotatePin) {
+        demoPinRef.current = String(Math.floor(1000 + Math.random() * 9000));
+      }
+      const pinReq = params.requirePin !== false;
+      return {
+        success: true,
+        qrToken: `demo_qr_${now}`,
+        iat: now,
+        exp: now + 15000,
+        pinRequired: pinReq,
+        pin: pinReq ? demoPinRef.current : '',
+      };
+    }
     try {
       const res = await apiFetch('/api/qr/token', {
         method: 'POST',
@@ -1792,7 +2094,7 @@ const MainApp: React.FC = () => {
     } catch {
       return { success: false };
     }
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   const addStudent = async (
     name: string,
@@ -1812,6 +2114,57 @@ const MainApp: React.FC = () => {
 
     const targetWeek = week || selectedWeek || 'W1';
     const normSubmittedId = studentId.trim().replace(/\s+/g, '').toUpperCase();
+
+    if (isDemoMode) {
+      const cleanCourse = (courseName || activeCourse || 'General Session').trim();
+      const normalizedStatus = status.trim().toUpperCase() || 'P';
+      if (
+        normalizedStatus === 'P' &&
+        attendanceList.some(
+          s => s.studentId.trim().replace(/\s+/g, '').toUpperCase() === normSubmittedId && s.status.trim().toUpperCase() === 'P'
+        )
+      ) {
+        return { success: false, message: 'Attendance already recorded for this student ID.' };
+      }
+      const cleanName = name.trim().toUpperCase();
+      const studentData: Student = {
+        name: cleanName,
+        studentId: normSubmittedId,
+        email: email || `${normSubmittedId}@student.edu.my`,
+        status: normalizedStatus,
+        timestamp: overrideTimestamp || Date.now(),
+        courseName: cleanCourse,
+        courseId: overrideCourseId || resolveCourseId(cleanCourse) || undefined,
+        absenceReason,
+        week: targetWeek,
+      };
+      setAttendanceList(prev => {
+        const next = [
+          { ...studentData },
+          ...prev.filter(s => s.studentId.trim().replace(/\s+/g, '').toUpperCase() !== normSubmittedId),
+        ];
+        demoLiveByCourseRef.current[normCourseKey(cleanCourse)] = next;
+        return next;
+      });
+      setTeacherHistory(prev => [
+        studentData,
+        ...prev.filter(t => !(t.studentId.trim().replace(/\s+/g, '').toUpperCase() === normSubmittedId && t.timestamp === studentData.timestamp)),
+      ]);
+      if (!requireRegistered) {
+        const existingIdx = knownStudents.findIndex(s => s.id.trim().replace(/\s+/g, '').toUpperCase() === normSubmittedId);
+        let nextKnown: PreRegisteredStudent[] | null = null;
+        if (existingIdx === -1) {
+          nextKnown = [...knownStudents, { id: normSubmittedId, name: cleanName }];
+        } else if (knownStudents[existingIdx].name.trim().toUpperCase() !== cleanName) {
+          nextKnown = knownStudents.map((s, idx) => (idx === existingIdx ? { ...s, name: cleanName } : s));
+        }
+        if (nextKnown) {
+          setKnownStudents(nextKnown);
+          syncKnownStudentsToCloud(nextKnown, cleanCourse);
+        }
+      }
+      return { success: true, message: 'Demo Sandbox: Attendance recorded locally (live database untouched).' };
+    }
 
     if (requireRegistered) {
       if (
@@ -1953,7 +2306,13 @@ const MainApp: React.FC = () => {
   const onRemoveStudents = async (ids: string[], courseName: string) => {
     const norm = (val: string) => val.trim().replace(/\s+/g, '').toUpperCase();
     const removeSet = new Set(ids.map(norm));
-    setAttendanceList(prev => prev.filter(s => !removeSet.has(norm(s.studentId))));
+    setAttendanceList(prev => {
+      const next = prev.filter(s => !removeSet.has(norm(s.studentId)));
+      if (isDemoMode) {
+        demoLiveByCourseRef.current[normCourseKey(courseName)] = next;
+      }
+      return next;
+    });
     const now = Date.now();
     const removals: Student[] = ids.map(id => {
       const nid = norm(id);
@@ -1975,6 +2334,8 @@ const MainApp: React.FC = () => {
     if (removals.length > 0) {
       setTeacherHistory(prev => [...removals, ...prev]);
     }
+
+    if (isDemoMode) return;
 
     await apiFetch('/api/attendance/remove', {
       method: 'POST',
@@ -2045,11 +2406,18 @@ const MainApp: React.FC = () => {
 
     if (records.length > 0) {
       const updatedNormSet = new Set(records.map(r => norm(r.studentId)));
-      setAttendanceList(prev => [
-        ...records,
-        ...prev.filter(s => !updatedNormSet.has(norm(s.studentId))),
-      ]);
+      setAttendanceList(prev => {
+        const next = [
+          ...records,
+          ...prev.filter(s => !updatedNormSet.has(norm(s.studentId))),
+        ];
+        if (isDemoMode) {
+          demoLiveByCourseRef.current[normCourseKey(courseName)] = next;
+        }
+        return next;
+      });
       setTeacherHistory(prev => [...records, ...prev]);
+      if (isDemoMode) return;
       await apiFetch('/api/attendance/bulk', {
         method: 'POST',
         body: JSON.stringify({
@@ -2073,6 +2441,31 @@ const MainApp: React.FC = () => {
     status: 'P' | 'A';
     absenceReason?: string;
   }): Promise<{ success: boolean; message?: string }> => {
+    if (isDemoMode) {
+      const saved: Student = {
+        studentId: params.studentId.trim().toUpperCase(),
+        name: params.name.trim().toUpperCase(),
+        email: `${params.studentId.trim().toUpperCase()}@student.edu.my`,
+        courseName: params.courseName,
+        courseId: resolveCourseId(params.courseName) || undefined,
+        week: params.week.toUpperCase(),
+        status: params.status,
+        absenceReason: params.status === 'P' ? '' : params.absenceReason,
+        timestamp: Date.now(),
+      };
+      setTeacherHistory(prev => [saved, ...prev]);
+      const isCurrentWeek =
+        params.week.toUpperCase() === (selectedWeek || 'W1').toUpperCase() &&
+        normCourseKey(params.courseName) === normCourseKey(activeCourseRef.current);
+      if (isCurrentWeek) {
+        setAttendanceList(prev => {
+          const next = [{ ...saved }, ...prev.filter(s => s.studentId !== saved.studentId)];
+          demoLiveByCourseRef.current[normCourseKey(params.courseName)] = next;
+          return next;
+        });
+      }
+      return { success: true };
+    }
     try {
       const isCurrentWeek =
         params.week.toUpperCase() === (selectedWeek || 'W1').toUpperCase() &&
@@ -2101,9 +2494,15 @@ const MainApp: React.FC = () => {
     } catch {
       return { success: false, message: 'Network error updating matrix cell.' };
     }
-  }, [apiFetch, integrationType, resolveCourseId, selectedWeek, syncToAirtable]);
+  }, [apiFetch, integrationType, isDemoMode, resolveCourseId, selectedWeek, syncToAirtable]);
 
   const handleSendTestRecord = async (courseName: string): Promise<{ success: boolean; message: string }> => {
+    if (isDemoMode) {
+      return {
+        success: true,
+        message: `Demo Sandbox: Simulated cloud sync check passed for "${courseName || 'Demo Session'}" (no live sheet modified).`,
+      };
+    }
     try {
       const res = await apiFetch('/api/queue/test', {
         method: 'POST',
@@ -2133,6 +2532,13 @@ const MainApp: React.FC = () => {
   };
 
   const handleCheckPendingRecords = async (): Promise<{ success: boolean; message: string; count: number }> => {
+    if (isDemoMode) {
+      return {
+        success: true,
+        message: 'Demo Sandbox: 0 pending records in simulated sync queue.',
+        count: 0,
+      };
+    }
     try {
       const res = await apiFetch('/api/queue', { cache: 'no-store' });
       const data = await res.json();
@@ -2147,6 +2553,9 @@ const MainApp: React.FC = () => {
   };
 
   const handleClearPendingQueue = async (): Promise<{ success: boolean; message: string }> => {
+    if (isDemoMode) {
+      return { success: true, message: 'Demo Sandbox: Simulated sync queue cleared.' };
+    }
     try {
       const res = await apiFetch('/api/queue', { method: 'DELETE' });
       const data = await res.json();
@@ -2157,6 +2566,15 @@ const MainApp: React.FC = () => {
   };
 
   const handleForceSync = async (): Promise<{ success: boolean; message: string; syncedCount: number; errorCount: number; total: number }> => {
+    if (isDemoMode) {
+      return {
+        success: true,
+        message: 'Demo Sandbox: Simulated cloud sync complete.',
+        syncedCount: attendanceList.length,
+        errorCount: 0,
+        total: attendanceList.length,
+      };
+    }
     try {
       const res = await apiFetch('/api/queue/sync', {
         method: 'POST',
@@ -2189,10 +2607,121 @@ const MainApp: React.FC = () => {
     }
   };
 
+  const handleDemoRoleSwitch = useCallback((nextRole: 'admin' | 'lecturer') => {
+    if (!isDemoMode || nextRole === currentUserRole) return;
+    if (nextRole === 'admin') {
+      setCurrentUserRole('admin');
+      setCurrentAdminName('admin');
+      setCurrentUserId('admin');
+      setDemoNotice('Switched to Admin Demo view (full Control Center & Settings access).');
+    } else {
+      setCurrentUserRole('lecturer');
+      setCurrentAdminName('dr_sara');
+      setCurrentUserId('demo_lect_sara');
+      const accessible = coursesRef.current.filter(
+        c => c.ownerId === 'demo_lect_sara' || (c.sharedWith || []).includes('demo_lect_sara')
+      );
+      if (accessible.length > 0 && !accessible.some(c => normCourseKey(c.courseName) === normCourseKey(activeCourseRef.current))) {
+        handleSelectCourse(accessible[0]);
+      }
+      setDemoNotice('Switched to Lecturer Demo view (signed in as dr_sara).');
+    }
+  }, [currentUserRole, handleSelectCourse, isDemoMode]);
+
+  const handleDemoSimulateScan = async () => {
+    if (!isDemoMode) return;
+    const targetCourse = activeCourse.trim() || courses[0]?.courseName || 'CS101 Software Engineering';
+    const roster = knownStudents.length > 0 ? knownStudents : (courses[0]?.students || []);
+    const norm = (val: string) => val.trim().replace(/\s+/g, '').toUpperCase();
+    const presentIds = new Set(
+      attendanceList.filter(s => s.status.trim().toUpperCase() === 'P').map(s => norm(s.studentId))
+    );
+    const nextStudent = roster.find(s => !presentIds.has(norm(s.id)));
+    if (!nextStudent) {
+      setDemoNotice(`All ${roster.length} students in ${targetCourse} are checked in for ${selectedWeek}. Click "New Session" or open Tablet Mode.`);
+      return;
+    }
+    const res = await addStudent(
+      nextStudent.name,
+      nextStudent.id,
+      `${norm(nextStudent.id)}@student.edu.my`,
+      'P',
+      targetCourse,
+      undefined,
+      undefined,
+      selectedWeek,
+      true
+    );
+    if (res.success) {
+      setView('teacher');
+      setIsKioskMode(false);
+      setDemoNotice(`Simulated QR scan: ${nextStudent.name} (${nextStudent.id}) checked in for ${selectedWeek}.`);
+    } else {
+      setDemoNotice(res.message);
+    }
+  };
+
   const [kioskToken] = useState(() => Date.now().toString());
 
   return (
     <div className="min-h-screen bg-gray-100 flex flex-col font-sans antialiased">
+      {isDemoMode && (
+        <div className="bg-slate-900 text-white border-b border-slate-800 px-3 sm:px-5 py-2.5">
+          <div className="max-w-7xl mx-auto flex flex-col lg:flex-row lg:items-center lg:justify-between gap-2.5">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3 min-w-0">
+              <span className="inline-flex items-center self-start px-2 py-0.5 rounded-md bg-indigo-500/20 border border-indigo-400/30 text-indigo-200 text-[10px] font-bold uppercase tracking-wider shrink-0">
+                Interactive Demo Sandbox
+              </span>
+              <p className="text-xs text-slate-300 truncate">
+                {demoNotice || 'Sample data only — changes stay in this browser tab and never touch your live database or Google Sheets.'}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <div className="flex items-center bg-slate-800 p-0.5 rounded-lg border border-slate-700" role="group" aria-label="Demo Role Switcher">
+                <button
+                  type="button"
+                  onClick={() => handleDemoRoleSwitch('admin')}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors ${
+                    currentUserRole === 'admin' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Admin
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDemoRoleSwitch('lecturer')}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-bold transition-colors ${
+                    currentUserRole === 'lecturer' ? 'bg-indigo-600 text-white' : 'text-slate-300 hover:text-white'
+                  }`}
+                >
+                  Lecturer
+                </button>
+              </div>
+              <button
+                type="button"
+                onClick={() => void handleDemoSimulateScan()}
+                className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-colors whitespace-nowrap"
+              >
+                Simulate Student Scan
+              </button>
+              <button
+                type="button"
+                onClick={handleDemoReset}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-[11px] font-bold transition-colors whitespace-nowrap"
+              >
+                Reset Demo
+              </button>
+              <button
+                type="button"
+                onClick={handleDemoExit}
+                className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-[11px] font-bold transition-colors whitespace-nowrap"
+              >
+                Exit Demo
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {view === 'teacher' ? (
         isAuthenticated ? (
           <div className="flex-1 p-2 sm:p-4 overflow-x-hidden overflow-y-auto relative">
@@ -2304,6 +2833,7 @@ const MainApp: React.FC = () => {
               geoConstraints={latParam && lngParam ? { lat: parseFloat(latParam), lng: parseFloat(lngParam), radius: radParam ? parseFloat(radParam) : 150 } : undefined}
               bypassRestrictions={isKioskMode}
               isOfflineScan={isOfflineScan}
+              isDemoMode={isDemoMode}
               knownStudents={knownStudents}
               onSessionScanned={(session) => {
                 setScannedStudentSession(session);

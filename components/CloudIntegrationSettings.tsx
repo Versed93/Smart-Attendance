@@ -35,19 +35,23 @@ export const CloudIntegrationSettings: React.FC<CloudIntegrationSettingsProps> =
   firebaseDatabaseUrl,
   isAdmin = true,
 }) => {
+  const isDemoSandbox = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('demo') === '1';
   const [localIntegrationType, setLocalIntegrationType] = useState<'google_sheets' | 'airtable' | 'firebase'>(() => {
+      if (isDemoSandbox) return 'google_sheets';
       return (localStorage.getItem('attendance-integration-type') as 'google_sheets' | 'airtable' | 'firebase') || 'google_sheets';
   });
   const integrationType = propIntegrationType ?? localIntegrationType;
   const setIntegrationType = (next: 'google_sheets' | 'airtable' | 'firebase') => {
       setLocalIntegrationType(next);
-      localStorage.setItem('attendance-integration-type', next);
+      if (!isDemoSandbox) {
+        localStorage.setItem('attendance-integration-type', next);
+      }
       onIntegrationTypeChange?.(next);
   };
 
-  const [airtableToken, setAirtableToken] = useState(() => localStorage.getItem('airtable-token') || '');
-  const [airtableBaseId, setAirtableBaseId] = useState(() => localStorage.getItem('airtable-base-id') || '');
-  const [airtableTableName, setAirtableTableName] = useState(() => localStorage.getItem('airtable-table-name') || 'Attendance');
+  const [airtableToken, setAirtableToken] = useState(() => (isDemoSandbox ? '' : localStorage.getItem('airtable-token') || ''));
+  const [airtableBaseId, setAirtableBaseId] = useState(() => (isDemoSandbox ? '' : localStorage.getItem('airtable-base-id') || ''));
+  const [airtableTableName, setAirtableTableName] = useState(() => (isDemoSandbox ? 'Attendance' : localStorage.getItem('airtable-table-name') || 'Attendance'));
 
   const [status, setStatus] = useState('');
   const [copied, setCopied] = useState(false);
@@ -459,14 +463,16 @@ function authorizeMail() {
 }`;
 
   useEffect(() => {
+      if (isDemoSandbox) return;
       localStorage.setItem('attendance-integration-type', integrationType);
-  }, [integrationType]);
+  }, [integrationType, isDemoSandbox]);
 
   useEffect(() => {
+      if (isDemoSandbox) return;
       localStorage.setItem('airtable-token', airtableToken);
       localStorage.setItem('airtable-base-id', airtableBaseId);
       localStorage.setItem('airtable-table-name', airtableTableName);
-  }, [airtableToken, airtableBaseId, airtableTableName]);
+  }, [airtableToken, airtableBaseId, airtableTableName, isDemoSandbox]);
 
   return (
     <div className="bg-white p-4 sm:p-6 rounded-3xl border-2 border-gray-100 space-y-6">
