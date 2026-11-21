@@ -40,8 +40,9 @@ import { PWAInstallButton } from './PWAInstallButton';
 import {
   buildAttendanceQrUrl,
   buildStandaloneClassroomUrl,
-  CLASSROOM_CHANNEL_NAME,
+  getClassroomChannelName,
   getScreenDetailsSafe,
+  isDemoClassroomMode,
   isExtendedScreenReported,
   openExtendedClassroomWindow,
   pickExtendedScreen,
@@ -289,11 +290,18 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const [manualError, setManualError] = useState('');
   const [manualSuggestionField, setManualSuggestionField] = useState<'id' | 'name' | null>(null);
   const manualAutoFillRef = useRef<{ id?: string; name?: string }>({});
+  const isDemoSandbox = isDemoClassroomMode();
   const [isQrLoading, setIsQrLoading] = useState(true);
-  const qrErrorCorrection = (localStorage.getItem('qr-error-correction') as 'L' | 'M' | 'Q' | 'H') || 'M';
-  const qrMargin = parseInt(localStorage.getItem('qr-margin') || '2', 10);
+  const [qrErrorCorrection, setQrErrorCorrection] = useState<'L' | 'M' | 'Q' | 'H'>(() => {
+    if (isDemoClassroomMode() || typeof window === 'undefined') return 'M';
+    return (localStorage.getItem('qr-error-correction') as 'L' | 'M' | 'Q' | 'H') || 'M';
+  });
+  const [qrMargin, setQrMargin] = useState<number>(() => {
+    if (isDemoClassroomMode() || typeof window === 'undefined') return 2;
+    return parseInt(localStorage.getItem('qr-margin') || '2', 10);
+  });
   const [pinRequired, setPinRequired] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true;
+    if (typeof window === 'undefined' || isDemoClassroomMode()) return true;
     return localStorage.getItem('smart-attendance-pin-required') !== 'false';
   });
   const [pinDisplayMode, setPinDisplayMode] = useState<'hidden' | 'flash' | 'visible'>('hidden');
@@ -1676,10 +1684,12 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
   const handleTogglePinRequired = async () => {
     const next = !pinRequired;
     setPinRequired(next);
-    try {
-      localStorage.setItem('smart-attendance-pin-required', String(next));
-    } catch {
-      // ignore storage errors
+    if (!isDemoSandbox) {
+      try {
+        localStorage.setItem('smart-attendance-pin-required', String(next));
+      } catch {
+        // ignore storage errors
+      }
     }
     if (!next) {
       setPinDisplayMode('hidden');
@@ -1752,7 +1762,7 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
 
     let channel: BroadcastChannel | null = null;
     if (typeof BroadcastChannel !== 'undefined') {
-      channel = new BroadcastChannel(CLASSROOM_CHANNEL_NAME);
+      channel = new BroadcastChannel(getClassroomChannelName());
       channel.onmessage = (event: MessageEvent<{ type?: string }>) => {
         if (event?.data?.type === 'CLASSROOM_WINDOW_CLOSED') {
           extendedWindowRef.current = null;
@@ -3591,8 +3601,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                     <label className="block text-xs font-bold text-gray-600 mb-2 ml-1">Error Correction</label>
                                     <select value={qrErrorCorrection} onChange={e => {
                                         const val = e.target.value as 'L' | 'M' | 'Q' | 'H';
-                                        localStorage.setItem('qr-error-correction', val);
-                                        window.location.reload(); // Simple way to update since we removed state
+                                        setQrErrorCorrection(val);
+                                        if (!isDemoSandbox) {
+                                          localStorage.setItem('qr-error-correction', val);
+                                        }
                                     }} className="w-full text-sm font-bold rounded-xl border-gray-200 bg-white p-3 shadow-sm focus:ring-0 focus:border-brand-primary">
                                         <option value="L">Level L (7%)</option>
                                         <option value="M">Level M (15%)</option>
@@ -3604,8 +3616,10 @@ export const TeacherView: React.FC<TeacherViewProps> = ({
                                     <label className="block text-xs font-bold text-gray-600 mb-2 ml-1">QR Padding ({qrMargin}px)</label>
                                     <input type="range" min="0" max="10" value={qrMargin} onChange={e => {
                                         const val = e.target.value;
-                                        localStorage.setItem('qr-margin', val);
-                                        window.location.reload();
+                                        setQrMargin(parseInt(val, 10));
+                                        if (!isDemoSandbox) {
+                                          localStorage.setItem('qr-margin', val);
+                                        }
                                     }} className="w-full h-2 bg-white rounded-lg appearance-none cursor-pointer accent-brand-primary border border-gray-200" />
                                 </div>
                             </div>

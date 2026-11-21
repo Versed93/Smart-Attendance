@@ -425,9 +425,15 @@ const MainApp: React.FC = () => {
     const snap = createDemoSandboxSnapshot();
     demoSheetTabsRef.current = snap.sheetTabs;
     demoPinRef.current = '4829';
+    lastSheetSyncAtRef.current = 0;
     demoLiveByCourseRef.current = {
       [normCourseKey(snap.activeCourse)]: snap.attendanceList,
     };
+    setCurrentUserRole('admin');
+    setCurrentAdminName('admin');
+    setCurrentUserId('admin');
+    setActiveSessionId('demo_sess_admin');
+    setScannedStudentSession({});
     setCourses(snap.courses);
     setActiveCourse(snap.activeCourse);
     setSelectedWeek(snap.selectedWeek);
@@ -758,20 +764,20 @@ const MainApp: React.FC = () => {
   }, [apiFetch, scriptSecretFromEnv]);
 
   const saveUserCoursePref = useCallback((nextCourse: string, nextWeek: string) => {
-    if (!authTokenRef.current) return;
+    if (isDemoMode || !authTokenRef.current) return;
     void apiFetch('/api/user/preferences', {
       method: 'PUT',
       body: JSON.stringify({ activeCourse: nextCourse, selectedWeek: nextWeek }),
     }).catch(() => { /* ignore */ });
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   const persistCourseToServer = useCallback((course: CourseProfile) => {
-    if (!authTokenRef.current) return;
+    if (isDemoMode || !authTokenRef.current) return;
     void apiFetch(`/api/courses/${encodeURIComponent(course.id)}`, {
       method: 'PUT',
       body: JSON.stringify(course),
     }).catch(() => { /* ignore */ });
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   const handleCourseChange = useCallback((courseName: string) => {
     courseEditedAtRef.current = Date.now();
@@ -1316,6 +1322,19 @@ const MainApp: React.FC = () => {
       const updatedCourse: CourseProfile = { ...existing, students, updatedAt: now };
       setCourses(prev => prev.map(c => (c.id === updatedCourse.id ? updatedCourse : c)));
       persistCourseToServer(updatedCourse);
+    } else if (isDemoMode) {
+      const created: CourseProfile = {
+        id: `DEMO_${toCourseKey(courseLabel)}`,
+        courseName: courseLabel,
+        selectedWeek: selectedWeek || 'W1',
+        students,
+        ownerId: currentUserId || 'admin',
+        createdBy: currentAdminName || 'admin',
+        sharedWith: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      setCourses(prev => [...prev, created]);
     } else {
       void apiFetch('/api/courses', {
         method: 'POST',
@@ -1334,7 +1353,7 @@ const MainApp: React.FC = () => {
         })
         .catch(() => { /* ignore */ });
     }
-  }, [apiFetch, persistCourseToServer, selectedWeek]);
+  }, [apiFetch, currentAdminName, currentUserId, isDemoMode, persistCourseToServer, selectedWeek, toCourseKey]);
 
   const handleUpdateKnownStudents = useCallback((students: PreRegisteredStudent[]) => {
     setKnownStudents(students);
@@ -1418,7 +1437,7 @@ const MainApp: React.FC = () => {
   }, [selectedWeek]);
 
   const syncToAirtable = useCallback(async (records: Record<string, Student>) => {
-    if (integrationType !== 'airtable') return;
+    if (isDemoMode || integrationType !== 'airtable') return;
 
     const aToken = localStorage.getItem('airtable-token');
     const baseId = localStorage.getItem('airtable-base-id');
@@ -1442,7 +1461,7 @@ const MainApp: React.FC = () => {
     } catch (err) {
       console.error('Airtable sync failed', err);
     }
-  }, [formatCloudPayload, integrationType]);
+  }, [formatCloudPayload, integrationType, isDemoMode]);
 
   const checkAndClearForNewDay = useCallback(() => {
     if (isDemoMode) return;
@@ -1983,44 +2002,52 @@ const MainApp: React.FC = () => {
     setAdminSessions(prev =>
       prev.map(s => (s.id === sessionId ? { ...s, status: 'signed_out', lastActiveTime: now } : s))
     );
+    if (isDemoMode) return;
     await apiFetch(`/api/admin/sessions/${encodeURIComponent(sessionId)}/revoke`, { method: 'POST' }).catch(() => { /* ignore */ });
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   const handleClearInactiveSessions = useCallback(async () => {
     const staleThreshold = Date.now() - 2 * 60 * 1000;
     setAdminSessions(prev => prev.filter(s => s.status === 'active' && (s.lastActiveTime || 0) >= staleThreshold));
+    if (isDemoMode) return;
     await apiFetch('/api/admin/sessions/inactive', { method: 'DELETE' }).catch(() => { /* ignore */ });
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   const handleMarkNotificationRead = useCallback(async (notifId: string) => {
     setAdminNotifications(prev => prev.map(n => (n.id === notifId ? { ...n, read: true } : n)));
+    if (isDemoMode) return;
     await apiFetch(`/api/admin/notifications/${encodeURIComponent(notifId)}/read`, { method: 'PATCH' }).catch(() => { /* ignore */ });
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   const handleMarkAllNotificationsRead = useCallback(async () => {
     setAdminNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    if (isDemoMode) return;
     await apiFetch('/api/admin/notifications/read-all', { method: 'POST' }).catch(() => { /* ignore */ });
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   const handleClearNotifications = useCallback(async () => {
     setAdminNotifications([]);
+    if (isDemoMode) return;
     await apiFetch('/api/admin/notifications', { method: 'DELETE' }).catch(() => { /* ignore */ });
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   const handleMarkUserNotificationRead = useCallback(async (notifId: string) => {
     setUserNotifications(prev => prev.map(n => (n.id === notifId ? { ...n, read: true } : n)));
+    if (isDemoMode) return;
     await apiFetch(`/api/user/notifications/${encodeURIComponent(notifId)}/read`, { method: 'PATCH' }).catch(() => { /* ignore */ });
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   const handleMarkAllUserNotificationsRead = useCallback(async () => {
     setUserNotifications(prev => prev.map(n => ({ ...n, read: true })));
+    if (isDemoMode) return;
     await apiFetch('/api/user/notifications/read-all', { method: 'POST' }).catch(() => { /* ignore */ });
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   const handleClearUserNotifications = useCallback(async () => {
     setUserNotifications([]);
+    if (isDemoMode) return;
     await apiFetch('/api/user/notifications', { method: 'DELETE' }).catch(() => { /* ignore */ });
-  }, [apiFetch]);
+  }, [apiFetch, isDemoMode]);
 
   const handleNewSession = useCallback(async () => {
     setAttendanceList([]);
@@ -2630,8 +2657,17 @@ const MainApp: React.FC = () => {
 
   const handleDemoSimulateScan = async () => {
     if (!isDemoMode) return;
-    const targetCourse = activeCourse.trim() || courses[0]?.courseName || 'CS101 Software Engineering';
-    const roster = knownStudents.length > 0 ? knownStudents : (courses[0]?.students || []);
+    const targetCourse = activeCourse.trim() || courses[0]?.courseName || '';
+    if (!targetCourse) {
+      setDemoNotice('No active subject selected. Create a subject or click "Reset Demo".');
+      return;
+    }
+    const matchedCourse = courses.find(c => normCourseKey(c.courseName) === normCourseKey(targetCourse));
+    const roster = knownStudents.length > 0 ? knownStudents : (matchedCourse?.students || []);
+    if (roster.length === 0) {
+      setDemoNotice(`No registered students in ${targetCourse} yet. Add students or click "Reset Demo".`);
+      return;
+    }
     const norm = (val: string) => val.trim().replace(/\s+/g, '').toUpperCase();
     const presentIds = new Set(
       attendanceList.filter(s => s.status.trim().toUpperCase() === 'P').map(s => norm(s.studentId))

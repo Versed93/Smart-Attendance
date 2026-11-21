@@ -143,8 +143,10 @@ export const StudentView: React.FC<StudentViewProps> = ({
   const normalizeName = (val: string) => val.trim().replace(/\s+/g, ' ').toUpperCase();
   
   useEffect(() => {
-    localStorage.removeItem(STUDENT_PROFILE_KEY);
-  }, []);
+    if (!isDemoMode) {
+      localStorage.removeItem(STUDENT_PROFILE_KEY);
+    }
+  }, [isDemoMode]);
 
   const requestGpsVerification = React.useCallback((constraints: { lat: number; lng: number; radius: number }) => {
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
@@ -202,12 +204,12 @@ export const StudentView: React.FC<StudentViewProps> = ({
         const lockCourse = courseNameRef.current || 'general';
         const lockKey = `attendance-device-lock-v1-${getSessionDateId()}-${lockCourse}`;
         
-        if (!bypassRestrictions && localStorage.getItem(lockKey)) {
+        if (!bypassRestrictions && !isDemoMode && localStorage.getItem(lockKey)) {
           setStatus('device-locked');
           return;
         }
 
-        if (!bypassRestrictions && !isOfflineScan) {
+        if (!bypassRestrictions && !isOfflineScan && !isDemoMode) {
           try {
             const res = await fetch('/api/qr/verify', {
               method: 'POST',
@@ -265,7 +267,7 @@ export const StudentView: React.FC<StudentViewProps> = ({
 
     void checkStatus();
     return () => { cancelled = true; };
-  }, [bypassRestrictions, geoConstraints, isOfflineScan, onSessionScanned, qrSig, requestGpsVerification, token]);
+  }, [bypassRestrictions, geoConstraints, isDemoMode, isOfflineScan, onSessionScanned, qrSig, requestGpsVerification, token]);
 
   useEffect(() => {
     if (status === 'show-student-qr' && canvasRef.current && studentQrData) {
@@ -375,11 +377,11 @@ export const StudentView: React.FC<StudentViewProps> = ({
       setCheckinToken('');
       addHistory({ courseName: courseName || 'General Session', timestamp: Date.now(), type: 'online' });
       const lockKey = `attendance-device-lock-v1-${getSessionDateId()}-${courseName || 'general'}`;
-      if (!bypassRestrictions) localStorage.setItem(lockKey, 'true');
+      if (!bypassRestrictions && !isDemoMode) localStorage.setItem(lockKey, 'true');
     } else if (result.message === "You have already checked in for this session." || result.message === "Attendance already recorded for this student ID.") {
       setStatus('device-locked');
       const lockKey = `attendance-device-lock-v1-${getSessionDateId()}-${courseName || 'general'}`;
-      if (!bypassRestrictions) localStorage.setItem(lockKey, 'true');
+      if (!bypassRestrictions && !isDemoMode) localStorage.setItem(lockKey, 'true');
     } else if (
       result.code === 'INVALID_PIN' ||
       result.message.toLowerCase().includes('pin') ||

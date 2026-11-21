@@ -4,8 +4,9 @@ import { BrandLogoIcon } from './icons/BrandLogoIcon';
 import { XMarkIcon } from './icons/XMarkIcon';
 import {
   buildAttendanceQrUrl,
-  CLASSROOM_CHANNEL_NAME,
-  CLASSROOM_STORAGE_KEY,
+  getClassroomChannelName,
+  getClassroomStorageKey,
+  isDemoClassroomMode,
   postClassroomWindowClosed,
   readClassroomSyncState,
   requestAdaptiveFullscreen,
@@ -342,8 +343,10 @@ export const StandaloneClassroomView: React.FC = () => {
       isOfflineMode: urlOffline,
       isGeoEnabled: hasUrlGeo,
       teacherLocation: hasUrlGeo ? { lat: Number(latStr), lng: Number(lngStr) } : null,
-      qrErrorCorrection: (localStorage.getItem('qr-error-correction') as 'L' | 'M' | 'Q' | 'H') || 'M',
-      qrMargin: parseInt(localStorage.getItem('qr-margin') || '2', 10),
+      qrErrorCorrection: isDemoClassroomMode()
+        ? 'M'
+        : (localStorage.getItem('qr-error-correction') as 'L' | 'M' | 'Q' | 'H') || 'M',
+      qrMargin: isDemoClassroomMode() ? 2 : parseInt(localStorage.getItem('qr-margin') || '2', 10),
       updatedAt: Date.now(),
     };
   });
@@ -389,7 +392,9 @@ export const StandaloneClassroomView: React.FC = () => {
     // If browser prevented window.close() because tab wasn't opened by script, return to main route
     setTimeout(() => {
       if (!window.closed) {
-        window.location.href = window.location.pathname;
+        window.location.href = isDemoClassroomMode()
+          ? `${window.location.pathname}?demo=1`
+          : window.location.pathname;
       }
     }, 150);
   }, []);
@@ -495,7 +500,7 @@ export const StandaloneClassroomView: React.FC = () => {
   useEffect(() => {
     let channel: BroadcastChannel | null = null;
     if (typeof BroadcastChannel !== 'undefined') {
-      channel = new BroadcastChannel(CLASSROOM_CHANNEL_NAME);
+      channel = new BroadcastChannel(getClassroomChannelName());
       channel.onmessage = (event: MessageEvent<{ type?: string; payload?: ClassroomSyncPayload }>) => {
         if (!event?.data) return;
         if (event.data.type === 'CLASSROOM_STATE_UPDATE' && event.data.payload) {
@@ -508,8 +513,9 @@ export const StandaloneClassroomView: React.FC = () => {
       };
     }
 
+    const storageKey = getClassroomStorageKey();
     const onStorage = (e: StorageEvent) => {
-      if (e.key === CLASSROOM_STORAGE_KEY && e.newValue) {
+      if (e.key === storageKey && e.newValue) {
         try {
           const parsed = JSON.parse(e.newValue) as ClassroomSyncPayload;
           if (parsed.active === false) {

@@ -41,6 +41,21 @@ export interface ClassroomSyncPayload {
 
 export const CLASSROOM_CHANNEL_NAME = 'smart-attendance-classroom-sync';
 export const CLASSROOM_STORAGE_KEY = 'smart-attendance-classroom-state-v1';
+export const DEMO_CLASSROOM_CHANNEL_NAME = 'smart-attendance-classroom-sync-demo';
+export const DEMO_CLASSROOM_STORAGE_KEY = 'smart-attendance-classroom-state-demo-v1';
+
+export function isDemoClassroomMode(): boolean {
+  if (typeof window === 'undefined') return false;
+  return new URLSearchParams(window.location.search).get('demo') === '1';
+}
+
+export function getClassroomChannelName(): string {
+  return isDemoClassroomMode() ? DEMO_CLASSROOM_CHANNEL_NAME : CLASSROOM_CHANNEL_NAME;
+}
+
+export function getClassroomStorageKey(): string {
+  return isDemoClassroomMode() ? DEMO_CLASSROOM_STORAGE_KEY : CLASSROOM_STORAGE_KEY;
+}
 
 export function buildAttendanceQrUrl(params: {
   baseUrl: string;
@@ -211,13 +226,13 @@ export async function requestAdaptiveFullscreen(preferredScreen?: ExtendedScreen
 
 export function publishClassroomSyncState(payload: ClassroomSyncPayload): void {
   try {
-    localStorage.setItem(CLASSROOM_STORAGE_KEY, JSON.stringify(payload));
+    localStorage.setItem(getClassroomStorageKey(), JSON.stringify(payload));
   } catch {
     // Ignore storage quota errors
   }
   if (typeof BroadcastChannel !== 'undefined') {
     try {
-      const ch = new BroadcastChannel(CLASSROOM_CHANNEL_NAME);
+      const ch = new BroadcastChannel(getClassroomChannelName());
       ch.postMessage({ type: 'CLASSROOM_STATE_UPDATE', payload });
       ch.close();
     } catch {
@@ -228,7 +243,7 @@ export function publishClassroomSyncState(payload: ClassroomSyncPayload): void {
 
 export function readClassroomSyncState(): ClassroomSyncPayload | null {
   try {
-    const raw = localStorage.getItem(CLASSROOM_STORAGE_KEY);
+    const raw = localStorage.getItem(getClassroomStorageKey());
     if (!raw) return null;
     const parsed = JSON.parse(raw) as ClassroomSyncPayload;
     return parsed && typeof parsed === 'object' ? parsed : null;
@@ -240,7 +255,7 @@ export function readClassroomSyncState(): ClassroomSyncPayload | null {
 export function postClassroomWindowClosed(): void {
   if (typeof BroadcastChannel !== 'undefined') {
     try {
-      const ch = new BroadcastChannel(CLASSROOM_CHANNEL_NAME);
+      const ch = new BroadcastChannel(getClassroomChannelName());
       ch.postMessage({ type: 'CLASSROOM_WINDOW_CLOSED' });
       ch.close();
     } catch {
