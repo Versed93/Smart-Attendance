@@ -1434,6 +1434,64 @@ const MainApp: React.FC = () => {
     }
   };
 
+  const handleRequestPasswordReset = async (
+    usernameOrEmail: string
+  ): Promise<{ success: boolean; message: string }> => {
+    try {
+      const res = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        body: JSON.stringify({ usernameOrEmail }),
+      });
+      const data = await readJsonSafe<{ success?: boolean; message?: string }>(res);
+      if (!data) {
+        return {
+          success: false,
+          message: `Password reset server returned an unexpected response (HTTP ${res.status}).`,
+        };
+      }
+      return {
+        success: Boolean(data.success),
+        message:
+          data.message ||
+          'If an active account matches that username or email, a 6-digit password reset PIN has been sent.',
+      };
+    } catch {
+      return { success: false, message: 'Network error while requesting password reset.' };
+    }
+  };
+
+  const handleConfirmPasswordReset = async (params: {
+    usernameOrEmail: string;
+    pin: string;
+    newPassword: string;
+  }): Promise<{ success: boolean; message: string }> => {
+    try {
+      const res = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        cache: 'no-store',
+        body: JSON.stringify(params),
+      });
+      const data = await readJsonSafe<{ success?: boolean; message?: string }>(res);
+      if (!data) {
+        return {
+          success: false,
+          message: `Password reset server returned an unexpected response (HTTP ${res.status}).`,
+        };
+      }
+      return {
+        success: Boolean(res.ok && data.success),
+        message: data.message || 'Could not reset password.',
+      };
+    } catch {
+      return { success: false, message: 'Network error while updating password.' };
+    }
+  };
+
   const handleRequestAccountDeletion = async (params: {
     usernameOrEmail: string;
     reason: string;
@@ -2211,6 +2269,8 @@ const MainApp: React.FC = () => {
             onLogin={handleLogin}
             onSignUp={handleSignUp}
             onActivateWithPin={handleActivateWithPin}
+            onRequestPasswordReset={handleRequestPasswordReset}
+            onConfirmPasswordReset={handleConfirmPasswordReset}
             activationNotice={activationNotice}
             onDismissActivationNotice={() => setActivationNotice(null)}
           />

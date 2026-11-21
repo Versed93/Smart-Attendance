@@ -53,10 +53,15 @@ var getFirebaseDbSecret = () => normalizeEnvString(
 );
 var resolvedAuthSecret = null;
 var authSecretPromise = null;
-var DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || "adminscm";
+var LEGACY_DEFAULT_ADMIN_PASSWORD = "adminscm";
+var DEFAULT_ADMIN_PASSWORD = process.env.ADMIN_DEFAULT_PASSWORD || "Admin@1990";
 var DEFAULT_SCRIPT_URL = "https://script.google.com/macros/s/AKfycbwbjXTrbFPRqVA0I-RGc1rV7K7eZ_CkgQujSBVtOtvjDCW1GJYAkxiVlXJzAB_-R_CaLA/exec";
 var MAX_PIN_FAILED_ATTEMPTS = 5;
+var RESET_PIN_EXPIRY_MS = 15 * 60 * 1e3;
+var RESET_RESEND_COOLDOWN_MS = 60 * 1e3;
+var MAX_RESET_FAILED_ATTEMPTS = 5;
 var generateActivationPin = () => crypto.randomInt(1e5, 1e6).toString();
+var hashResetPin = (userId, pin) => crypto.createHash("sha256").update(`${userId}:${pin}`).digest("hex");
 var toFirebaseKey = (raw) => raw.replace(/[^a-zA-Z0-9_-]/g, "_");
 var normalizeStudentId = (val) => val.trim().replace(/\s+/g, "").toUpperCase();
 var toStudentFirebaseKey = (studentId) => toFirebaseKey(normalizeStudentId(studentId));
@@ -638,7 +643,8 @@ async function ensureAdminUserExists() {
   const existing = await fbGet("app_users/admin");
   if (existing && existing.id) {
     if (!existing.passwordHash) {
-      const pwd = existing.password || DEFAULT_ADMIN_PASSWORD;
+      const shouldUpgradeLegacy = !process.env.ADMIN_DEFAULT_PASSWORD && (!existing.password || existing.password === LEGACY_DEFAULT_ADMIN_PASSWORD);
+      const pwd = shouldUpgradeLegacy ? DEFAULT_ADMIN_PASSWORD : existing.password || DEFAULT_ADMIN_PASSWORD;
       const hash = hashPassword(pwd);
       await fbPatch("app_users/admin", {
         passwordHash: hash,
@@ -647,6 +653,16 @@ async function ensureAdminUserExists() {
         status: "active"
       });
       return { ...existing, passwordHash: hash, role: "admin", status: "active" };
+    }
+    if (!process.env.ADMIN_DEFAULT_PASSWORD && DEFAULT_ADMIN_PASSWORD !== LEGACY_DEFAULT_ADMIN_PASSWORD && verifyPasswordHash(LEGACY_DEFAULT_ADMIN_PASSWORD, existing.passwordHash)) {
+      const upgradedHash = hashPassword(DEFAULT_ADMIN_PASSWORD);
+      await fbPatch("app_users/admin", {
+        passwordHash: upgradedHash,
+        password: null,
+        role: "admin",
+        status: "active"
+      });
+      return { ...existing, passwordHash: upgradedHash, role: "admin", status: "active" };
     }
     return existing;
   }
@@ -1029,6 +1045,51 @@ ${expiryLine}
     emailSent: ok,
     provider: status.provider,
     error: !ok ? typeof emailRes.json?.error === "string" ? emailRes.json.error : emailRes.error || "Apps Script PIN email failed." : void 0
+  };
+}
+async function dispatchPasswordResetPinEmail(params) {
+  const status = getEmailDeliveryStatus(params.cfg.scriptUrl);
+  const expiryLine = params.expiresAtText ? `This Password Reset PIN expires in 15 minutes (${params.expiresAtText}).` : "This Password Reset PIN expires in 15 minutes.";
+  if (status.provider === "resend" || status.provider === "smtp") {
+    const safeUser = escapeHtml(params.username);
+    const safePin = escapeHtml(params.pin);
+    const safeExpiry = escapeHtml(expiryLine);
+    const res = await sendDirectEmail({
+      to: params.toEmail,
+      subject: "Smart Attendance \u2014 Password Reset Verification PIN",
+      text: `Hello ${params.username},
+
+We received a request to reset your Smart QR Attendance password.
+
+Your 6-digit Password Reset PIN is: ${params.pin}
+
+Enter this PIN along with your new strong password on the Forgot Password screen.
+
+${expiryLine}
+
+If you did not request a password reset, you can safely ignore this email.
+`,
+      html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;border:1px solid #e5e7eb;border-radius:12px;"><h2 style="color:#111827;margin:0 0 10px;">Password Reset Verification PIN</h2><p style="color:#4b5563;font-size:14px;">Hello <strong>${safeUser}</strong>,</p><p style="color:#4b5563;font-size:14px;">Use this 6-digit Password Reset PIN on the Smart Attendance Forgot Password screen to set a new password:</p><div style="margin:20px 0;padding:14px 20px;background:#eef2ff;border:2px solid #c7d2fe;border-radius:12px;text-align:center;font-family:monospace;font-size:28px;font-weight:900;letter-spacing:0.25em;color:#3730a3;">${safePin}</div><p style="color:#92400e;background:#fffbeb;border:1px solid #fde68a;padding:10px 12px;border-radius:8px;font-size:12px;font-weight:bold;">${safeExpiry}</p><p style="color:#6b7280;font-size:12px;margin-top:12px;">If you did not request this reset, you can safely ignore this message.</p></div>`
+    }).catch(() => ({ ok: false, provider: status.provider, error: "Failed to send password reset PIN email" }));
+    return {
+      emailSent: Boolean(res.ok),
+      provider: status.provider,
+      error: res.error
+    };
+  }
+  const emailRes = await postToGoogleScript(params.cfg.scriptUrl, {
+    action: "SEND_PASSWORD_RESET_EMAIL",
+    toEmail: params.toEmail,
+    username: params.username,
+    resetPin: params.pin,
+    expiresAtText: params.expiresAtText,
+    adminEmail: params.cfg.adminEmail
+  });
+  const ok = Boolean(emailRes.ok && emailRes.json?.success && emailRes.json?.emailSent !== false);
+  return {
+    emailSent: ok,
+    provider: status.provider,
+    error: !ok ? typeof emailRes.json?.error === "string" ? emailRes.json.error : emailRes.error || "Apps Script password reset email failed." : void 0
   };
 }
 async function createUserSystemNotification(params) {
@@ -1620,6 +1681,231 @@ function createApiApp() {
       });
     } catch (err) {
       const formatted = formatAuthServerError(err, "Server error while verifying activation PIN.");
+      res.status(formatted.status).json({ success: false, message: formatted.message });
+    }
+  });
+  app2.post("/api/auth/forgot-password", async (req, res) => {
+    try {
+      const lookup = String(req.body?.usernameOrEmail || "").trim().toLowerCase();
+      if (!lookup) {
+        res.status(400).json({
+          success: false,
+          message: "Please enter your User Name or Email address."
+        });
+        return;
+      }
+      const genericMsg = "If an active account matches that username or email, a 6-digit password reset PIN has been sent.";
+      await ensureAdminUserExists();
+      const [usersObj, cfg] = await Promise.all([
+        fbGet("app_users"),
+        getAppConfig()
+      ]);
+      const allUsers = listStoredUsers(usersObj);
+      let matched = allUsers.find(
+        (u) => u.username.toLowerCase() === lookup || u.email && u.email.toLowerCase() === lookup
+      );
+      if (!matched && cfg.adminEmail && cfg.adminEmail.toLowerCase() === lookup) {
+        matched = allUsers.find((u) => u.username.toLowerCase() === "admin" || u.role === "admin");
+      }
+      if (!matched || !matched.id) {
+        res.json({ success: true, message: genericMsg });
+        return;
+      }
+      const role = matched.username.toLowerCase() === "admin" ? "admin" : matched.role || "lecturer";
+      const effectiveStatus = matched.status || "active";
+      if (effectiveStatus !== "active" && role !== "admin") {
+        res.json({ success: true, message: genericMsg });
+        return;
+      }
+      const now = Date.now();
+      if (matched.resetRequestedAt && now - matched.resetRequestedAt < RESET_RESEND_COOLDOWN_MS) {
+        res.json({ success: true, message: genericMsg });
+        return;
+      }
+      const targetEmail = (matched.email || (role === "admin" ? cfg.adminEmail : "")).trim();
+      if (!targetEmail) {
+        await createEmailDeliveryFailureAlert({
+          context: "Password Reset Request",
+          username: matched.username,
+          userId: matched.id,
+          error: role === "admin" ? "No email address or Admin Notification Email configured for admin recovery." : "No email address configured on this user account."
+        }).catch(() => {
+        });
+        res.json({ success: true, message: genericMsg });
+        return;
+      }
+      const pin = generateActivationPin();
+      const resetExpiresAt = now + RESET_PIN_EXPIRY_MS;
+      const expiresAtText = new Date(resetExpiresAt).toLocaleString();
+      await fbPatch(`app_users/${matched.dbKey}`, {
+        resetPinHash: hashResetPin(matched.id, pin),
+        resetExpiresAt,
+        resetRequestedAt: now,
+        resetFailedAttempts: 0
+      });
+      const emailRes = await dispatchPasswordResetPinEmail({
+        toEmail: targetEmail,
+        username: matched.username,
+        pin,
+        expiresAtText,
+        cfg
+      });
+      if (!emailRes.emailSent) {
+        await createEmailDeliveryFailureAlert({
+          context: "Password Reset PIN Email",
+          targetEmail,
+          username: matched.username,
+          userId: matched.id,
+          provider: emailRes.provider,
+          error: emailRes.error
+        }).catch(() => {
+        });
+      }
+      res.json({ success: true, message: genericMsg });
+    } catch (err) {
+      const formatted = formatAuthServerError(err, "Server error while requesting password reset.");
+      res.status(formatted.status).json({ success: false, message: formatted.message });
+    }
+  });
+  app2.post("/api/auth/reset-password", async (req, res) => {
+    try {
+      const lookup = String(req.body?.usernameOrEmail || "").trim().toLowerCase();
+      const rawPin = String(req.body?.pin || "").trim().replace(/\D/g, "");
+      const newPassword = String(req.body?.newPassword || "");
+      if (!lookup || rawPin.length !== 6) {
+        res.status(400).json({
+          success: false,
+          message: "Please enter your User Name or Email and the 6-digit Reset PIN."
+        });
+        return;
+      }
+      const passwordCheck = validateSignupPassword(newPassword);
+      if (!passwordCheck.valid) {
+        res.status(400).json({
+          success: false,
+          message: passwordCheck.errorMessage || "Password does not meet security requirements."
+        });
+        return;
+      }
+      await ensureAdminUserExists();
+      const [usersObj, cfg] = await Promise.all([
+        fbGet("app_users"),
+        getAppConfig()
+      ]);
+      const allUsers = listStoredUsers(usersObj);
+      let matched = allUsers.find(
+        (u) => u.username.toLowerCase() === lookup || u.email && u.email.toLowerCase() === lookup
+      );
+      if (!matched && cfg.adminEmail && cfg.adminEmail.toLowerCase() === lookup) {
+        matched = allUsers.find((u) => u.username.toLowerCase() === "admin" || u.role === "admin");
+      }
+      if (!matched || !matched.id) {
+        res.status(400).json({
+          success: false,
+          message: "Invalid or expired Password Reset PIN."
+        });
+        return;
+      }
+      const role = matched.username.toLowerCase() === "admin" ? "admin" : matched.role || "lecturer";
+      const effectiveStatus = matched.status || "active";
+      if (effectiveStatus !== "active" && role !== "admin") {
+        res.status(403).json({
+          success: false,
+          message: "Your account is not active. Contact the Administrator."
+        });
+        return;
+      }
+      if ((matched.resetFailedAttempts || 0) >= MAX_RESET_FAILED_ATTEMPTS) {
+        res.status(429).json({
+          success: false,
+          message: "Too many invalid reset PIN attempts. Please request a new reset PIN."
+        });
+        return;
+      }
+      if (!matched.resetPinHash) {
+        res.status(400).json({
+          success: false,
+          message: "Invalid or expired Password Reset PIN. Please request a new reset PIN."
+        });
+        return;
+      }
+      const now = Date.now();
+      if (matched.resetExpiresAt && now > matched.resetExpiresAt) {
+        await fbPatch(`app_users/${matched.dbKey}`, {
+          resetPinHash: null,
+          resetExpiresAt: null,
+          resetFailedAttempts: null
+        }).catch(() => {
+        });
+        res.status(410).json({
+          success: false,
+          message: "This Password Reset PIN has expired. Please request a new PIN."
+        });
+        return;
+      }
+      const candidateHash = hashResetPin(matched.id, rawPin);
+      if (!timingSafeStringEqual(candidateHash, matched.resetPinHash)) {
+        const nextAttempts = (matched.resetFailedAttempts || 0) + 1;
+        if (nextAttempts >= MAX_RESET_FAILED_ATTEMPTS) {
+          await fbPatch(`app_users/${matched.dbKey}`, {
+            resetFailedAttempts: nextAttempts,
+            resetPinHash: null,
+            resetExpiresAt: null
+          }).catch(() => {
+          });
+          res.status(429).json({
+            success: false,
+            message: "Too many invalid reset PIN attempts. This PIN has been invalidated; please request a new one."
+          });
+          return;
+        }
+        await fbPatch(`app_users/${matched.dbKey}`, {
+          resetFailedAttempts: nextAttempts
+        }).catch(() => {
+        });
+        res.status(403).json({
+          success: false,
+          message: "Invalid Password Reset PIN. Please check the 6-digit PIN sent to your email."
+        });
+        return;
+      }
+      await fbPatch(`app_users/${matched.dbKey}`, {
+        passwordHash: hashPassword(newPassword),
+        password: null,
+        resetPinHash: null,
+        resetExpiresAt: null,
+        resetRequestedAt: null,
+        resetFailedAttempts: null
+      });
+      const sessionsObj = await fbGet("admin_logins") || {};
+      const activeUserSessions = Object.values(sessionsObj).filter(
+        (s) => s && s.id && s.adminName?.toLowerCase() === matched.username.toLowerCase() && s.status !== "signed_out"
+      );
+      if (activeUserSessions.length > 0) {
+        await Promise.all(
+          activeUserSessions.map(
+            (s) => fbPatch(`admin_logins/${s.id}`, {
+              status: "signed_out",
+              lastActiveTime: now,
+              currentAction: "Password Reset"
+            }).catch(() => {
+            })
+          )
+        );
+      }
+      await createUserSystemNotification({
+        userId: matched.id,
+        type: "system_update",
+        title: "Password Updated",
+        message: "Your password was reset via email PIN and all previous active sessions were signed out."
+      }).catch(() => {
+      });
+      res.json({
+        success: true,
+        message: "Password updated! Please sign in with your new password."
+      });
+    } catch (err) {
+      const formatted = formatAuthServerError(err, "Server error while resetting password.");
       res.status(formatted.status).json({ success: false, message: formatted.message });
     }
   });

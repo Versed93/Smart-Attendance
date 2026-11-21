@@ -272,6 +272,27 @@ function doPost(e) {
       return ContentService.createTextOutput(JSON.stringify({success: true, emailSent: Boolean(finalAdminEmail)})).setMimeType(ContentService.MimeType.JSON);
     }
 
+    if (data && !Array.isArray(data) && data.action === "SEND_PASSWORD_RESET_EMAIL") {
+      var rpEmail = String(data.toEmail || "").trim();
+      var rpUser = String(data.username || "User").trim();
+      var rpPin = String(data.resetPin || "").trim();
+      var rpExpires = String(data.expiresAtText || "").trim();
+      var rpExpiryLine = rpExpires
+        ? "This Password Reset PIN expires in 15 minutes (" + rpExpires + ")."
+        : "This Password Reset PIN expires in 15 minutes.";
+
+      if (rpEmail && rpPin) {
+        MailApp.sendEmail({
+          to: rpEmail,
+          subject: "Smart Attendance — Password Reset Verification PIN",
+          body: "Hello " + rpUser + ",\\n\\nWe received a request to reset your Smart QR Attendance password.\\n\\nYour 6-digit Password Reset PIN is: " + rpPin + "\\n\\nEnter this PIN along with your new strong password on the Forgot Password screen.\\n\\n" + rpExpiryLine + "\\n\\nIf you did not request a password reset, you can safely ignore this email.",
+          htmlBody: "<div style='font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:20px;border:1px solid #e5e7eb;border-radius:12px;'><h2 style='color:#111827;margin-bottom:8px;'>Password Reset Verification PIN</h2><p style='color:#4b5563;font-size:14px;'>Hello <strong>" + rpUser + "</strong>,</p><p style='color:#4b5563;font-size:14px;'>Use this 6-digit Password Reset PIN on the Smart Attendance Forgot Password screen to set a new password:</p><div style='margin:20px 0;padding:14px 20px;background:#eef2ff;border:2px solid #c7d2fe;border-radius:12px;text-align:center;font-family:monospace;font-size:28px;font-weight:900;letter-spacing:0.25em;color:#3730a3;'>" + rpPin + "</div><p style='color:#b45309;background:#fffbeb;border:1px solid #fde68a;padding:10px 12px;border-radius:8px;font-size:12px;font-weight:bold;'>" + rpExpiryLine + "</p><p style='color:#6b7280;font-size:12px;margin-top:12px;'>If you did not request this reset, you can safely ignore this message.</p></div>"
+        });
+      }
+
+      return ContentService.createTextOutput(JSON.stringify({success: true, emailSent: Boolean(rpEmail && rpPin)})).setMimeType(ContentService.MimeType.JSON);
+    }
+
     var doc = SpreadsheetApp.getActiveSpreadsheet();
     var allSheets = doc.getSheets();
     var records = Array.isArray(data) ? data : [data];
